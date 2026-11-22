@@ -907,7 +907,7 @@ export function getUpgradeGlowColor(upgradeLevel: number): THREE.Color | null {
 export function createComicFloorTexture(
   baseHex: string,
   accentHex: string,
-  act: 1 | 2 | 3 | 4 | 5 | 6 | 7 = 1
+  act: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 = 1
 ): THREE.CanvasTexture {
   const size = 512;
   const canvas = document.createElement('canvas');

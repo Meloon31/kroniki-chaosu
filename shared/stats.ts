@@ -1,5 +1,6 @@
 import { getDailyBlessing } from './bounties.js';
 import { CLASSES } from './classes.js';
+import type { GuildLevels } from './guilds.js';
 import {
   canClassEquipItem,
   EQUIP_SLOTS,
@@ -23,7 +24,8 @@ export function computePlayerStats(
   equipped: EquippedGear,
   skillRanks: SkillRanks,
   runes: RuneLevels,
-  extraPartyCdrPct = 0
+  extraPartyCdrPct = 0,
+  guildLevels?: GuildLevels
 ): ComputedStats {
   const cls = CLASSES[classId];
   const lvlDelta = Math.max(0, level - 1);
@@ -203,7 +205,19 @@ export function computePlayerStats(
   critDamage += rAeternus * 2.0;
   cdr += rAeternus * 0.8;
 
-  // 6. Active Daily Blessing of the Day (rotates every day of the week!)
+  // 6. Guild Upgrades (0..10 each: up to +10% AD/AP, +10% DEF, +500 HP, +10% Crit!)
+  const gAtak = Math.max(0, Math.min(10, guildLevels?.atak || 0));
+  const gObrona = Math.max(0, Math.min(10, guildLevels?.obrona || 0));
+  const gZycie = Math.max(0, Math.min(10, guildLevels?.zycie || 0));
+  const gKryt = Math.max(0, Math.min(10, guildLevels?.kryt || 0));
+
+  adPct += gAtak * 1.0;
+  apPct += gAtak * 1.0;
+  defPct += gObrona * 1.0;
+  critChance += gKryt * 1.0;
+  const guildBonusHp = gZycie * 50;
+
+  // 7. Active Daily Blessing of the Day (rotates every day of the week!)
   const blessing = getDailyBlessing();
   if (blessing.hpPctBonus) hpPct += blessing.hpPctBonus;
   if (blessing.adApPctBonus) {
@@ -213,10 +227,10 @@ export function computePlayerStats(
   if (blessing.critChanceBonus) critChance += blessing.critChanceBonus;
   if (blessing.critDamageBonus) critDamage += blessing.critDamageBonus;
 
-  // Hard anti-immortality / anti-one-shot caps (expanded cleanly for +13..+20 & Hardcore Runes!)
+  // Hard anti-immortality / anti-one-shot caps (expanded cleanly for +13..+20, Hardcore Runes & Guilds!)
   const hcRunesPower = rKaelis + rIgnarok + rAeternus;
-  const p13CapBoost = Math.min(70, plus13Count * 8 + plus20Count * 6 + hcRunesPower * 0.8);
-  const maxHp = Math.round(flatHp * (1 + Math.min(80 + p13CapBoost, hpPct) / 100));
+  const p13CapBoost = Math.min(80, plus13Count * 8 + plus20Count * 6 + hcRunesPower * 0.8 + (gAtak + gObrona) * 0.5);
+  const maxHp = Math.round(flatHp * (1 + Math.min(80 + p13CapBoost, hpPct) / 100)) + guildBonusHp;
   const ad = Math.round(flatAd * (1 + Math.min(75 + p13CapBoost, adPct) / 100));
   const ap = Math.round(flatAp * (1 + Math.min(75 + p13CapBoost, apPct) / 100));
   const def = Math.round(flatDef * (1 + Math.min(80 + p13CapBoost, defPct) / 100));

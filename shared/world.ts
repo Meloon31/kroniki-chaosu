@@ -136,17 +136,48 @@ export const ACT_THEMES: Record<ActNumber, ActTheme> = {
     accentGlowColor: '#00f5d4',
     propKinds: ['chaos_monolith', 'obsidian_crystal', 'elf_arch', 'pharaoh_statue'],
   },
+  8: {
+    act: 8,
+    name: 'GILDIA Akt I: Złota Cytadela Bractwa',
+    subtitle: 'Królewskie marmury, szafirowe sztandary i twierdza Aureliona (1× dziennie)',
+    skyColor: '#253969',
+    fogColor: '#36508c',
+    floorColor: '#c9d4ea',
+    floorAccentColor: '#d9a441',
+    wallColor: '#5d7ab8',
+    wallTopColor: '#fbbf24',
+    ambientLightColor: '#fff4d6',
+    sunLightColor: '#fffbeb',
+    accentGlowColor: '#fbbf24',
+    propKinds: ['pharaoh_statue', 'dwarf_pillar', 'torch_pillar', 'elf_arch'],
+  },
+  9: {
+    act: 9,
+    name: 'GILDIA Akt II: Sanktuarium Szmaragdowego Smoka',
+    subtitle: 'Świątynia jadeitu, bursztynowe kryształy i leże Drakorysa (1× dziennie)',
+    skyColor: '#17473c',
+    fogColor: '#216354',
+    floorColor: '#5cb896',
+    floorAccentColor: '#2d8265',
+    wallColor: '#368a6e',
+    wallTopColor: '#fbbf24',
+    ambientLightColor: '#d9ffef',
+    sunLightColor: '#fef9c3',
+    accentGlowColor: '#10b981',
+    propKinds: ['glow_mushroom', 'sand_obelisk', 'obsidian_crystal', 'elf_arch'],
+  },
 };
 
 export const STANDARD_MAX_LOCATION = 60;
-export const TOTAL_LOCATIONS = 105;
+export const HARDCORE_MAX_LOCATION = 105;
+export const TOTAL_LOCATIONS = 135;
 
 export function isHardcoreAct(act: ActNumber): boolean {
-  return act >= 5;
+  return act >= 5 && act <= 7;
 }
 
 export function isHardcoreLocation(globalIndex: number): boolean {
-  return globalIndex > STANDARD_MAX_LOCATION;
+  return globalIndex > STANDARD_MAX_LOCATION && globalIndex <= HARDCORE_MAX_LOCATION;
 }
 
 const ACT_LOCATION_NAMES: Record<ActNumber, string[]> = {
@@ -269,11 +300,45 @@ const ACT_LOCATION_NAMES: Record<ActNumber, string[]> = {
     'Brama Ostatecznego Sądu',
     'Tron Aeternusa, Cesarza Wieczności',
   ],
+  8: [
+    'Brama Złotej Cytadeli',
+    'Dziedziniec Sztandarów',
+    'Aleja Królewskich Tarcz',
+    'Koszary Bractwa',
+    'Bastion Kapitana Valeriusa',
+    'Sala Złotych Pieczęci',
+    'Galeria Zwycięstw Gildii',
+    'Most Szafirowego Światła',
+    'Zbrojownia Królów',
+    'Wieża Arcymaga Sztandaru',
+    'Krużganki Honorowej Gwardii',
+    'Skarbiec Złotych Odłamków',
+    'Katedra Złotego Lwa',
+    'Wielkie Schody Korony',
+    'Tron Aureliona, Króla Sztandaru',
+  ],
+  9: [
+    'Próg Szmaragdowej Świątyni',
+    'Tarasy Jadeitowych Łusek',
+    'Ogród Bursztynowych Kryształów',
+    'Grota Smoczych Posągów',
+    'Arena Jeźdźca Łuski',
+    'Most Zielonego Płomienia',
+    'Korytarze Starożytnych Skrzydeł',
+    'Komnaty Smoczego Oddechu',
+    'Sanktuarium Złotych Jaj',
+    'Ołtarz Kapłanki Smoka',
+    'Labirynt Szmaragdowych Filarów',
+    'Skarbiec Pradawnej Łuski',
+    'Kopuła Jadeitowego Nieba',
+    'Wrota Smoczego Szczytu',
+    'Leże Drakorysa, Smoka Gildii',
+  ],
 };
 
 export const ALL_LOCATIONS: LocationDefinition[] = [];
 
-for (let act = 1 as ActNumber; act <= 7; act = (act + 1) as ActNumber) {
+for (let act = 1 as ActNumber; act <= 9; act = (act + 1) as ActNumber) {
   for (let loc = 1; loc <= 15; loc++) {
     const globalIndex = (act - 1) * 15 + loc;
     const isMiniBoss = loc === 5 || loc === 10;
@@ -296,7 +361,7 @@ for (let act = 1 as ActNumber; act <= 7; act = (act + 1) as ActNumber) {
       isMainBoss,
       bossName: main?.name ?? mini?.name,
       bossId: main?.id,
-      recommendedLevel: Math.min(60, globalIndex),
+      recommendedLevel: act >= 8 ? 45 : Math.min(60, globalIndex),
       seed: act * 100003 + loc * 7919 + 4242,
       mutatorId,
     });

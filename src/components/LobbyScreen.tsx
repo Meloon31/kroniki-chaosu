@@ -7,6 +7,7 @@ import {
   getDailyFeaturedLocation,
 } from '../../shared/bounties';
 import { CLASS_LIST, CLASSES } from '../../shared/classes';
+import { getTotalGuildShards, GuildState, isGuildActClearedToday } from '../../shared/guilds';
 import { getHardcoreUnlockProgress } from '../../shared/items';
 import type { BountiesTab } from './BountiesModal';
 import { computePlayerStats } from '../../shared/stats';
@@ -16,6 +17,7 @@ import { HeroShowcaseCanvas } from './HeroShowcaseCanvas';
 
 interface LobbyScreenProps {
   profile: PlayerProfile;
+  guild: GuildState | null;
   room: RoomSummary | null;
   connected: boolean;
   errorMsg: string | null;
@@ -30,6 +32,7 @@ interface LobbyScreenProps {
   onStartGame: (globalLocation: number) => void;
   onToggleSandbox: () => void;
   onOpenBounties: (tab?: BountiesTab) => void;
+  onOpenGuild: () => void;
 }
 
 const CLASS_ICONS: Record<ClassId, string> = {
@@ -42,6 +45,7 @@ const CLASS_ICONS: Record<ClassId, string> = {
 
 export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   profile,
+  guild,
   room,
   connected,
   errorMsg,
@@ -56,6 +60,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   onStartGame,
   onToggleSandbox,
   onOpenBounties,
+  onOpenGuild,
 }) => {
   const [joinCode, setJoinCode] = useState(initialInviteCode);
   const [serverDraft, setServerDraft] = useState(serverUrl);
@@ -76,7 +81,9 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
     profile.level,
     profile.equipped,
     profile.skillRanks,
-    profile.runes
+    profile.runes,
+    0,
+    guild?.upgrades
   );
 
   const handleLocPick = (gIdx: number) => {
@@ -312,6 +319,44 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                       }}
                     >
                       GRATIS!
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  className="glass-pill"
+                  onClick={onOpenGuild}
+                  style={{
+                    padding: '6px 13px',
+                    fontSize: 12,
+                    fontWeight: 900,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    color: guild ? guild.color : '#fde68a',
+                    background: guild
+                      ? 'linear-gradient(135deg, rgba(16,185,129,0.28), rgba(56,189,248,0.22))'
+                      : 'rgba(251,191,36,0.12)',
+                    border: `1.5px solid ${guild ? guild.color : '#fbbf24'}`,
+                  }}
+                  title="Panel Gildii, Zaproszenia, Rozwój (+10% AD/DEF/Kryt, +500 HP) i 2 Akty Gildyjne!"
+                >
+                  <span>{guild ? `${guild.emblem} [${guild.tag}] Gildia` : '🏰 Gildia'}</span>
+                  {guild && (getTotalGuildShards(guild) > 0 || !isGuildActClearedToday(guild, 8) || !isGuildActClearedToday(guild, 9)) && (
+                    <span
+                      style={{
+                        background: getTotalGuildShards(guild) > 0 ? '#4ade80' : '#fde047',
+                        color: '#111118',
+                        borderRadius: 99,
+                        padding: '0 6px',
+                        fontSize: 10.5,
+                        fontWeight: 900,
+                      }}
+                    >
+                      {getTotalGuildShards(guild) > 0
+                        ? `+${getTotalGuildShards(guild)}`
+                        : `${(isGuildActClearedToday(guild, 8) ? 0 : 1) + (isGuildActClearedToday(guild, 9) ? 0 : 1)}/2`}
                     </span>
                   )}
                 </button>

@@ -887,6 +887,240 @@ export const ACT_TRACKS: Record<ActNumber, MusicTrackInfo[]> = {
       arpPattern: [0, 3, 2, 1, 3, 1, 2, 0, 0, 2, 3, 1, 3, 2, 0, 1],
     },
   ],
+
+  // ======================================================
+  // GILDIA AKT I (AKT 8): ZŁOTA CYTADELA BRACTWA (Heroic Guild Fanfare!)
+  // ======================================================
+  8: [
+    {
+      id: 'act8_hymn_bractwa',
+      act: 8,
+      indexInAct: 1,
+      title: 'Hymn Złotego Bractwa',
+      bpm: 132,
+      leadStyle: 'brass',
+      arpStyle: 'harp',
+      drumStyle: 'war',
+      // D major triumphant guild anthem: D - A - Bm - G | D - G - A - D
+      chordsA: [
+        [50, 54, 57, 62],
+        [45, 49, 52, 57],
+        [47, 50, 54, 59],
+        [43, 47, 50, 55],
+      ],
+      chordsB: [
+        [50, 54, 57, 62],
+        [55, 59, 62, 67],
+        [57, 61, 64, 69],
+        [50, 54, 57, 62],
+      ],
+      melodyA: [
+        74, null, 78, 81, 86, null, 85, 81,
+        81, null, 78, 76, 74, null, 76, 78,
+        79, 81, 83, 81, 78, 74, 76, 78,
+        81, null, 78, 76, 74, null, null, null,
+      ],
+      melodyB: [
+        86, null, 85, 81, 83, 85, 86, 88,
+        91, null, 88, 86, 83, 86, 88, null,
+        88, 85, 81, 85, 88, 90, 88, 85,
+        86, null, 81, 85, 86, null, null, null,
+      ],
+      bassPattern: [0, null, 0, 7, 12, null, 7, null, 0, null, 7, 12, 7, null, 5, null],
+      arpPattern: [0, 1, 2, 3, 2, 1, 3, 2, 0, 2, 3, 1, 2, 3, 1, 0],
+    },
+    {
+      id: 'act8_marsz_sztandarow',
+      act: 8,
+      indexInAct: 2,
+      title: 'Marsz Złotych Sztandarów',
+      bpm: 142,
+      leadStyle: 'horn',
+      arpStyle: 'lute',
+      drumStyle: 'epic',
+      // G major noble battle march: G - D - Em - C | G - C - D - G
+      chordsA: [
+        [43, 47, 50, 55],
+        [50, 54, 57, 62],
+        [40, 43, 47, 52],
+        [48, 52, 55, 60],
+      ],
+      chordsB: [
+        [43, 47, 50, 55],
+        [48, 52, 55, 60],
+        [50, 54, 57, 62],
+        [43, 47, 50, 55],
+      ],
+      melodyA: [
+        79, 79, 83, 86, 84, 83, 81, 79,
+        81, null, 78, 74, 78, 81, 83, null,
+        76, 79, 83, 84, 83, 79, 76, 79,
+        84, 83, 81, 78, 79, null, null, null,
+      ],
+      melodyB: [
+        86, 83, 79, 83, 86, 88, 91, 88,
+        88, null, 84, 81, 84, 88, 91, null,
+        90, 86, 81, 86, 90, 93, 91, 90,
+        91, null, 86, 83, 86, null, null, null,
+      ],
+      bassPattern: [0, 0, 12, 0, 7, 0, 12, 7, 0, 0, 7, 12, 10, 7, 5, 7],
+      arpPattern: [0, 2, 1, 3, 0, 2, 3, 1, 0, 1, 3, 2, 3, 2, 1, 0],
+    },
+    {
+      id: 'act8_koronacja_aureliona',
+      act: 8,
+      indexInAct: 3,
+      title: 'Koronacja Aureliona (Boss Gildii)',
+      bpm: 152,
+      leadStyle: 'brass',
+      arpStyle: 'synth',
+      drumStyle: 'epic',
+      // A major / F#m heroic duel: F#m - D - A - E | F#m - Bm - C# - F#m
+      chordsA: [
+        [42, 45, 49, 54],
+        [50, 54, 57, 62],
+        [45, 49, 52, 57],
+        [52, 56, 59, 64],
+      ],
+      chordsB: [
+        [42, 45, 49, 54],
+        [47, 50, 54, 59],
+        [49, 53, 56, 61],
+        [42, 45, 49, 54],
+      ],
+      melodyA: [
+        78, null, 81, 85, 88, 85, 83, 81,
+        86, null, 85, 81, 78, null, 81, 83,
+        85, 88, 90, 88, 85, 81, 83, 85,
+        88, null, 83, 80, 81, null, null, null,
+      ],
+      melodyB: [
+        90, 88, 85, 81, 85, 88, 90, 93,
+        90, null, 86, 83, 86, 90, 95, null,
+        92, 89, 85, 89, 92, 97, 95, 92,
+        90, null, 85, 88, 90, null, null, null,
+      ],
+      bassPattern: [0, 0, 12, 0, 7, 0, 12, 10, 0, 0, 12, 7, 10, 7, 5, 7],
+      arpPattern: [0, 1, 2, 3, 3, 2, 1, 0, 0, 3, 2, 1, 2, 3, 1, 0],
+    },
+  ],
+
+  // ======================================================
+  // GILDIA AKT II (AKT 9): SANKTUARIUM SZMARAGDOWEGO SMOKA!
+  // ======================================================
+  9: [
+    {
+      id: 'act9_swiatynia_jadeitu',
+      act: 9,
+      indexInAct: 1,
+      title: 'Świątynia Szmaragdowego Jadeitu',
+      bpm: 134,
+      leadStyle: 'flute',
+      arpStyle: 'harp',
+      drumStyle: 'forest',
+      // E Dorian dragon sanctuary: Em - D - C - Bm | Em - G - A - B
+      chordsA: [
+        [40, 43, 47, 52],
+        [50, 54, 57, 62],
+        [48, 52, 55, 60],
+        [47, 50, 54, 59],
+      ],
+      chordsB: [
+        [40, 43, 47, 52],
+        [43, 47, 50, 55],
+        [45, 49, 52, 57],
+        [47, 51, 54, 59],
+      ],
+      melodyA: [
+        76, null, 79, 83, 86, 83, 81, 79,
+        81, null, 78, 74, 78, 81, 83, null,
+        79, 83, 86, 88, 86, 83, 81, 79,
+        78, null, 83, 81, 79, null, null, null,
+      ],
+      melodyB: [
+        88, null, 86, 83, 86, 88, 91, 88,
+        91, 88, 86, 83, 86, 91, 95, null,
+        93, 88, 85, 88, 93, 97, 95, 93,
+        91, null, 87, 91, 88, null, null, null,
+      ],
+      bassPattern: [0, null, 7, 12, 0, null, 7, 5, 0, null, 7, 10, 12, 7, 5, null],
+      arpPattern: [0, 1, 2, 3, 2, 3, 1, 2, 0, 2, 3, 1, 3, 2, 1, 0],
+    },
+    {
+      id: 'act9_lot_skrzydel',
+      act: 9,
+      indexInAct: 2,
+      title: 'Lot Szmaragdowych Skrzydeł',
+      bpm: 148,
+      leadStyle: 'celesta',
+      arpStyle: 'harp',
+      drumStyle: 'epic',
+      // C# Dorian soaring dragon flight: C#m - B - A - G#m | C#m - E - F# - G#
+      chordsA: [
+        [49, 52, 56, 61],
+        [47, 51, 54, 59],
+        [45, 49, 52, 57],
+        [44, 47, 51, 56],
+      ],
+      chordsB: [
+        [49, 52, 56, 61],
+        [52, 56, 59, 64],
+        [54, 58, 61, 66],
+        [56, 60, 63, 68],
+      ],
+      melodyA: [
+        73, 76, 80, null, 83, 80, 78, 76,
+        78, null, 75, 71, 75, 78, 80, null,
+        76, 80, 81, 83, 81, 80, 76, 73,
+        75, null, 80, 78, 76, null, null, null,
+      ],
+      melodyB: [
+        85, 83, 80, 76, 80, 83, 85, 88,
+        88, null, 85, 83, 80, 83, 88, null,
+        90, 87, 85, 82, 85, 90, 92, 90,
+        88, null, 87, 92, 85, null, null, null,
+      ],
+      bassPattern: [0, 0, 12, 7, 0, 12, 10, 7, 0, 0, 12, 7, 10, 7, 5, 7],
+      arpPattern: [0, 2, 3, 1, 0, 3, 2, 1, 0, 1, 3, 2, 3, 1, 2, 0],
+    },
+    {
+      id: 'act9_ryk_drakorysa',
+      act: 9,
+      indexInAct: 3,
+      title: 'Ryk Drakorysa (Smok Gildii)',
+      bpm: 158,
+      leadStyle: 'horn',
+      arpStyle: 'synth',
+      drumStyle: 'war',
+      // G minor roaring dragon boss: Gm - F - Eb - D | Gm - Cm - Eb - D
+      chordsA: [
+        [43, 46, 50, 55],
+        [41, 45, 48, 53],
+        [39, 43, 46, 51],
+        [50, 54, 57, 62],
+      ],
+      chordsB: [
+        [43, 46, 50, 55],
+        [48, 51, 55, 60],
+        [39, 43, 46, 51],
+        [50, 54, 57, 62],
+      ],
+      melodyA: [
+        79, null, 79, 82, 86, 84, 82, 79,
+        77, null, 81, 84, 86, 84, 81, null,
+        79, 82, 87, 86, 82, 79, 77, 74,
+        81, null, 86, 84, 82, null, null, null,
+      ],
+      melodyB: [
+        91, 89, 86, 82, 86, 89, 91, 94,
+        91, null, 87, 84, 87, 91, 96, null,
+        94, 91, 87, 82, 87, 91, 94, 91,
+        90, 93, 98, 93, 91, null, null, null,
+      ],
+      bassPattern: [0, 0, 12, 0, 7, 0, 12, 10, 0, 0, 12, 0, 7, 10, 12, 11],
+      arpPattern: [0, 3, 2, 1, 3, 2, 1, 0, 0, 2, 3, 1, 3, 1, 2, 0],
+    },
+  ],
 };
 
 class DynamicMusicEngine {

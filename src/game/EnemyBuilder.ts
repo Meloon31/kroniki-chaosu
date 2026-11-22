@@ -1310,6 +1310,235 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     orbitGroup.add(galRing1, galRing2);
 
     body.add(robe, eclipseCore, head, wingL, wingR, leftArm, rightArm, orbitGroup);
+  } else if (enemy.tier === 'boss' && enemy.bossId === 'aurelion') {
+    // =========================================================
+    // GILDIA AKT I BOSS: AURELION, KRÓL ZŁOTEGO SZTANDARU!
+    // =========================================================
+    const royalTex = createComicSurfaceTexture('#1e3a8a', '#fbbf24', 'armor');
+    const torso = createComicMesh(
+      createPlushLathe(
+        [
+          [0.01, 0.25],
+          [0.95, 0.5],
+          [1.25, 1.85],
+          [1.45, 3.1],
+          [1.1, 4.1],
+          [0.01, 4.25],
+        ],
+        26
+      ),
+      '#1e40af',
+      0.044,
+      { map: royalTex }
+    );
+    torso.scale.set(1.08, 1, 0.9);
+
+    // Royal Gold Cape
+    const capeGeo = new THREE.CylinderGeometry(0.95, 1.55, 3.3, 20, 2, true, Math.PI * 0.62, Math.PI * 0.76);
+    const cape = createComicMesh(capeGeo, '#b45309', 0.028, { side: THREE.DoubleSide });
+    cape.position.set(0, 2.35, -0.45);
+    cape.rotation.x = 0.2;
+
+    // Lion-gold Chest Crest
+    const crest = createComicMesh(new THREE.SphereGeometry(0.65, 20, 16), '#fde047', 0.03, {
+      emissive: '#f59e0b',
+      emissiveIntensity: 0.45,
+    });
+    crest.scale.set(1.05, 1.15, 0.65);
+    crest.position.set(0, 3.0, 1.05);
+
+    const auFaceTex = createMonsterFaceTexture({
+      skin: '#fde68a',
+      eyeColor: '#38bdf8',
+      accent: '#fbbf24',
+      style: 'pharaoh',
+    });
+    const head = createComicMesh(new THREE.SphereGeometry(0.76, 28, 22), '#fde68a', 0.042, {
+      map: auFaceTex,
+    });
+    head.rotation.y = -Math.PI / 2;
+    head.position.y = 4.85;
+
+    // Royal Crown
+    const crownBand = createComicMesh(new THREE.TorusGeometry(0.74, 0.16, 12, 24), '#fbbf24', 0.03);
+    crownBand.rotation.x = Math.PI / 2;
+    crownBand.position.y = 5.45;
+    body.add(crownBand);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const spire = createComicMesh(new THREE.ConeGeometry(0.15, 0.65, 8), '#fde047', 0.02, {
+        emissive: '#f59e0b',
+        emissiveIntensity: 0.35,
+      });
+      spire.position.set(Math.cos(a) * 0.72, 5.82, Math.sin(a) * 0.72);
+      body.add(spire);
+    }
+
+    // Left Arm: Huge Golden Guild Shield
+    leftArm = new THREE.Group();
+    leftArm.position.set(-1.55, 3.3, 0.2);
+    const lShield = createComicMesh(new THREE.SphereGeometry(1.15, 20, 16), '#fbbf24', 0.038, {
+      map: royalTex,
+      emissive: '#d97706',
+      emissiveIntensity: 0.25,
+    });
+    lShield.scale.set(0.35, 1.35, 1.05);
+    lShield.position.set(-0.2, -0.5, 0.45);
+    leftArm.add(lShield);
+
+    // Right Arm: Radiant Guild Banner Halberd
+    rightArm = new THREE.Group();
+    rightArm.position.set(1.55, 3.3, 0.2);
+    const pole = createComicMesh(new THREE.CapsuleGeometry(0.11, 4.4, 8, 12), '#fde047', 0.028);
+    pole.position.set(0.15, 0.35, 0.6);
+    pole.rotation.x = 0.5;
+    const tip = createComicMesh(createSoftBladeGeometry(0.8, 1.9, 0.16, 'cleaver'), '#38bdf8', 0.034, {
+      emissive: '#0284c7',
+      emissiveIntensity: 0.45,
+    });
+    tip.position.set(0.15, 1.85, 1.6);
+    tip.rotation.x = 0.5;
+    rightArm.add(pole, tip);
+
+    // Orbiting Golden Guild Shields
+    orbitGroup = new THREE.Group();
+    orbitGroup.position.y = 2.8;
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2;
+      const sh = createComicMesh(new THREE.SphereGeometry(0.42, 14, 12), '#fbbf24', 0.024, {
+        emissive: '#f59e0b',
+        emissiveIntensity: 0.35,
+      });
+      sh.scale.set(0.95, 1.25, 0.32);
+      sh.position.set(Math.cos(a) * 2.85, 0.2, Math.sin(a) * 2.85);
+      sh.rotation.y = -a;
+      orbitGroup.add(sh);
+    }
+
+    shieldGroup = new THREE.Group();
+    shieldGroup.position.y = 2.6;
+    shieldGroup.visible = false;
+    const aura = createComicMesh(new THREE.TorusGeometry(2.7, 0.22, 12, 32), '#fde047', 0.025, {
+      emissive: '#f59e0b',
+      emissiveIntensity: 0.5,
+    });
+    aura.rotation.x = Math.PI / 2;
+    shieldGroup.add(aura);
+
+    body.add(torso, cape, crest, head, leftArm, rightArm, orbitGroup, shieldGroup);
+  } else if (enemy.tier === 'boss' && enemy.bossId === 'drakorys') {
+    // =========================================================
+    // GILDIA AKT II BOSS: DRAKORYS, PRADAWNY SMOK GILDII!
+    // =========================================================
+    const dragonTex = createComicSurfaceTexture('#059669', '#fbbf24', 'scales');
+    const dragonBody = createComicMesh(new THREE.SphereGeometry(1.65, 24, 18), '#059669', 0.045, {
+      map: dragonTex,
+    });
+    dragonBody.scale.set(1.05, 1.15, 1.28);
+    dragonBody.position.set(0, 2.25, -0.15);
+
+    // Golden Plated Belly
+    const belly = createComicMesh(new THREE.SphereGeometry(1.15, 20, 16), '#fbbf24', 0.032, {
+      emissive: '#d97706',
+      emissiveIntensity: 0.2,
+    });
+    belly.scale.set(0.92, 1.15, 0.72);
+    belly.position.set(0, 2.1, 0.95);
+
+    // Long Curved Dragon Neck + Horned Dragon Head!
+    const neckGeo = createTaperedCurveGeometry(
+      [
+        [0, 3.1, 0.45],
+        [0, 4.15, 0.95],
+        [0, 4.95, 1.25],
+      ],
+      0.72,
+      0.55,
+      16,
+      14
+    );
+    const neck = createComicMesh(neckGeo, '#047857', 0.038, { map: dragonTex });
+
+    const drFaceTex = createMonsterFaceTexture({
+      skin: '#10b981',
+      eyeColor: '#fde047',
+      accent: '#fbbf24',
+      style: 'imp',
+    });
+    const head = createComicMesh(new THREE.SphereGeometry(0.88, 28, 22), '#10b981', 0.044, {
+      map: drFaceTex,
+    });
+    head.rotation.y = -Math.PI / 2;
+    head.scale.set(0.95, 0.92, 1.32);
+    head.position.set(0, 5.2, 1.48);
+
+    // Sweeping Golden Dragon Horns
+    for (const s of [-1, 1]) {
+      const hornGeo = createTaperedCurveGeometry(
+        [
+          [s * 0.42, 5.55, 1.35],
+          [s * 0.95, 6.1, 0.85],
+          [s * 1.25, 6.65, 0.25],
+        ],
+        0.24,
+        0.045,
+        16,
+        10
+      );
+      const horn = createComicMesh(hornGeo, '#fbbf24', 0.032);
+      body.add(horn);
+    }
+
+    // Arching Crystal-tipped Dragon Tail
+    const tailGeo = createTaperedCurveGeometry(
+      [
+        [0, 1.45, -1.65],
+        [0.45, 1.1, -3.15],
+        [-0.35, 1.85, -4.45],
+        [0, 2.85, -5.05],
+      ],
+      0.65,
+      0.16,
+      18,
+      12
+    );
+    const tail = createComicMesh(tailGeo, '#047857', 0.038, { map: dragonTex });
+    const tailGem = createComicMesh(new THREE.OctahedronGeometry(0.52, 0), '#fde047', 0.028, {
+      emissive: '#f59e0b',
+      emissiveIntensity: 0.45,
+    });
+    tailGem.position.set(0, 2.95, -5.15);
+
+    // Massive Emerald-Gold Dragon Wings!
+    const dWingGeo = createSoftWingGeometry(4.2, 2.75, 0.16, 'demon');
+    const makeDragonWing = (side: -1 | 1) => {
+      const wg = new THREE.Group();
+      wg.position.set(side * 1.35, 3.65, -0.45);
+      const w = createComicMesh(dWingGeo, '#10b981', 0.038, {
+        emissive: '#059669',
+        emissiveIntensity: 0.3,
+      });
+      if (side === -1) w.scale.x = -1;
+      wg.add(w);
+      return wg;
+    };
+    wingL = makeDragonWing(-1);
+    wingR = makeDragonWing(1);
+
+    // Orbiting Emerald Flame Orbs
+    orbitGroup = new THREE.Group();
+    orbitGroup.position.y = 3.2;
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      const orb = createComicMesh(new THREE.SphereGeometry(0.32, 14, 12), '#34d399', 0.022, {
+        emissive: '#10b981',
+        emissiveIntensity: 0.5,
+      });
+      orb.position.set(Math.cos(a) * 3.1, Math.sin(i * 1.3) * 0.7, Math.sin(a) * 3.1);
+      orbitGroup.add(orb);
+    }
+
+    body.add(dragonBody, belly, neck, head, tail, tailGem, wingL, wingR, orbitGroup);
   } else if (enemy.tier === 'miniboss') {
     // =========================================================
     // 8 BESPOKE SOFT CARTOON MINI-BOSSES — ZERO BOXES!
@@ -1339,6 +1568,8 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       5: arch.includes('golem') ? '#0284c7' : arch.includes('zorza') ? '#818cf8' : '#38bdf8',
       6: arch.includes('golem') ? '#ca8a04' : arch.includes('plazma') ? '#facc15' : '#f97316',
       7: arch.includes('golem') ? '#6366f1' : arch.includes('czas') ? '#c084fc' : '#00f5d4',
+      8: arch.includes('golem') ? '#d97706' : arch.includes('kusznik') ? '#38bdf8' : '#fbbf24',
+      9: arch.includes('golem') ? '#047857' : arch.includes('szaman') ? '#f59e0b' : '#10b981',
     };
     const col = colorMap[enemy.act] || '#cf3a56';
 
@@ -2241,6 +2472,7 @@ export function updateEnemyRig(
     rig.bossId === 'vaelgor' ||
     rig.bossId === 'kaelis' ||
     rig.bossId === 'aeternus' ||
+    rig.bossId === 'drakorys' ||
     rig.archetype === 'mb_nekro_lord'
   ) {
     rig.body.position.y = 0.55 + Math.sin(elapsedSec * 2.8) * 0.28;

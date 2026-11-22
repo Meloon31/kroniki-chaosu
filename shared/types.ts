@@ -13,10 +13,13 @@ export type RuneId =
   | 'ignarok'
   | 'aeternus';
 
+export type BossId = RuneId | 'aurelion' | 'drakorys';
+
 import type { BoonId, EliteAffix, LocationMutatorId } from './mutators.js';
 import type { ActiveBountyState } from './bounties.js';
+import type { GuildState } from './guilds.js';
 
-export type ActNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type ActNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 
 export type DamageType = 'physical' | 'magical' | 'hybrid' | 'heal' | 'shield' | 'poison' | 'true';
 
@@ -125,6 +128,10 @@ export interface PlayerProfile {
   // Daily Wheel of Chaos & Daily Featured Dungeon
   lastWheelSpinDate?: string;
   dailyFeaturedClaimedDate?: string;
+  // Persistent Guild identity & backup state
+  playerUid?: string;
+  guildId?: string | null;
+  guildSnapshot?: GuildState | null;
 }
 
 export interface NetPlayerState {
@@ -175,7 +182,7 @@ export interface EnemyState {
   name: string;
   tier: EnemyTier;
   act: ActNumber;
-  bossId?: RuneId;
+  bossId?: BossId;
   affix?: EliteAffix;
   x: number;
   z: number;
@@ -333,7 +340,7 @@ export interface LocationDefinition {
   isMiniBoss: boolean;
   isMainBoss: boolean;
   bossName?: string;
-  bossId?: RuneId;
+  bossId?: BossId;
   recommendedLevel: number;
   seed: number;
   mutatorId: LocationMutatorId;

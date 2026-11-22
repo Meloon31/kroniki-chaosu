@@ -42,6 +42,12 @@ import {
   WHEEL_SLICES,
 } from '../shared/bounties';
 import { TOTAL_LOCATIONS } from '../shared/world';
+import {
+  GUILD_UPGRADES,
+  GuildInvitePayload,
+  GuildState,
+  GuildUpgradeId,
+} from '../shared/guilds';
 import { createStarterRunes, createStarterRuneShards, RUNE_MAX_LEVEL, RUNES } from '../shared/runes';
 import { BoonId, CHAOS_BOONS } from '../shared/mutators';
 import { computePlayerStats } from '../shared/stats';
@@ -67,6 +73,7 @@ import { musicEngine, MusicTrackInfo } from './audio/musicEngine';
 import { BlacksmithModal } from './components/BlacksmithModal';
 import { BountiesModal, BountiesTab } from './components/BountiesModal';
 import { ChestPuzzleModal } from './components/ChestPuzzleModal';
+import { GuildModal } from './components/GuildModal';
 import { ActivePanel, Hud } from './components/Hud';
 import { InventoryModal } from './components/InventoryModal';
 import { LobbyScreen } from './components/LobbyScreen';
@@ -124,6 +131,9 @@ function createDefaultProfile(classId: ClassId = 'wojownik'): PlayerProfile {
     dailyStreak: 0,
     bounties: ensureActiveBounties(),
     lifetimeKills: 0,
+    playerUid: `plr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`,
+    guildId: null,
+    guildSnapshot: null,
   };
 }
 
@@ -136,6 +146,7 @@ function loadProfile(): PlayerProfile {
     return {
       ...def,
       ...parsed,
+      playerUid: parsed.playerUid || def.playerUid,
       skillRanks: { ...def.skillRanks, ...(parsed.skillRanks || {}) },
       equipped: { ...def.equipped, ...(parsed.equipped || {}) },
       shards: { ...def.shards, ...(parsed.shards || {}) },
@@ -181,6 +192,11 @@ export function App() {
   const [profile, setProfile] = useState<PlayerProfile>(() => loadProfile());
   const profileRef = useRef(profile);
   profileRef.current = profile;
+
+  const [guild, setGuild] = useState<GuildState | null>(() => profile.guildSnapshot ?? null);
+  const guildRef = useRef<GuildState | null>(guild);
+  guildRef.current = guild;
+  const [incomingGuildInvite, setIncomingGuildInvite] = useState<GuildInvitePayload | null>(null);
 
   const [connected, setConnected] = useState(false);
   const [serverUrl, setServerUrl] = useState<string>(() => loadSavedServerUrl());
@@ -286,7 +302,7 @@ export function App() {
     [pushToast]
   );
 
-  // Persist profile & push stat updates to server live
+  // Persist profile & push stat updates (including Guild Bonuses!) to server live
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
@@ -300,17 +316,19 @@ export function App() {
         profile.level,
         profile.equipped,
         profile.skillRanks,
-        profile.runes
+        profile.runes,
+        0,
+        guild?.upgrades
       );
       sock.emit('room:update_profile', {
-        name: profile.name,
+        name: guild ? `[${guild.tag}] ${profile.name}` : profile.name,
         classId: profile.classId,
         level: profile.level,
         skillRanks: profile.skillRanks,
         stats,
       });
     }
-  }, [profile]);
+  }, [profile, guild]);
 
   const grantXp = useCallback(
     (rawAmount: number) => {
@@ -432,6 +450,46 @@ export function App() {
       setConnected(true);
       setLocalPlayerId(sock.id || '');
       engineRef.current?.setLocalPlayerId(sock.id || '');
+      const p = profileRef.current;
+      sock.emit('guild:sync', {
+        playerUid: p.playerUid,
+        name: p.name,
+        classId: p.classId,
+        level: p.level,
+        guildId: p.guildId,
+        guildSnapshot: p.guildSnapshot,
+      });
+    });
+
+    sock.on('guild:state', (gState: GuildState | null) => {
+      setGuild(gState);
+      setProfile((prev) => ({
+        ...prev,
+        guildId: gState?.id ?? null,
+        guildSnapshot: gState,
+      }));
+    });
+
+    sock.on('guild:invite_incoming', (invite: GuildInvitePayload) => {
+      setIncomingGuildInvite(invite);
+      soundEngine.playPuzzleTick();
+    });
+
+    sock.on(
+      'guild:shard_drop',
+      (payload: { guildName: string; shardId: GuildUpgradeId; act: number }) => {
+        const upDef = GUILD_UPGRADES[payload.shardId];
+        soundEngine.playLootDrop('niesmiertelny');
+        pushToast(
+          `🏰 Gildia [${payload.guildName}] zdobyła 1× ${upDef.icon} ${upDef.shardName} (100%)!`,
+          upDef.color
+        );
+      }
+    );
+
+    sock.on('guild:error', (payload: { error?: string }) => {
+      soundEngine.playPuzzleFail();
+      pushToast(`🏰 ${payload?.error || 'Błąd operacji Gildii'}`, '#f87171');
     });
 
     sock.on('disconnect', () => {
@@ -789,7 +847,15 @@ export function App() {
         const cls = CLASSES[cur.classId];
         const sk = cls.actives.find((a) => a.slot === slot);
         if (sk) {
-          const stats = computePlayerStats(cur.classId, cur.level, cur.equipped, cur.skillRanks, cur.runes);
+          const stats = computePlayerStats(
+            cur.classId,
+            cur.level,
+            cur.equipped,
+            cur.skillRanks,
+            cur.runes,
+            0,
+            guildRef.current?.upgrades
+          );
           const cdMs = Math.round(sk.cooldown * 1000 * (1 - stats.cdr / 100));
           setSkillCooldowns((prev) => (now < prev[slot] ? prev : { ...prev, [slot]: now + cdMs }));
         }
@@ -854,6 +920,7 @@ export function App() {
       else if (k === 'u') setActivePanel((p) => (p === 'runes' ? null : 'runes'));
       else if (k === 'm') setActivePanel((p) => (p === 'worldmap' ? null : 'worldmap'));
       else if (k === 'j') setActivePanel((p) => (p === 'bounties' ? null : 'bounties'));
+      else if (k === 'g') setActivePanel((p) => (p === 'guild' ? null : 'guild'));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -872,13 +939,110 @@ export function App() {
   // PLAYER PROFILE & LOBBY HANDLERS
   // ==========================================
   const buildNetPayload = (p: PlayerProfile, globalLocation?: number) => ({
-    name: p.name,
+    name: guildRef.current ? `[${guildRef.current.tag}] ${p.name}` : p.name,
     classId: p.classId,
     level: p.level,
     skillRanks: p.skillRanks,
-    stats: computePlayerStats(p.classId, p.level, p.equipped, p.skillRanks, p.runes),
+    stats: computePlayerStats(
+      p.classId,
+      p.level,
+      p.equipped,
+      p.skillRanks,
+      p.runes,
+      0,
+      guildRef.current?.upgrades
+    ),
     globalLocation,
   });
+
+  const handleCreateGuild = (
+    name: string,
+    tag: string,
+    emblem: string,
+    color: string
+  ): Promise<{ ok: boolean; error?: string }> =>
+    new Promise((resolve) => {
+      const sock = socketRef.current;
+      if (!sock || !sock.connected) {
+        resolve({ ok: false, error: 'Brak połączenia z serwerem.' });
+        return;
+      }
+      sock.emit('guild:create', { name, tag, emblem, color }, (res: { ok: boolean; error?: string }) => {
+        resolve(res || { ok: false, error: 'Błąd tworzenia Gildii.' });
+      });
+    });
+
+  const handleJoinGuildByCode = (code: string): Promise<{ ok: boolean; error?: string }> =>
+    new Promise((resolve) => {
+      const sock = socketRef.current;
+      if (!sock || !sock.connected) {
+        resolve({ ok: false, error: 'Brak połączenia z serwerem.' });
+        return;
+      }
+      sock.emit('guild:join_code', { code }, (res: { ok: boolean; error?: string }) => {
+        resolve(res || { ok: false, error: 'Nie znaleziono Gildii.' });
+      });
+    });
+
+  const handleInviteRoomMember = (targetSocketId: string): Promise<{ ok: boolean; error?: string }> =>
+    new Promise((resolve) => {
+      const sock = socketRef.current;
+      if (!sock || !sock.connected) {
+        resolve({ ok: false, error: 'Brak połączenia z serwerem.' });
+        return;
+      }
+      sock.emit('guild:invite_player', { targetSocketId }, (res: { ok: boolean; error?: string }) => {
+        resolve(res || { ok: false, error: 'Nie udało się zaprosić gracza.' });
+      });
+    });
+
+  const handleLeaveGuild = (): Promise<void> =>
+    new Promise((resolve) => {
+      const sock = socketRef.current;
+      if (!sock || !sock.connected) {
+        setGuild(null);
+        resolve();
+        return;
+      }
+      sock.emit('guild:leave', () => resolve());
+    });
+
+  const handleUpgradeGuild = (upgradeId: GuildUpgradeId): Promise<{ ok: boolean; error?: string }> =>
+    new Promise((resolve) => {
+      const sock = socketRef.current;
+      if (!sock || !sock.connected) {
+        resolve({ ok: false, error: 'Brak połączenia z serwerem.' });
+        return;
+      }
+      sock.emit('guild:upgrade', { upgradeId }, (res: { ok: boolean; error?: string }) => {
+        resolve(res || { ok: false, error: 'Nie udało się ulepszyć Gildii.' });
+      });
+    });
+
+  const handleStartGuildAct = (globalLocation: number) => {
+    if (room) {
+      if (inGame) {
+        handleSelectLocation(globalLocation);
+      } else {
+        handleStartGame(globalLocation);
+      }
+    } else {
+      setErrorMsg(null);
+      socketRef.current?.emit(
+        'room:create',
+        buildNetPayload(profileRef.current, globalLocation),
+        (res: { ok: boolean; summary?: RoomSummary; error?: string }) => {
+          if (!res.ok) {
+            setErrorMsg(res.error || 'Nie udało się uruchomić Aktu Gildyjnego');
+            pushToast(`🏰 ${res.error || 'Błąd Aktu Gildyjnego'}`, '#f87171');
+          } else if (res.summary) {
+            setRoom(res.summary);
+            socketRef.current?.emit('room:start', { globalLocation });
+          }
+        }
+      );
+    }
+  };
 
   const handleUpdateHero = (name: string, classId: ClassId) => {
     setProfile((prev) => {
@@ -1444,6 +1608,7 @@ export function App() {
       {!inGame ? (
         <LobbyScreen
           profile={profile}
+          guild={guild}
           room={room}
           connected={connected}
           errorMsg={errorMsg}
@@ -1461,6 +1626,7 @@ export function App() {
             setBountiesInitialTab(tab || 'daily');
             setActivePanel('bounties');
           }}
+          onOpenGuild={() => setActivePanel('guild')}
         />
       ) : (
         <>
@@ -1474,6 +1640,7 @@ export function App() {
           {room && (
             <Hud
               profile={profile}
+              guild={guild}
               room={room}
               localPlayerId={localPlayerId}
               mapData={mapData}
@@ -1886,6 +2053,87 @@ export function App() {
           onJumpToLocation={handleJumpToLocation}
           onClose={() => setActivePanel(null)}
         />
+      )}
+
+      {/* Guild Modal (accessible from both Main Menu AND in-game [G]!) */}
+      {activePanel === 'guild' && (
+        <GuildModal
+          guild={guild}
+          playerUid={profile.playerUid || ''}
+          localSocketId={localPlayerId}
+          room={room}
+          connected={connected}
+          onCreateGuild={handleCreateGuild}
+          onJoinGuildByCode={handleJoinGuildByCode}
+          onInviteRoomMember={handleInviteRoomMember}
+          onLeaveGuild={handleLeaveGuild}
+          onUpgradeGuild={handleUpgradeGuild}
+          onStartGuildAct={handleStartGuildAct}
+          onClose={() => setActivePanel(null)}
+        />
+      )}
+
+      {/* Incoming Guild Invite Prompt (works both in Main Menu & In-Game!) */}
+      {incomingGuildInvite && (
+        <div
+          className="comic-panel"
+          style={{
+            position: 'fixed',
+            top: 84,
+            right: 16,
+            zIndex: 96,
+            padding: 14,
+            width: 300,
+            borderColor: '#fbbf24',
+          }}
+        >
+          <div style={{ fontWeight: 900, color: '#fde047', fontSize: 14 }}>
+            {incomingGuildInvite.guildEmblem} Zaproszenie do Gildii!
+          </div>
+          <div style={{ fontSize: 12, color: '#e2e8f0', margin: '5px 0 10px' }}>
+            Gracz <strong>{incomingGuildInvite.fromName}</strong> zaprasza Cię do Gildii{' '}
+            <strong style={{ color: '#fbbf24' }}>
+              [{incomingGuildInvite.guildTag}] {incomingGuildInvite.guildName}
+            </strong>
+            !
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              className="comic-btn comic-btn-green"
+              style={{ flex: 1, padding: '6px 10px', fontSize: 12 }}
+              onClick={() => {
+                socketRef.current?.emit(
+                  'guild:respond_invite',
+                  { guildId: incomingGuildInvite.guildId, accept: true },
+                  (res: { ok: boolean; error?: string }) => {
+                    if (res?.ok) {
+                      soundEngine.playLevelUp();
+                      pushToast(`🏰 Dołączono do Gildii ${incomingGuildInvite.guildName}!`, '#4ade80');
+                    } else if (res?.error) {
+                      pushToast(`🏰 ${res.error}`, '#f87171');
+                    }
+                  }
+                );
+                setIncomingGuildInvite(null);
+              }}
+            >
+              ✓ Dołącz
+            </button>
+            <button
+              className="comic-btn comic-btn-red"
+              style={{ flex: 1, padding: '6px 10px', fontSize: 12 }}
+              onClick={() => {
+                socketRef.current?.emit('guild:respond_invite', {
+                  guildId: incomingGuildInvite.guildId,
+                  accept: false,
+                });
+                setIncomingGuildInvite(null);
+              }}
+            >
+              ✕ Odrzuć
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Loot / System Toasts (Bottom-Right, works in both Main Menu & In-Game) */}

@@ -531,10 +531,10 @@ export function xpToNextLevel(level: number): number {
 }
 
 export function targetLocationXpPool(globalIndex: number): number {
-  const clamped = Math.max(1, Math.min(105, globalIndex));
-  const refLvl = Math.min(MAX_LEVEL - 1, clamped);
-  const hcBonus = clamped > 60 ? 1.55 : 1.015;
-  return Math.round(xpToNextLevel(refLvl) * hcBonus);
+  const clamped = Math.max(1, Math.min(135, globalIndex));
+  const refLvl = Math.min(MAX_LEVEL - 1, clamped > 105 ? 45 : clamped);
+  const mult = clamped > 105 ? 1.25 : clamped > 60 ? 1.55 : 1.015;
+  return Math.round(xpToNextLevel(refLvl) * mult);
 }
 
 export function getEnemyCountMultiplier(partySize: number): number {

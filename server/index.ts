@@ -35,6 +35,22 @@ import {
 } from '../shared/mutators.js';
 import { getRuneByAct, RUNE_SHARD_DROP_CHANCE } from '../shared/runes.js';
 import {
+  createStarterGuildLevels,
+  createStarterGuildShards,
+  getGuildTodayKey,
+  GUILD_EMBLEMS,
+  GUILD_COLORS,
+  GUILD_MAX_LEVEL,
+  GUILD_UPGRADES,
+  GuildInvitePayload,
+  GuildState,
+  GuildUpgradeId,
+  isGuildAct,
+  isGuildActClearedToday,
+  isGuildLocation,
+  rollRandomGuildShard,
+} from '../shared/guilds.js';
+import {
   clipPointToLineOfSight,
   createSeededRng,
   generateMapData,
@@ -233,6 +249,94 @@ interface GameRoom {
 const rooms = new Map<string, GameRoom>();
 const socketToRoom = new Map<string, string>();
 let uidCounter = 1;
+
+// =========================================================
+// PERSISTENT GUILD SYSTEM (In-memory + disk JSON + client sync)
+// =========================================================
+const GUILDS_STORE_PATH = path.resolve(path.dirname(__dirname), 'guilds-data.json');
+const guilds = new Map<string, GuildState>();
+const guildCodeToId = new Map<string, string>();
+const playerUidToGuildId = new Map<string, string>();
+const socketToPlayerUid = new Map<string, string>();
+const playerUidToSockets = new Map<string, Set<string>>();
+const playerMetaByUid = new Map<string, { name: string; classId: ClassId; level: number }>();
+
+function loadGuildsFromDisk() {
+  try {
+    if (!fs.existsSync(GUILDS_STORE_PATH)) return;
+    const raw = fs.readFileSync(GUILDS_STORE_PATH, 'utf8');
+    const parsed = JSON.parse(raw) as GuildState[];
+    if (!Array.isArray(parsed)) return;
+    for (const g of parsed) {
+      if (!g || !g.id || !g.code) continue;
+      guilds.set(g.id, g);
+      guildCodeToId.set(g.code.toUpperCase(), g.id);
+      for (const m of g.members || []) {
+        playerUidToGuildId.set(m.playerUid, g.id);
+      }
+    }
+  } catch {
+    // ignore corrupt/missing store
+  }
+}
+
+function saveGuildsToDisk() {
+  try {
+    const arr = Array.from(guilds.values());
+    fs.writeFileSync(GUILDS_STORE_PATH, JSON.stringify(arr, null, 2), 'utf8');
+  } catch {
+    // ignore read-only disk errors
+  }
+}
+
+loadGuildsFromDisk();
+
+function generateGuildCode(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  for (let tries = 0; tries < 25; tries++) {
+    let body = '';
+    for (let i = 0; i < 5; i++) body += chars[Math.floor(Math.random() * chars.length)];
+    const code = `G-${body}`;
+    if (!guildCodeToId.has(code)) return code;
+  }
+  return `G-${Date.now().toString(36).toUpperCase().slice(-5)}`;
+}
+
+function getPlayerGuild(socketId: string): GuildState | null {
+  const uid = socketToPlayerUid.get(socketId);
+  if (!uid) return null;
+  const gid = playerUidToGuildId.get(uid);
+  if (!gid) return null;
+  return guilds.get(gid) || null;
+}
+
+function broadcastGuildState(guild: GuildState) {
+  for (const m of guild.members) {
+    const socks = playerUidToSockets.get(m.playerUid);
+    if (!socks) continue;
+    for (const sid of socks) {
+      io.to(sid).emit('guild:state', guild);
+    }
+  }
+}
+
+function checkGuildLocationAccess(socketId: string, globalLocation: number): { ok: boolean; error?: string } {
+  if (!isGuildLocation(globalLocation)) return { ok: true };
+  const guild = getPlayerGuild(socketId);
+  if (!guild) {
+    return { ok: false, error: 'Musisz należeć do Gildii, aby wejść do Aktu Gildyjnego!' };
+  }
+  const loc = getLocationDef(globalLocation);
+  if (loc.act === 8 || loc.act === 9) {
+    if (isGuildActClearedToday(guild, loc.act)) {
+      return {
+        ok: false,
+        error: `Akt Gildyjny ${loc.act === 8 ? 'I' : 'II'} został już dziś ukończony przez Twoją Gildię! Wróć jutro po kolejny Odłamek Gildii.`,
+      };
+    }
+  }
+  return { ok: true };
+}
 
 function nextId(prefix: string): string {
   return `${prefix}_${(uidCounter++).toString(36)}_${Math.floor(Math.random() * 9999).toString(36)}`;
@@ -462,12 +566,18 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
   const partySize = Math.max(1, room.players.size);
   const loc = map.location;
   const isHC = isHardcoreLocation(loc.globalIndex);
+  const isGuild = isGuildLocation(loc.globalIndex);
 
   const countMult = isHC ? 1.0 : getEnemyCountMultiplier(partySize);
   const hcMobDiffMult = isHC ? getHardcoreMobDifficultyMultiplier(partySize) : 1.0; // +10% / +20% / +30%
   const hcBossDiffMult = isHC ? getHardcoreBossDifficultyMultiplier(partySize) : 1.0; // +33% / +66% / +99%
-  const bossHpMult = isHC ? hcBossDiffMult : getBossHpMultiplier(partySize);
-  const bossDmgMult = isHC ? 1 + (partySize - 1) * 0.14 : getBossDamageMultiplier(partySize);
+  const guildBossMult = isGuild ? Number((1 + (partySize - 1) * 0.9).toFixed(2)) : 1.0; // ~3 min for every Mythic +6 member!
+  const bossHpMult = isGuild ? guildBossMult : isHC ? hcBossDiffMult : getBossHpMultiplier(partySize);
+  const bossDmgMult = isGuild
+    ? 1 + (partySize - 1) * 0.12
+    : isHC
+      ? 1 + (partySize - 1) * 0.14
+      : getBossDamageMultiplier(partySize);
 
   const mutDef = LOCATION_MUTATORS[loc.mutatorId];
   const isBounty = loc.mutatorId === 'bounty_hunt';
@@ -476,18 +586,32 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
   const actRoster = ACT_ENEMIES[loc.act];
 
   // Calibrated mob HP & DMG curve:
-  // Normal (Lvl 1 -> 60): Loc 1..60
-  // HARDCORE (Acts 5-7, Loc 61..105): calibrated so maxed Boski +13 kills mobs in ~10 hits,
-  // and scales +10%/+20%/+30% for 2/3/4 players!
+  // - Normal (Lvl 1..60): Loc 1..60
+  // - HARDCORE (Acts 5-7, Loc 61..105): ~10 hits in Boski +13, PT +10%/+20%/+30%
+  // - GUILD ACTS (Acts 8-9, Loc 106..135): balanced for Mythic +6 (~6-8 hits mobs, ~3 min final boss!)
   const L = loc.globalIndex;
   const hcIdx = Math.max(1, L - 60);
-  const baseMobHp = isHC
-    ? Math.round((71000 + hcIdx * 2150 + Math.pow(hcIdx, 1.52) * 115) * hcMobDiffMult)
-    : Math.round((180 + L * 68 + Math.pow(L, 2.25) * 2.35) * 1.25);
-  const baseMobDmg = isHC
-    ? Math.round((3100 + hcIdx * 68) * hcMobDiffMult)
-    : Math.round(16 + L * 5.2 + Math.pow(L, 1.72) * 0.72);
-  const mobArmor = isHC ? Math.round(1350 + hcIdx * 36) : Math.round(12 + L * 4.5);
+  const baseMobHp = isGuild
+    ? loc.act === 8
+      ? 7400
+      : 8800
+    : isHC
+      ? Math.round((71000 + hcIdx * 2150 + Math.pow(hcIdx, 1.52) * 115) * hcMobDiffMult)
+      : Math.round((180 + L * 68 + Math.pow(L, 2.25) * 2.35) * 1.25);
+  const baseMobDmg = isGuild
+    ? loc.act === 8
+      ? 340
+      : 395
+    : isHC
+      ? Math.round((3100 + hcIdx * 68) * hcMobDiffMult)
+      : Math.round(16 + L * 5.2 + Math.pow(L, 1.72) * 0.72);
+  const mobArmor = isGuild
+    ? loc.act === 8
+      ? 175
+      : 205
+    : isHC
+      ? Math.round(1350 + hcIdx * 36)
+      : Math.round(12 + L * 4.5);
 
   const totalXpPool = targetLocationXpPool(loc.globalIndex);
   const spawnedEnemies: ServerEnemy[] = [];
@@ -498,10 +622,13 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
     if (r.index === 8) {
       if (loc.isMainBoss) {
         const bossDef = getMainBossByAct(loc.act);
-        // HC bosses: ~3 min solo fight, +33%/+66%/+99% in 2/3/4-player PT!
-        const scaledHp = isHC
-          ? Math.round(bossDef.baseHp * hcBossDiffMult)
-          : Math.round(bossDef.baseHp * bossHpMult * 1.25);
+        // HC bosses: ~3 min solo, +33%/+66%/+99% in PT.
+        // Guild bosses: ~3 min in Mythic +6 (scales 1.0x/1.9x/2.8x/3.7x for 1-4 guildmates!).
+        const scaledHp = isGuild
+          ? Math.round(bossDef.baseHp * guildBossMult)
+          : isHC
+            ? Math.round(bossDef.baseHp * hcBossDiffMult)
+            : Math.round(bossDef.baseHp * bossHpMult * 1.25);
         const scaledDmg = Math.round(bossDef.baseDamage * bossDmgMult);
         const boss: ServerEnemy = {
           id: nextId('boss'),
@@ -1332,37 +1459,89 @@ function handleEnemyDeath(
   if (enemy.tier === 'boss') {
     room.bossDefeated = true;
     for (let i = 0; i < 6; i++) {
-      spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, i < 3, 1.35 * fortuneLuck, killer.classId);
+      spawnEquipmentDrop(
+        room,
+        enemy.x,
+        enemy.z,
+        isGuildAct(loc.act) ? 45 : loc.globalIndex,
+        i < 3,
+        1.35 * fortuneLuck,
+        killer.classId
+      );
     }
 
-    const rune = getRuneByAct(loc.act);
-    const rolledRune = Math.random() < RUNE_SHARD_DROP_CHANCE;
-    if (rolledRune) {
-      const runeLoot: GroundLoot = {
-        id: nextId('runeloot'),
-        x: enemy.x,
-        z: enemy.z,
-        runeShard: rune.id,
-        droppedAt: now,
-        pickedUp: false,
-      };
-      room.loot.set(runeLoot.id, runeLoot);
+    if (isGuildAct(loc.act)) {
+      // GUILD ACT FINAL BOSS: 100% drop of 1 random Guild Shard per Act per day (max 2/day total)!
+      const todayKey = getGuildTodayKey();
+      const guildActNum = loc.act as 8 | 9;
+      const rewardedGuildIds = new Set<string>();
+      let droppedShardName: string | null = null;
+
+      for (const p of room.players.values()) {
+        const g = getPlayerGuild(p.socketId);
+        if (!g || rewardedGuildIds.has(g.id)) continue;
+        if (isGuildActClearedToday(g, guildActNum)) continue;
+        rewardedGuildIds.add(g.id);
+
+        const shardId = rollRandomGuildShard();
+        g.shards[shardId] = (g.shards[shardId] || 0) + 1;
+        if (guildActNum === 8) g.act8ClearedDate = todayKey;
+        else g.act9ClearedDate = todayKey;
+        droppedShardName = `${GUILD_UPGRADES[shardId].icon} ${GUILD_UPGRADES[shardId].shardName}`;
+
+        saveGuildsToDisk();
+        broadcastGuildState(g);
+        io.to(room.code).emit('guild:shard_drop', {
+          guildId: g.id,
+          guildName: g.name,
+          shardId,
+          act: guildActNum,
+        });
+      }
+
+      io.to(room.code).emit('boss:defeated', {
+        act: loc.act,
+        globalLocation: room.globalLocation,
+        bossName: enemy.name,
+      });
+
+      io.to(room.code).emit('game:banner', {
+        type: 'boski',
+        title: `🏰 POKONANO BOSSA GILDII: ${enemy.name}!`,
+        subtitle: droppedShardName
+          ? `100% DROP GILDYJNY: Zdobyto 1× ${droppedShardName} do Skarbca Gildii!`
+          : 'Akt Gildyjny został już dziś nagrodzony Odłamkiem Gildii — wróć jutro!',
+      });
+    } else {
+      const rune = getRuneByAct(loc.act);
+      const rolledRune = Math.random() < RUNE_SHARD_DROP_CHANCE;
+      if (rolledRune) {
+        const runeLoot: GroundLoot = {
+          id: nextId('runeloot'),
+          x: enemy.x,
+          z: enemy.z,
+          runeShard: rune.id,
+          droppedAt: now,
+          pickedUp: false,
+        };
+        room.loot.set(runeLoot.id, runeLoot);
+      }
+
+      io.to(room.code).emit('boss:defeated', {
+        act: loc.act,
+        globalLocation: room.globalLocation,
+        bossName: enemy.name,
+      });
+
+      io.to(room.code).emit('game:banner', {
+        type: 'boss_kill',
+        title: `POKONANO BOSSA: ${enemy.name}!`,
+        subtitle: rolledRune
+          ? `WYPADŁ ${rune.shardName.toUpperCase()} (30% szansy)! Podnieś go z areny!`
+          : 'Portal do kolejnego Aktu otwarty! Zbierz łupy z areny.',
+        runeDropped: rolledRune ? rune.id : undefined,
+      });
     }
-
-    io.to(room.code).emit('boss:defeated', {
-      act: loc.act,
-      globalLocation: room.globalLocation,
-      bossName: enemy.name,
-    });
-
-    io.to(room.code).emit('game:banner', {
-      type: 'boss_kill',
-      title: `POKONANO BOSSA: ${enemy.name}!`,
-      subtitle: rolledRune
-        ? `WYPADŁ ${rune.shardName.toUpperCase()} (30% szansy)! Podnieś go z areny!`
-        : 'Portal do kolejnego Aktu otwarty! Zbierz łupy z areny.',
-      runeDropped: rolledRune ? rune.id : undefined,
-    });
   } else if (enemy.tier === 'miniboss') {
     room.bossDefeated = true;
     for (let i = 0; i < 4; i++) {
@@ -2377,6 +2556,212 @@ function startBossAbility(
         title: '👑 AETERNUS ŁADUJE KRONIKĘ ZAGŁADY!',
         subtitle: 'Schowaj się za Kosmicznym Filarem lub użyj Bariery Światła!',
       });
+      break;
+    }
+
+    // =========================================================
+    // GILDIA AKT I (AKT 8): AURELION, KRÓL ZŁOTEGO SZTANDARU
+    // =========================================================
+    case 'szarza_sztandaru': {
+      const id = nextId('tel');
+      room.telegraphs.set(id, {
+        id,
+        shape: 'line',
+        x: boss.x,
+        z: boss.z,
+        radius: 1.8,
+        length: 19,
+        width: 3.0,
+        angle: angleToTarget,
+        color: ab.color,
+        label: ab.name,
+        createdAt: now,
+        triggerAt: now + ab.telegraphMs,
+        ownerId: boss.id,
+        abilityId: ab.id,
+        resolved: false,
+        damage: boss.damage * 1.45,
+        damageType: 'physical',
+        ...bossMeta,
+      });
+      break;
+    }
+
+    case 'wyrok_krola': {
+      const id = nextId('tel');
+      room.telegraphs.set(id, {
+        id,
+        shape: 'circle',
+        x: target.x,
+        z: target.z,
+        radius: 4.9,
+        color: ab.color,
+        label: ab.name,
+        createdAt: now,
+        triggerAt: now + ab.telegraphMs,
+        ownerId: boss.id,
+        abilityId: ab.id,
+        resolved: false,
+        damage: boss.damage * 1.5,
+        damageType: 'magical',
+        ...bossMeta,
+      });
+      break;
+    }
+
+    case 'deszcz_kopii': {
+      for (let m = 0; m < 5; m++) {
+        const refP = alivePlayers[m % alivePlayers.length];
+        const rx = m < 2 ? refP.x + (Math.random() - 0.5) * 3.2 : boss.homeX + (Math.random() - 0.5) * 22;
+        const rz = m < 2 ? refP.z + (Math.random() - 0.5) * 3.2 : boss.homeZ + (Math.random() - 0.5) * 22;
+        const id = nextId('tel');
+        room.telegraphs.set(id, {
+          id,
+          shape: 'circle',
+          x: rx,
+          z: rz,
+          radius: 3.5,
+          color: ab.color,
+          label: 'Złota Kopia',
+          createdAt: now,
+          triggerAt: now + ab.telegraphMs + m * 150,
+          ownerId: boss.id,
+          abilityId: ab.id,
+          resolved: false,
+          damage: boss.damage * 1.32,
+          damageType: 'physical',
+          ...bossMeta,
+        });
+      }
+      break;
+    }
+
+    case 'tarcza_bractwa': {
+      const shieldAmt = Math.round(boss.maxHp * 0.08);
+      boss.shield = shieldAmt;
+      boss.maxShield = shieldAmt;
+      boss.healChannelUntil = now + 5200;
+      pushCombatText(room, boss.x, 4.6, boss.z, '🛡️ BASTION BRACTWA!', 'shield', true, true);
+      io.to(room.code).emit('game:banner', {
+        type: 'warning',
+        title: `${boss.name.toUpperCase()} — BASTION BRACTWA!`,
+        subtitle: 'Zbij złotą tarczę, aby przerwać leczenie!',
+      });
+      break;
+    }
+
+    // =========================================================
+    // GILDIA AKT II (AKT 9): DRAKORYS, PRADAWNY SMOK GILDII
+    // =========================================================
+    case 'oddech_szmaragdu': {
+      const id = nextId('tel');
+      room.telegraphs.set(id, {
+        id,
+        shape: 'beam',
+        x: boss.x,
+        z: boss.z,
+        radius: 1.8,
+        length: 19,
+        width: 2.6,
+        angle: angleToTarget,
+        color: ab.color,
+        label: ab.name,
+        createdAt: now,
+        triggerAt: now + ab.telegraphMs,
+        duration: 4000,
+        expiresAt: now + ab.telegraphMs + 4000,
+        ownerId: boss.id,
+        abilityId: ab.id,
+        resolved: false,
+        damage: boss.damage * 0.58,
+        damageType: 'magical',
+        armorPenPct: boss.armorPenPct,
+        extraMaxHpPct: 5,
+        bossRequiredPower: boss.requiredPower,
+      });
+      break;
+    }
+
+    case 'skrzydla_huraganu': {
+      const id = nextId('tel');
+      room.telegraphs.set(id, {
+        id,
+        shape: 'ring',
+        x: boss.x,
+        z: boss.z,
+        radius: 2.5,
+        ringMaxRadius: 17.5,
+        color: ab.color,
+        label: ab.name,
+        createdAt: now,
+        triggerAt: now + ab.telegraphMs,
+        duration: 2400,
+        expiresAt: now + ab.telegraphMs + 2400,
+        ownerId: boss.id,
+        abilityId: ab.id,
+        resolved: false,
+        isLavaRing: true,
+        damage: boss.damage * 1.18,
+        damageType: 'magical',
+        ...bossMeta,
+      });
+      break;
+    }
+
+    case 'meteory_jadeitu': {
+      for (let m = 0; m < 5; m++) {
+        const refP = alivePlayers[m % alivePlayers.length];
+        const rx = m < 2 ? refP.x + (Math.random() - 0.5) * 3.0 : boss.homeX + (Math.random() - 0.5) * 23;
+        const rz = m < 2 ? refP.z + (Math.random() - 0.5) * 3.0 : boss.homeZ + (Math.random() - 0.5) * 23;
+        const id = nextId('tel');
+        room.telegraphs.set(id, {
+          id,
+          shape: 'circle',
+          x: rx,
+          z: rz,
+          radius: 3.7,
+          color: ab.color,
+          label: 'Kryształ Jadeitu',
+          createdAt: now,
+          triggerAt: now + ab.telegraphMs + m * 150,
+          ownerId: boss.id,
+          abilityId: ab.id,
+          resolved: false,
+          damage: boss.damage * 1.38,
+          damageType: 'magical',
+          ...bossMeta,
+        });
+      }
+      break;
+    }
+
+    case 'gniew_smoka': {
+      for (let t = 0; t < 3; t++) {
+        const ang = (t / 3) * Math.PI * 2 + Math.random() * 0.5;
+        const id = nextId('tel');
+        room.telegraphs.set(id, {
+          id,
+          shape: 'circle',
+          x: boss.x + Math.cos(ang) * 5.0,
+          z: boss.z + Math.sin(ang) * 5.0,
+          radius: 3.0,
+          color: ab.color,
+          label: 'Smoczy Żar',
+          createdAt: now,
+          triggerAt: now + ab.telegraphMs,
+          duration: 5800,
+          expiresAt: now + ab.telegraphMs + 5800,
+          ownerId: boss.id,
+          abilityId: ab.id,
+          vx: Math.cos(ang + 0.65) * 4.8,
+          vz: Math.sin(ang + 0.65) * 4.8,
+          resolved: false,
+          damage: boss.damage * 0.52,
+          damageType: 'magical',
+          armorPenPct: boss.armorPenPct,
+          bossRequiredPower: boss.requiredPower,
+        });
+      }
       break;
     }
 
@@ -3867,13 +4252,20 @@ io.on('connection', (socket: Socket) => {
   });
 
   socket.on('room:create', (payload, ack) => {
+    const reqLoc = Math.max(1, Math.min(TOTAL_LOCATIONS, payload.globalLocation || 1));
+    const guildCheck = checkGuildLocationAccess(socket.id, reqLoc);
+    if (!guildCheck.ok) {
+      if (ack) ack({ ok: false, error: guildCheck.error });
+      socket.emit('guild:error', { error: guildCheck.error });
+      return;
+    }
     leaveCurrentRoom(socket);
     const code = generateRoomCode();
     const player = createServerPlayer(payload);
     const room: GameRoom = {
       code,
       hostId: socket.id,
-      globalLocation: Math.max(1, Math.min(TOTAL_LOCATIONS, payload.globalLocation || 1)),
+      globalLocation: reqLoc,
       inGame: false,
       tick: 0,
       mapData: null,
@@ -3970,7 +4362,13 @@ io.on('connection', (socket: Socket) => {
     if (!code) return;
     const room = rooms.get(code);
     if (!room) return;
-    room.globalLocation = Math.max(1, Math.min(TOTAL_LOCATIONS, Number(payload.globalLocation) || 1));
+    const targetLoc = Math.max(1, Math.min(TOTAL_LOCATIONS, Number(payload.globalLocation) || 1));
+    const guildCheck = checkGuildLocationAccess(socket.id, targetLoc);
+    if (!guildCheck.ok) {
+      socket.emit('guild:error', { error: guildCheck.error });
+      return;
+    }
+    room.globalLocation = targetLoc;
     if (room.inGame) {
       initializeLocation(room, room.globalLocation);
     } else {
@@ -3983,9 +4381,15 @@ io.on('connection', (socket: Socket) => {
     if (!code) return;
     const room = rooms.get(code);
     if (!room) return;
-    if (payload?.globalLocation) {
-      room.globalLocation = Math.max(1, Math.min(TOTAL_LOCATIONS, Number(payload.globalLocation)));
+    const targetLoc = payload?.globalLocation
+      ? Math.max(1, Math.min(TOTAL_LOCATIONS, Number(payload.globalLocation)))
+      : room.globalLocation;
+    const guildCheck = checkGuildLocationAccess(socket.id, targetLoc);
+    if (!guildCheck.ok) {
+      socket.emit('guild:error', { error: guildCheck.error });
+      return;
     }
+    room.globalLocation = targetLoc;
     room.inGame = true;
     initializeLocation(room, room.globalLocation);
     if (!room.loopTimer) {
@@ -4289,6 +4693,15 @@ io.on('connection', (socket: Socket) => {
           grade,
         });
       }
+      // After finishing Guild Act I (120) or Guild Act II (135), don't auto-loop into a locked/completed Guild Act!
+      if (room.globalLocation === 120 || room.globalLocation === 135) {
+        io.to(room.code).emit('game:banner', {
+          type: 'boski',
+          title: `🏰 AKT GILDYJNY ${room.globalLocation === 120 ? 'I' : 'II'} ZAKOŃCZONY!`,
+          subtitle: 'Odłamek Gildii trafił do Skarbca! Otwórz [G] Gildię, aby ulepszyć bonusy lub wybrać inny Akt.',
+        });
+        return;
+      }
       const nextLoc = Math.min(TOTAL_LOCATIONS, room.globalLocation + 1);
       initializeLocation(room, nextLoc);
     }
@@ -4476,12 +4889,342 @@ io.on('connection', (socket: Socket) => {
     room.trades.delete(session.tradeId);
   });
 
+  // =========================================================
+  // GUILD SOCKET HANDLERS (Create, Join, Invite, Upgrade, Sync)
+  // =========================================================
+  socket.on(
+    'guild:sync',
+    (payload: {
+      playerUid: string;
+      name: string;
+      classId: ClassId;
+      level: number;
+      guildId?: string | null;
+      guildSnapshot?: GuildState | null;
+    }) => {
+      const uid = String(payload?.playerUid || '').trim().slice(0, 48);
+      if (!uid) return;
+
+      socketToPlayerUid.set(socket.id, uid);
+      let sockSet = playerUidToSockets.get(uid);
+      if (!sockSet) {
+        sockSet = new Set();
+        playerUidToSockets.set(uid, sockSet);
+      }
+      sockSet.add(socket.id);
+
+      const meta = {
+        name: String(payload.name || 'Bohater').slice(0, 20),
+        classId: payload.classId || 'wojownik',
+        level: Math.max(1, Math.min(60, Number(payload.level) || 1)),
+      };
+      playerMetaByUid.set(uid, meta);
+
+      let gid = playerUidToGuildId.get(uid) || payload.guildId || null;
+      let guild = gid ? guilds.get(gid) || null : null;
+
+      // Restore guild from client backup snapshot if server restarted cleanly (e.g. Render cold boot)
+      if (!guild && payload.guildSnapshot && payload.guildSnapshot.id && payload.guildSnapshot.code) {
+        const snap = payload.guildSnapshot;
+        if (!guilds.has(snap.id) && (snap.members || []).some((m) => m.playerUid === uid)) {
+          const restored: GuildState = {
+            ...snap,
+            upgrades: { ...createStarterGuildLevels(), ...(snap.upgrades || {}) },
+            shards: { ...createStarterGuildShards(), ...(snap.shards || {}) },
+          };
+          guilds.set(restored.id, restored);
+          guildCodeToId.set(restored.code.toUpperCase(), restored.id);
+          for (const m of restored.members) {
+            playerUidToGuildId.set(m.playerUid, restored.id);
+          }
+          saveGuildsToDisk();
+          guild = restored;
+        }
+      }
+
+      if (guild) {
+        const member = guild.members.find((m) => m.playerUid === uid);
+        if (member) {
+          member.name = meta.name;
+          member.classId = meta.classId;
+          member.level = meta.level;
+          playerUidToGuildId.set(uid, guild.id);
+          broadcastGuildState(guild);
+        } else {
+          socket.emit('guild:state', null);
+        }
+      } else {
+        socket.emit('guild:state', null);
+      }
+    }
+  );
+
+  socket.on(
+    'guild:create',
+    (
+      payload: { name: string; tag: string; emblem?: string; color?: string },
+      ack?: (res: { ok: boolean; guild?: GuildState; error?: string }) => void
+    ) => {
+      const uid = socketToPlayerUid.get(socket.id);
+      if (!uid) {
+        ack?.({ ok: false, error: 'Brak identyfikacji gracza — spróbuj ponownie za sekundę.' });
+        return;
+      }
+      if (playerUidToGuildId.has(uid)) {
+        ack?.({ ok: false, error: 'Już należysz do Gildii! Najpierw opuść obecną.' });
+        return;
+      }
+      const name = String(payload?.name || '').trim().slice(0, 24);
+      const tag = String(payload?.tag || '')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '')
+        .slice(0, 4);
+      if (name.length < 3) {
+        ack?.({ ok: false, error: 'Nazwa Gildii musi mieć co najmniej 3 znaki.' });
+        return;
+      }
+      if (tag.length < 2) {
+        ack?.({ ok: false, error: 'Tag Gildii musi mieć 2–4 litery lub cyfry.' });
+        return;
+      }
+
+      const meta = playerMetaByUid.get(uid) || { name: 'Bohater', classId: 'wojownik' as ClassId, level: 1 };
+      const id = `gld_${Date.now().toString(36)}_${Math.floor(Math.random() * 9999).toString(36)}`;
+      const code = generateGuildCode();
+      const guild: GuildState = {
+        id,
+        code,
+        name,
+        tag,
+        emblem: GUILD_EMBLEMS.includes(payload?.emblem || '') ? payload.emblem! : '🏰',
+        color: GUILD_COLORS.includes(payload?.color || '') ? payload.color! : '#fbbf24',
+        leaderUid: uid,
+        members: [
+          {
+            playerUid: uid,
+            name: meta.name,
+            classId: meta.classId,
+            level: meta.level,
+            role: 'leader',
+            joinedAt: Date.now(),
+          },
+        ],
+        upgrades: createStarterGuildLevels(),
+        shards: createStarterGuildShards(),
+        createdAt: Date.now(),
+      };
+      guilds.set(guild.id, guild);
+      guildCodeToId.set(guild.code, guild.id);
+      playerUidToGuildId.set(uid, guild.id);
+      saveGuildsToDisk();
+      broadcastGuildState(guild);
+      ack?.({ ok: true, guild });
+    }
+  );
+
+  socket.on(
+    'guild:join_code',
+    (
+      payload: { code: string },
+      ack?: (res: { ok: boolean; guild?: GuildState; error?: string }) => void
+    ) => {
+      const uid = socketToPlayerUid.get(socket.id);
+      if (!uid) {
+        ack?.({ ok: false, error: 'Brak identyfikacji gracza.' });
+        return;
+      }
+      if (playerUidToGuildId.has(uid)) {
+        ack?.({ ok: false, error: 'Już należysz do Gildii! Najpierw opuść obecną.' });
+        return;
+      }
+      const cleanCode = String(payload?.code || '').trim().toUpperCase();
+      const gid = guildCodeToId.get(cleanCode);
+      const guild = gid ? guilds.get(gid) : null;
+      if (!guild) {
+        ack?.({ ok: false, error: 'Nie znaleziono Gildii o podanym kodzie zaproszenia!' });
+        return;
+      }
+      if (guild.members.length >= 20) {
+        ack?.({ ok: false, error: 'Ta Gildia osiągnęła limit 20 członków!' });
+        return;
+      }
+      const meta = playerMetaByUid.get(uid) || { name: 'Bohater', classId: 'wojownik' as ClassId, level: 1 };
+      guild.members.push({
+        playerUid: uid,
+        name: meta.name,
+        classId: meta.classId,
+        level: meta.level,
+        role: 'member',
+        joinedAt: Date.now(),
+      });
+      playerUidToGuildId.set(uid, guild.id);
+      saveGuildsToDisk();
+      broadcastGuildState(guild);
+      ack?.({ ok: true, guild });
+    }
+  );
+
+  socket.on(
+    'guild:invite_player',
+    (
+      payload: { targetSocketId: string },
+      ack?: (res: { ok: boolean; error?: string }) => void
+    ) => {
+      const guild = getPlayerGuild(socket.id);
+      const uid = socketToPlayerUid.get(socket.id);
+      if (!guild || !uid) {
+        ack?.({ ok: false, error: 'Musisz należeć do Gildii, aby zapraszać członków.' });
+        return;
+      }
+      const targetSid = String(payload?.targetSocketId || '');
+      const targetUid = socketToPlayerUid.get(targetSid);
+      if (!targetSid || !targetUid) {
+        ack?.({ ok: false, error: 'Wybrany gracz jest offline.' });
+        return;
+      }
+      if (playerUidToGuildId.has(targetUid)) {
+        ack?.({ ok: false, error: 'Ten gracz należy już do jakiejś Gildii.' });
+        return;
+      }
+      const senderMeta = playerMetaByUid.get(uid);
+      const invite: GuildInvitePayload = {
+        guildId: guild.id,
+        guildName: guild.name,
+        guildTag: guild.tag,
+        guildEmblem: guild.emblem,
+        fromName: senderMeta?.name || 'Bohater',
+      };
+      io.to(targetSid).emit('guild:invite_incoming', invite);
+      ack?.({ ok: true });
+    }
+  );
+
+  socket.on(
+    'guild:respond_invite',
+    (
+      payload: { guildId: string; accept: boolean },
+      ack?: (res: { ok: boolean; guild?: GuildState; error?: string }) => void
+    ) => {
+      if (!payload?.accept) {
+        ack?.({ ok: true });
+        return;
+      }
+      const uid = socketToPlayerUid.get(socket.id);
+      if (!uid) {
+        ack?.({ ok: false, error: 'Brak identyfikacji gracza.' });
+        return;
+      }
+      if (playerUidToGuildId.has(uid)) {
+        ack?.({ ok: false, error: 'Już należysz do Gildii!' });
+        return;
+      }
+      const guild = guilds.get(payload.guildId);
+      if (!guild) {
+        ack?.({ ok: false, error: 'Ta Gildia już nie istnieje.' });
+        return;
+      }
+      if (guild.members.length >= 20) {
+        ack?.({ ok: false, error: 'Ta Gildia jest pełna.' });
+        return;
+      }
+      const meta = playerMetaByUid.get(uid) || { name: 'Bohater', classId: 'wojownik' as ClassId, level: 1 };
+      guild.members.push({
+        playerUid: uid,
+        name: meta.name,
+        classId: meta.classId,
+        level: meta.level,
+        role: 'member',
+        joinedAt: Date.now(),
+      });
+      playerUidToGuildId.set(uid, guild.id);
+      saveGuildsToDisk();
+      broadcastGuildState(guild);
+      ack?.({ ok: true, guild });
+    }
+  );
+
+  socket.on('guild:leave', (ack?: (res: { ok: boolean }) => void) => {
+    const uid = socketToPlayerUid.get(socket.id);
+    if (!uid) {
+      ack?.({ ok: false });
+      return;
+    }
+    const gid = playerUidToGuildId.get(uid);
+    if (!gid) {
+      socket.emit('guild:state', null);
+      ack?.({ ok: true });
+      return;
+    }
+    const guild = guilds.get(gid);
+    playerUidToGuildId.delete(uid);
+    if (guild) {
+      guild.members = guild.members.filter((m) => m.playerUid !== uid);
+      if (guild.members.length === 0) {
+        guilds.delete(guild.id);
+        guildCodeToId.delete(guild.code);
+      } else {
+        if (guild.leaderUid === uid) {
+          guild.leaderUid = guild.members[0].playerUid;
+          guild.members[0].role = 'leader';
+        }
+        broadcastGuildState(guild);
+      }
+      saveGuildsToDisk();
+    }
+    socket.emit('guild:state', null);
+    ack?.({ ok: true });
+  });
+
+  socket.on(
+    'guild:upgrade',
+    (
+      payload: { upgradeId: GuildUpgradeId },
+      ack?: (res: { ok: boolean; guild?: GuildState; error?: string }) => void
+    ) => {
+      const guild = getPlayerGuild(socket.id);
+      if (!guild) {
+        ack?.({ ok: false, error: 'Nie należysz do żadnej Gildii.' });
+        return;
+      }
+      const upId = payload?.upgradeId;
+      if (!upId || !GUILD_UPGRADES[upId]) {
+        ack?.({ ok: false, error: 'Nieznane ulepszenie Gildii.' });
+        return;
+      }
+      const curLvl = guild.upgrades[upId] || 0;
+      const owned = guild.shards[upId] || 0;
+      if (curLvl >= GUILD_MAX_LEVEL) {
+        ack?.({ ok: false, error: 'To ulepszenie Gildii osiągnęło już maksymalny 10. poziom!' });
+        return;
+      }
+      if (owned < 1) {
+        ack?.({ ok: false, error: `Brak ${GUILD_UPGRADES[upId].shardName}! Zdobądź go z Bossa Aktu Gildyjnego.` });
+        return;
+      }
+      guild.shards[upId] = owned - 1;
+      guild.upgrades[upId] = curLvl + 1;
+      saveGuildsToDisk();
+      broadcastGuildState(guild);
+      ack?.({ ok: true, guild });
+    }
+  );
+
   socket.on('room:leave', () => {
     leaveCurrentRoom(socket);
   });
 
   socket.on('disconnect', () => {
     leaveCurrentRoom(socket);
+    const uid = socketToPlayerUid.get(socket.id);
+    if (uid) {
+      socketToPlayerUid.delete(socket.id);
+      const set = playerUidToSockets.get(uid);
+      if (set) {
+        set.delete(socket.id);
+        if (set.size === 0) playerUidToSockets.delete(uid);
+      }
+    }
   });
 });
 

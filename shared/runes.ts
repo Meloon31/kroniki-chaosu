@@ -145,7 +145,7 @@ export const RUNE_LIST: RuneDefinition[] = [
 ];
 
 export function getRuneByAct(act: ActNumber): RuneDefinition {
-  const map: Record<ActNumber, RuneId> = {
+  const map: Partial<Record<ActNumber, RuneId>> = {
     1: 'malakor',
     2: 'azirath',
     3: 'sylvara',
@@ -154,7 +154,7 @@ export function getRuneByAct(act: ActNumber): RuneDefinition {
     6: 'ignarok',
     7: 'aeternus',
   };
-  return RUNES[map[act]];
+  return RUNES[map[act] || 'malakor'];
 }
 
 export function createStarterRunes(): RuneLevels {

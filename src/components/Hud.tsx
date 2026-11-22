@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CLASSES, MAX_LEVEL, xpToNextLevel } from '../../shared/classes';
 import { getDailyBlessing, getDailyFeaturedLocation } from '../../shared/bounties';
+import { getTotalGuildShards, GuildState, isGuildAct } from '../../shared/guilds';
 import { RARITY_META } from '../../shared/items';
 import { CHAOS_BOONS, LOCATION_MUTATORS } from '../../shared/mutators';
 import { getLocationDef } from '../../shared/world';
@@ -21,7 +22,8 @@ export type ActivePanel =
   | 'runes'
   | 'worldmap'
   | 'trade'
-  | 'bounties';
+  | 'bounties'
+  | 'guild';
 
 const COOP_EMOTES = [
   { icon: '👍', label: '👍 SUPER!' },
@@ -33,6 +35,7 @@ const COOP_EMOTES = [
 
 interface HudProps {
   profile: PlayerProfile;
+  guild?: GuildState | null;
   room: RoomSummary;
   localPlayerId: string;
   mapData: GeneratedMapData | null;
@@ -57,6 +60,7 @@ interface HudProps {
 
 export const Hud: React.FC<HudProps> = ({
   profile,
+  guild,
   room,
   localPlayerId,
   mapData,
@@ -402,11 +406,21 @@ export const Hud: React.FC<HudProps> = ({
             width: '100%',
           }}
         >
-          <div style={{ fontSize: 11, fontWeight: 900, color: loc.act >= 5 ? '#00f5d4' : '#fde047', letterSpacing: 1 }}>
-            {loc.act >= 5 ? '🔥 HARDCORE • ' : ''}AKT {loc.act} • LOKACJA {loc.locationInAct}/15 (#{loc.globalIndex}/105) •{' '}
-            {loc.act >= 5
-              ? `PT BOSS: ${Math.round(room.bossHpMultiplier * 100)}% / MOB: ${Math.round(room.enemyCountMultiplier * 100)}%`
-              : `SKALA DRUŻYNY: ${Math.round(room.enemyCountMultiplier * 100)}%`}
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 900,
+              color: isGuildAct(loc.act) ? '#fbbf24' : loc.act >= 5 ? '#00f5d4' : '#fde047',
+              letterSpacing: 1,
+            }}
+          >
+            {isGuildAct(loc.act)
+              ? `🏰 AKT GILDYJNY ${loc.act === 8 ? 'I' : 'II'} • LOKACJA ${loc.locationInAct}/15 • BOSS: 100% ODŁAMEK GILDII`
+              : `${loc.act >= 5 ? '🔥 HARDCORE • ' : ''}AKT ${loc.act} • LOKACJA ${loc.locationInAct}/15 (#${loc.globalIndex}/105) • ${
+                  loc.act >= 5
+                    ? `PT BOSS: ${Math.round(room.bossHpMultiplier * 100)}% / MOB: ${Math.round(room.enemyCountMultiplier * 100)}%`
+                    : `SKALA DRUŻYNY: ${Math.round(room.enemyCountMultiplier * 100)}%`
+                }`}
           </div>
           <div className="comic-title" style={{ fontSize: 22, color: '#fff', lineHeight: 1.1 }}>
             {loc.name}
@@ -1191,6 +1205,29 @@ export const Hud: React.FC<HudProps> = ({
                     }}
                   >
                     {readyBountyCount}
+                  </span>
+                )}
+              </button>
+              <button
+                className="comic-btn comic-btn-purple"
+                onClick={() => onOpenPanel('guild')}
+                style={{ padding: '8px 10px', fontSize: 12, position: 'relative', borderColor: '#fbbf24' }}
+                title="Gildia, Rozwój i 2 Akty Gildyjne [G]"
+              >
+                {guild ? `${guild.emblem} [G] ${guild.tag}` : '🏰 [G] Gildia'}
+                {getTotalGuildShards(guild) > 0 && (
+                  <span
+                    style={{
+                      background: '#fde047',
+                      color: '#111118',
+                      borderRadius: 99,
+                      padding: '0 6px',
+                      fontSize: 11,
+                      fontWeight: 900,
+                      marginLeft: 4,
+                    }}
+                  >
+                    {getTotalGuildShards(guild)}
                   </span>
                 )}
               </button>
