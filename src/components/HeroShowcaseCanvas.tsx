@@ -36,22 +36,22 @@ export const HeroShowcaseCanvas: React.FC<HeroShowcaseCanvasProps> = ({
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.96;
+    renderer.toneMappingExposure = 1.04;
     renderer.shadowMap.enabled = true;
     host.appendChild(renderer.domElement);
 
     const cls = CLASSES[classId];
 
-    // Studio 3-point lighting tailored to class palette
-    const hemi = new THREE.HemisphereLight('#d4e0ff', '#1d1630', 0.85);
+    // Warm plush cartoon studio 3-point lighting tailored to class palette
+    const hemi = new THREE.HemisphereLight('#e4ecff', '#31234a', 0.95);
     scene.add(hemi);
 
-    const key = new THREE.DirectionalLight('#fff2dc', 1.15);
+    const key = new THREE.DirectionalLight('#fff6e5', 1.2);
     key.position.set(3.5, 6, 4.5);
     key.castShadow = true;
     scene.add(key);
 
-    const rim = new THREE.DirectionalLight(cls.primaryColor, 0.85);
+    const rim = new THREE.DirectionalLight(cls.primaryColor, 0.92);
     rim.position.set(-4, 3.2, -3.5);
     scene.add(rim);
 

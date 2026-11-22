@@ -97,16 +97,16 @@ export class GameEngine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.88;
+    this.renderer.toneMappingExposure = 1.02;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
 
-    // Balanced 3-point comic lighting: Hemisphere fill + Calibrated Key + Subtle Rim
-    this.hemiLight = new THREE.HemisphereLight('#b5c4eb', '#2a2238', 0.56);
+    // Warm plush 3-point storybook cartoon lighting: Soft Hemisphere + Golden Sun + Pastel Rim
+    this.hemiLight = new THREE.HemisphereLight('#d6e2ff', '#3a2d4f', 0.74);
     this.scene.add(this.hemiLight);
 
-    this.sunLight = new THREE.DirectionalLight('#ffebd0', 1.02);
+    this.sunLight = new THREE.DirectionalLight('#fff2db', 1.12);
     this.sunLight.position.set(22, 42, 24);
     this.sunLight.castShadow = true;
     this.sunLight.shadow.mapSize.set(2048, 2048);
@@ -232,15 +232,15 @@ export class GameEngine {
     this.scene.background = new THREE.Color(theme.skyColor);
     this.scene.fog = new THREE.Fog(theme.fogColor, 60, 134);
 
-    // Calibrated atmospheric lighting palette per Act (rich & balanced, never glaring!)
+    // Warm storybook cartoon lighting palette per Act
     const actLighting: Record<
       ActNumber,
       { sky: string; ground: string; sun: string; sunInt: number; rim: string; mote: string }
     > = {
-      1: { sky: '#9aa8d6', ground: '#242038', sun: '#ffe4c4', sunInt: 1.0, rim: '#7aa7e8', mote: '#f2b872' },
-      2: { sky: '#f5dcb8', ground: '#4a301e', sun: '#fff0d6', sunInt: 0.94, rim: '#6ec2e6', mote: '#e8c487' },
-      3: { sky: '#8bc9ba', ground: '#1a2b28', sun: '#dfcbf5', sunInt: 0.96, rim: '#a97fe6', mote: '#7fe3a8' },
-      4: { sky: '#b584d6', ground: '#2e121c', sun: '#f7c1c1', sunInt: 0.98, rim: '#e06380', mote: '#e86850' },
+      1: { sky: '#c4d2fa', ground: '#372e4f', sun: '#ffecd1', sunInt: 1.12, rim: '#93c5fd', mote: '#fbd38d' },
+      2: { sky: '#fff0d1', ground: '#634028', sun: '#fff5e0', sunInt: 1.04, rim: '#7dd3fc', mote: '#fde68a' },
+      3: { sky: '#a7f0d6', ground: '#243d36', sun: '#efe0ff', sunInt: 1.08, rim: '#c4b5fd', mote: '#86efac' },
+      4: { sky: '#d4a3f5', ground: '#401a28', sun: '#ffd4d4', sunInt: 1.08, rim: '#fb7185', mote: '#fca5a5' },
     };
     const al = actLighting[mapData.location.act];
     this.hemiLight.color.set(al.sky);

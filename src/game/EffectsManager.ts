@@ -5,7 +5,9 @@ import type { GroundLoot, Rarity, SkillVfxEvent, TelegraphZone } from '../../sha
 import {
   createComicMesh,
   createContactShadow,
+  createRoundedBoxGeometry,
   createSoftBeamMaterial,
+  createSoftStarGeometry,
   createToonMaterial,
 } from './ComicMaterials';
 
@@ -40,10 +42,10 @@ interface LootVisual {
   rarity?: Rarity;
 }
 
-const SHARED_SMOKE_GEO = new THREE.DodecahedronGeometry(0.32, 0);
-const SHARED_SHARD_GEO = new THREE.OctahedronGeometry(0.22, 0);
-const SHARED_LEAF_GEO = new THREE.PlaneGeometry(0.28, 0.16);
-const SHARED_SPARK_GEO = new THREE.BoxGeometry(0.08, 0.08, 0.42);
+const SHARED_SMOKE_GEO = new THREE.SphereGeometry(0.32, 12, 10);
+const SHARED_SHARD_GEO = new THREE.SphereGeometry(0.22, 10, 8);
+const SHARED_LEAF_GEO = new THREE.CircleGeometry(0.2, 10);
+const SHARED_SPARK_GEO = new THREE.CapsuleGeometry(0.06, 0.32, 6, 8);
 
 export class EffectsManager {
   private scene: THREE.Scene;
@@ -420,9 +422,9 @@ export class EffectsManager {
           const ox = m === 0 ? 0 : (Math.random() - 0.5) * radius * 0.9;
           const oz = m === 0 ? 0 : (Math.random() - 0.5) * radius * 0.9;
           const rock = createComicMesh(
-            new THREE.DodecahedronGeometry(radius * (isObsidian ? 0.34 : 0.24), 0),
-            '#292524',
-            0.045,
+            new THREE.SphereGeometry(radius * (isObsidian ? 0.36 : 0.26), 14, 12),
+            '#332b36',
+            0.04,
             { emissive: '#b91c1c', emissiveIntensity: 0.32 }
           );
           const startX = ev.x + ox - 3.5;
@@ -647,9 +649,9 @@ export class EffectsManager {
       case 'radiant_bolt': {
         const tx = ev.tx ?? ev.x;
         const tz = ev.tz ?? ev.z;
-        const star = createComicMesh(new THREE.OctahedronGeometry(0.28, 0), '#e6c253', 0.022, {
-          emissive: '#ca8a04',
-          emissiveIntensity: 0.3,
+        const star = createComicMesh(createSoftStarGeometry(0.32, 0.16, 5, 0.1), '#fde047', 0.02, {
+          emissive: '#f59e0b',
+          emissiveIntensity: 0.32,
         });
         star.position.set(ev.x, 1.35, ev.z);
         this.scene.add(star);
@@ -1249,11 +1251,11 @@ export class EffectsManager {
 
         const gem = createComicMesh(
           drop.runeShard
-            ? new THREE.OctahedronGeometry(0.52, 0)
-            : new THREE.BoxGeometry(0.48, 0.48, 0.48),
+            ? createSoftStarGeometry(0.46, 0.24, 5, 0.18)
+            : createRoundedBoxGeometry(0.56, 0.46, 0.46, 0.16, 4),
           beamColor,
-          0.032,
-          { emissive: beamColor, emissiveIntensity: 0.28 }
+          0.028,
+          { emissive: beamColor, emissiveIntensity: 0.3 }
         );
         gem.position.y = 0.68;
 

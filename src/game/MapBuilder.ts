@@ -126,9 +126,9 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     }
   }
 
-  // Softly beveled, rounded cartoony walls (NO harsh wireframe EdgesGeometry!)
-  const wallMat = createToonMaterial(theme.wallColor);
-  const wallCapMat = createToonMaterial(theme.wallTopColor);
+  // Plush, pillowy cartoon walls with rounded end-pillars / organic boulders (ZERO boxy corners!)
+  const wallMat = createToonMaterial(theme.wallColor, { rimStrength: 0.16 });
+  const wallCapMat = createToonMaterial(theme.wallTopColor, { rimStrength: 0.22 });
   const wallGeoCache = new Map<string, THREE.BufferGeometry>();
   const capGeoCache = new Map<string, THREE.BufferGeometry>();
 
@@ -136,7 +136,7 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     const key = `${w.toFixed(1)}_${h.toFixed(1)}_${d.toFixed(1)}`;
     let g = wallGeoCache.get(key);
     if (!g) {
-      g = createRoundedBoxGeometry(w, h, d, 0.36, 3);
+      g = createRoundedBoxGeometry(w, h, d, 0.72, 6);
       wallGeoCache.set(key, g);
     }
     return g;
@@ -146,21 +146,36 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     const key = `${w.toFixed(1)}_${d.toFixed(1)}`;
     let g = capGeoCache.get(key);
     if (!g) {
-      g = createRoundedBoxGeometry(w + 0.32, 0.52, d + 0.32, 0.2, 3);
+      g = createRoundedBoxGeometry(w + 0.44, 0.62, d + 0.44, 0.3, 5);
       capGeoCache.set(key, g);
     }
     return g;
   };
+
+  // Shared rounded pillar & decorative shrub/rock geometries for breaking up straight wall lines!
+  const endPillarGeo = new THREE.CapsuleGeometry(0.88, 2.5, 10, 16);
+  const endCapGeo = new THREE.SphereGeometry(1.02, 16, 12);
+  const shrubGeo = new THREE.SphereGeometry(0.68, 14, 10);
+  const shrubMat = createToonMaterial(
+    map.location.act === 3
+      ? '#2ea35c'
+      : map.location.act === 2
+        ? '#d9a148'
+        : map.location.act === 4
+          ? '#4a2138'
+          : '#566482',
+    { rimStrength: 0.22 }
+  );
 
   for (const w of map.walls) {
     if (w.gateId) {
       const gGroup = new THREE.Group();
       gGroup.position.set(w.x, 0, w.z);
       const gateMesh = createComicMesh(
-        createRoundedBoxGeometry(w.w, w.h, w.d, 0.34, 3),
-        '#155e75',
-        0.03,
-        { emissive: '#0284c7', emissiveIntensity: 0.25 }
+        createRoundedBoxGeometry(w.w, w.h, w.d, 0.6, 5),
+        '#1a7594',
+        0.032,
+        { emissive: '#0284c7', emissiveIntensity: 0.28 }
       );
       gateMesh.position.y = w.h / 2;
       gGroup.add(gateMesh);
@@ -177,18 +192,18 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
       sGroup.position.set(w.x, 0, w.z);
       const isCracked = !!w.destructible;
       const wallBlock = createComicMesh(
-        createRoundedBoxGeometry(w.w, w.h, w.d, 0.34, 3),
-        isCracked ? '#78350f' : theme.wallColor,
-        0.03,
-        isCracked ? { emissive: '#b45309', emissiveIntensity: 0.16 } : undefined
+        createRoundedBoxGeometry(w.w, w.h, w.d, 0.6, 5),
+        isCracked ? '#8c4214' : theme.wallColor,
+        0.032,
+        isCracked ? { emissive: '#d97706', emissiveIntensity: 0.2 } : undefined
       );
       wallBlock.position.y = w.h / 2;
       sGroup.add(wallBlock);
 
       if (isCracked) {
         const crack = new THREE.Mesh(
-          new THREE.CapsuleGeometry(0.18, w.h * 0.52, 6, 10),
-          new THREE.MeshBasicMaterial({ color: '#e6a832' })
+          new THREE.CapsuleGeometry(0.2, w.h * 0.52, 8, 12),
+          new THREE.MeshBasicMaterial({ color: '#fbbf24' })
         );
         crack.position.y = w.h * 0.5;
         crack.rotation.z = 0.28;
@@ -213,11 +228,36 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     bodyMesh.receiveShadow = true;
 
     const capMesh = new THREE.Mesh(getCapGeo(w.w, w.d), wallCapMat);
-    capMesh.position.set(w.x, w.h - 0.12, w.z);
+    capMesh.position.set(w.x, w.h - 0.08, w.z);
     capMesh.castShadow = true;
     capMesh.receiveShadow = true;
 
     root.add(bodyMesh, capMesh);
+
+    // Add plush rounded turret-pillars at ends of major wall segments to soften the entire silhouette!
+    const isHoriz = w.w >= w.d;
+    const len = isHoriz ? w.w : w.d;
+    if (len >= 6) {
+      for (const endSign of [-1, 1]) {
+        const px = isHoriz ? w.x + endSign * (w.w * 0.5 - 0.5) : w.x;
+        const pz = isHoriz ? w.z : w.z + endSign * (w.d * 0.5 - 0.5);
+        const pillar = new THREE.Mesh(endPillarGeo, wallMat);
+        pillar.position.set(px, (w.h - 0.3) * 0.5, pz);
+        pillar.castShadow = true;
+        pillar.receiveShadow = true;
+
+        const cap = new THREE.Mesh(endCapGeo, wallCapMat);
+        cap.scale.set(1.05, 0.58, 1.05);
+        cap.position.set(px, w.h + 0.08, pz);
+        cap.castShadow = true;
+
+        // Soft decorative boulder / mossy puff nestled at pillar base
+        const puff = new THREE.Mesh(shrubGeo, shrubMat);
+        puff.scale.set(1.1, 0.72, 1.1);
+        puff.position.set(px + (isHoriz ? 0 : endSign * 0.45), 0.38, pz + (isHoriz ? endSign * 0.45 : 0));
+        root.add(pillar, cap, puff);
+      }
+    }
   }
 
   // Hidden Levers (rounded base & knob handle!)

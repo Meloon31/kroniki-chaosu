@@ -3,7 +3,12 @@ import type { ClassId, NetPlayerState } from '../../shared/types';
 import {
   createComicMesh,
   createContactShadow,
+  createPlushLathe,
   createRoundedBoxGeometry,
+  createSoftBladeGeometry,
+  createSoftStarGeometry,
+  createSoftWingGeometry,
+  createTaperedCurveGeometry,
   createToonMaterial,
   getUpgradeGlowColor,
 } from './ComicMaterials';
@@ -37,15 +42,15 @@ export function buildCharacterRig(
   const bodyGroup = new THREE.Group();
   root.add(bodyGroup);
 
-  root.add(createContactShadow(0.9, 0.44));
+  root.add(createContactShadow(0.95, 0.4));
 
   // Subtle selection ring (can be hidden in 3D Main Menu showcase)
-  const ringGeo = new THREE.RingGeometry(0.76, 0.87, 32);
+  const ringGeo = new THREE.RingGeometry(0.78, 0.9, 36);
   const ringMat = new THREE.MeshBasicMaterial({
-    color: isLocal ? '#f5b942' : '#56b4e9',
+    color: isLocal ? '#fbbf24' : '#38bdf8',
     side: THREE.DoubleSide,
     transparent: true,
-    opacity: options?.hideSelectionRing ? 0 : isLocal ? 0.48 : 0.34,
+    opacity: options?.hideSelectionRing ? 0 : isLocal ? 0.5 : 0.36,
     depthWrite: false,
   });
   const ring = new THREE.Mesh(ringGeo, ringMat);
@@ -53,7 +58,7 @@ export function buildCharacterRig(
   ring.position.y = 0.04;
   root.add(ring);
 
-  const auraGeo = new THREE.RingGeometry(0.92, 1.14, 32);
+  const auraGeo = new THREE.RingGeometry(0.94, 1.16, 36);
   const auraMat = new THREE.MeshBasicMaterial({
     color: '#38bdf8',
     side: THREE.DoubleSide,
@@ -69,9 +74,10 @@ export function buildCharacterRig(
   const isDwarf = classId === 'krasnolud';
   const isFairy = classId === 'wrozka';
   const isElf = classId === 'elf';
-  const hScale = isDwarf ? 0.82 : isFairy ? 0.95 : isElf ? 1.04 : 1.0;
-  const wScale = isDwarf ? 1.22 : isFairy ? 0.86 : isElf ? 0.92 : 1.04;
+  const hScale = isDwarf ? 0.8 : isFairy ? 0.93 : isElf ? 1.02 : 0.96;
+  const wScale = isDwarf ? 1.24 : isFairy ? 0.9 : isElf ? 0.94 : 1.06;
 
+  // Warm, vibrant modern cartoon color palettes (Brawl Stars / Zelda / Torchlight vibe)
   const palettes: Record<
     ClassId,
     {
@@ -82,101 +88,111 @@ export function buildCharacterRig(
       cheek: string;
       boots: string;
       hair: string;
-      eye: string;
+      iris: string;
     }
   > = {
     wojownik: {
-      primary: '#d43f3a',
-      secondary: '#526075',
-      trim: '#e6b446',
-      skin: '#f7c9a6',
-      cheek: '#f08c7d',
-      boots: '#32384c',
-      hair: '#4a2e22',
-      eye: '#1c1d2b',
+      primary: '#e5484d',
+      secondary: '#6b7d99',
+      trim: '#f5c249',
+      skin: '#ffd4b2',
+      cheek: '#ff8a80',
+      boots: '#3b4259',
+      hair: '#5c3624',
+      iris: '#2563eb',
     },
     czarnoksieznik: {
-      primary: '#5d3494',
-      secondary: '#312354',
-      trim: '#e0ad48',
-      skin: '#f3d8c2',
-      cheek: '#e69ba8',
-      boots: '#241c3b',
-      hair: '#dbe4f0',
-      eye: '#c084fc',
+      primary: '#7244bd',
+      secondary: '#412870',
+      trim: '#f5be4f',
+      skin: '#fde0c8',
+      cheek: '#f497b6',
+      boots: '#2e224d',
+      hair: '#e8effa',
+      iris: '#a855f7',
     },
     elf: {
-      primary: '#248f63',
-      secondary: '#6b4c32',
-      trim: '#e6c25b',
-      skin: '#f9dcc4',
-      cheek: '#f29b92',
-      boots: '#4a3423',
-      hair: '#f2cf66',
-      eye: '#15803d',
+      primary: '#2da36f',
+      secondary: '#7d5636',
+      trim: '#f5d061',
+      skin: '#ffe3cc',
+      cheek: '#fa9d94',
+      boots: '#593c24',
+      hair: '#ffdb6e',
+      iris: '#16a34a',
     },
     krasnolud: {
-      primary: '#b85a24',
-      secondary: '#5c6678',
-      trim: '#e2ae48',
-      skin: '#f2c19c',
-      cheek: '#eb8775',
-      boots: '#3e332e',
-      hair: '#de5e1c',
-      eye: '#242c3b',
+      primary: '#d4682a',
+      secondary: '#69768c',
+      trim: '#f2be4c',
+      skin: '#fbc9a2',
+      cheek: '#f28574',
+      boots: '#4d3b32',
+      hair: '#f26a1b',
+      iris: '#0284c7',
     },
     wrozka: {
-      primary: '#e0639b',
-      secondary: '#fcebf2',
-      trim: '#f0c854',
-      skin: '#fde6e0',
-      cheek: '#f799b4',
-      boots: '#b54e80',
-      hair: '#f7c2d9',
-      eye: '#3b82f6',
+      primary: '#f06eaa',
+      secondary: '#fff0f7',
+      trim: '#fad25a',
+      skin: '#ffece6',
+      cheek: '#ff96ba',
+      boots: '#c7528b',
+      hair: '#ffcae2',
+      iris: '#38bdf8',
     },
   };
   const pal = palettes[classId];
 
   // ==========================================
-  // 1. PLUSH CAPSULE LEGS & ROUNDED CARTOON BOOTS
+  // 1. CHUBBY SOFT CARTOON LEGS & PLUSH BOOTS
   // ==========================================
   const makeLeg = (side: -1 | 1) => {
     const pivot = new THREE.Group();
-    pivot.position.set(side * 0.21 * wScale, 0.62 * hScale, 0);
+    pivot.position.set(side * 0.21 * wScale, 0.56 * hScale, 0);
 
     const leg = createComicMesh(
-      new THREE.CapsuleGeometry(0.135 * wScale, 0.26 * hScale, 8, 14),
+      new THREE.CapsuleGeometry(0.145 * wScale, 0.2 * hScale, 10, 18),
       pal.secondary,
-      0.022
+      0.026
     );
-    leg.position.y = -0.22 * hScale;
+    leg.position.y = -0.18 * hScale;
 
+    // Fluffy rolled boot cuff
     const cuff = createComicMesh(
-      new THREE.TorusGeometry(0.145 * wScale, 0.045, 8, 16),
+      new THREE.TorusGeometry(0.155 * wScale, 0.055, 10, 20),
       pal.trim,
-      0.018
+      0.02
     );
     cuff.rotation.x = Math.PI / 2;
-    cuff.position.y = -0.34 * hScale;
+    cuff.position.y = -0.3 * hScale;
 
+    // Plump rounded storybook boot
     const boot = createComicMesh(
-      new THREE.CapsuleGeometry(0.14 * wScale, 0.16 * hScale, 8, 14),
+      new THREE.CapsuleGeometry(0.15 * wScale, 0.14 * hScale, 10, 18),
       pal.boots,
-      0.024
+      0.026
     );
-    boot.position.y = -0.45 * hScale;
+    boot.position.y = -0.41 * hScale;
 
-    // Plump rounded cartoon boot toe (Sphere instead of rectangular box!)
     const toe = createComicMesh(
-      new THREE.SphereGeometry(0.145 * wScale, 14, 10),
+      new THREE.SphereGeometry(0.165 * wScale, 16, 14),
       pal.boots,
-      0.022
+      0.025
     );
-    toe.scale.set(0.95, 0.72, 1.38);
-    toe.position.set(0, -0.54 * hScale, 0.11);
+    toe.scale.set(1.0, 0.72, 1.38);
+    toe.position.set(0, -0.49 * hScale, 0.11);
 
-    pivot.add(leg, cuff, boot, toe);
+    // Soft rounded boot sole rim
+    const sole = createComicMesh(
+      new THREE.SphereGeometry(0.16 * wScale, 14, 10),
+      '#241d2e',
+      0.015
+    );
+    sole.scale.set(1.04, 0.3, 1.44);
+    sole.position.set(0, -0.55 * hScale, 0.1);
+
+    pivot.add(leg, cuff, boot, toe, sole);
     return pivot;
   };
 
@@ -185,383 +201,597 @@ export function buildCharacterRig(
   bodyGroup.add(leftLegPivot, rightLegPivot);
 
   // ==========================================
-  // 2. SOFT ORGANIC TORSO & FLOWING ROBES / ARMOR
+  // 2. PLUSH LATHE-SCULPTED TORSO (ZERO BOXES!)
   // ==========================================
   const torsoGroup = new THREE.Group();
-  torsoGroup.position.y = 0.64 * hScale;
+  torsoGroup.position.y = 0.56 * hScale;
   bodyGroup.add(torsoGroup);
 
   if (classId === 'czarnoksieznik' || classId === 'wrozka') {
-    // Smooth lathed bell-shaped cartoon robe / dress!
-    const lathePts = [
-      new THREE.Vector2(0.02, -0.34 * hScale),
-      new THREE.Vector2(0.49 * wScale, -0.34 * hScale),
-      new THREE.Vector2(0.44 * wScale, -0.14 * hScale),
-      new THREE.Vector2(0.28 * wScale, 0.18 * hScale),
-      new THREE.Vector2(0.35 * wScale, 0.56 * hScale),
-      new THREE.Vector2(0.26 * wScale, 0.74 * hScale),
-      new THREE.Vector2(0.02, 0.76 * hScale),
-    ];
-    const robeGeo = new THREE.LatheGeometry(lathePts, 20);
-    const robe = createComicMesh(robeGeo, pal.primary, 0.028);
+    // Smooth pear/bell cartoon robe or dress sculpted with LatheGeometry!
+    const robeGeo = createPlushLathe(
+      [
+        [0.01, -0.34 * hScale],
+        [0.54 * wScale, -0.34 * hScale],
+        [0.55 * wScale, -0.24 * hScale],
+        [0.44 * wScale, -0.02 * hScale],
+        [0.3 * wScale, 0.24 * hScale],
+        [0.39 * wScale, 0.56 * hScale],
+        [0.32 * wScale, 0.74 * hScale],
+        [0.01, 0.77 * hScale],
+      ],
+      26
+    );
+    const robe = createComicMesh(robeGeo, pal.primary, 0.03);
 
     const hemTrim = createComicMesh(
-      new THREE.TorusGeometry(0.48 * wScale, 0.048, 8, 22),
+      new THREE.TorusGeometry(0.53 * wScale, 0.056, 10, 26),
       pal.trim,
-      0.018
+      0.02
     );
     hemTrim.rotation.x = Math.PI / 2;
-    hemTrim.position.y = -0.31 * hScale;
+    hemTrim.position.y = -0.3 * hScale;
 
     const sash = createComicMesh(
-      new THREE.TorusGeometry(0.30 * wScale, 0.06, 8, 20),
+      new THREE.TorusGeometry(0.32 * wScale, 0.068, 10, 24),
       pal.trim,
-      0.018
+      0.02
     );
     sash.rotation.x = Math.PI / 2;
-    sash.position.y = 0.22 * hScale;
+    sash.position.y = 0.24 * hScale;
 
     torsoGroup.add(robe, hemTrim, sash);
 
     if (classId === 'czarnoksieznik') {
-      // Plush curved arcane shawl collar
-      const shawl = createComicMesh(
-        new THREE.TorusGeometry(0.34 * wScale, 0.11, 10, 20),
-        pal.secondary,
-        0.022
-      );
-      shawl.rotation.x = Math.PI / 2 - 0.15;
-      shawl.position.y = 0.68 * hScale;
-      torsoGroup.add(shawl);
-    } else {
-      // Soft rounded scalloped flower petals around Fairy waist!
-      for (let i = 0; i < 7; i++) {
-        const a = (i / 7) * Math.PI * 2;
-        const petal = createComicMesh(
-          new THREE.SphereGeometry(0.18, 12, 10),
-          i % 2 === 0 ? pal.secondary : pal.primary,
-          0.018
-        );
-        petal.scale.set(0.95, 1.35, 0.55);
-        petal.position.set(Math.cos(a) * 0.34, 0.05 * hScale, Math.sin(a) * 0.34);
-        petal.rotation.y = -a + Math.PI / 2;
-        petal.rotation.x = 0.32;
-        torsoGroup.add(petal);
+      // Fluffy scalloped arcane shawl collar made of soft overlapping puffs!
+      for (let i = 0; i < 9; i++) {
+        const a = (i / 9) * Math.PI * 2;
+        const puff = createComicMesh(new THREE.SphereGeometry(0.15, 14, 12), pal.secondary, 0.02);
+        puff.position.set(Math.cos(a) * 0.34 * wScale, 0.68 * hScale, Math.sin(a) * 0.3 * wScale);
+        torsoGroup.add(puff);
       }
-    }
-  } else {
-    // Plush sculpted heroic rounded capsule torso (NO blocky cubes!)
-    const chest = createComicMesh(
-      new THREE.CapsuleGeometry(0.37 * wScale, 0.38 * hScale, 10, 18),
-      pal.primary,
-      0.028
-    );
-    chest.scale.set(1.08, 1.0, 0.84);
-    chest.position.y = 0.42 * hScale;
-
-    // Rounded beveled chestplate overlay
-    const plate = createComicMesh(
-      createRoundedBoxGeometry(0.56 * wScale, 0.44 * hScale, 0.26, 0.09, 4),
-      pal.secondary,
-      0.022
-    );
-    plate.position.set(0, 0.48 * hScale, 0.20 * wScale);
-
-    const gem = createComicMesh(new THREE.SphereGeometry(0.11, 12, 10), pal.trim, 0.016);
-    gem.scale.set(1, 1.25, 0.55);
-    gem.position.set(0, 0.50 * hScale, 0.34 * wScale);
-
-    // Plush rounded belt torus + rounded buckle
-    const belt = createComicMesh(
-      new THREE.TorusGeometry(0.35 * wScale, 0.075, 10, 22),
-      '#4d3221',
-      0.02
-    );
-    belt.rotation.x = Math.PI / 2;
-    belt.scale.set(1.05, 0.85, 1);
-    belt.position.y = 0.09 * hScale;
-
-    const buckle = createComicMesh(
-      createRoundedBoxGeometry(0.20, 0.17, 0.10, 0.04, 3),
-      pal.trim,
-      0.016
-    );
-    buckle.position.set(0, 0.09 * hScale, 0.32 * wScale);
-
-    torsoGroup.add(chest, plate, gem, belt, buckle);
-
-    if (classId === 'wojownik' || classId === 'krasnolud') {
-      for (const s of [-1, 1]) {
-        const tasset = createComicMesh(
-          createRoundedBoxGeometry(0.25 * wScale, 0.28 * hScale, 0.34, 0.07, 3),
-          pal.secondary,
+      // Cute golden clasp brooch on chest
+      const brooch = createComicMesh(new THREE.SphereGeometry(0.11, 14, 12), '#38bdf8', 0.016, {
+        emissive: '#0284c7',
+        emissiveIntensity: 0.28,
+      });
+      brooch.position.set(0, 0.62 * hScale, 0.37 * wScale);
+      torsoGroup.add(brooch);
+    } else {
+      // Plush flower-petal skirt & cute bow sash around Fairy waist!
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const petal = createComicMesh(
+          new THREE.SphereGeometry(0.2, 14, 12),
+          i % 2 === 0 ? pal.secondary : '#ff99c8',
           0.02
         );
-        tasset.position.set(s * 0.34 * wScale, -0.07 * hScale, 0);
-        tasset.rotation.z = s * 0.16;
+        petal.scale.set(0.95, 1.38, 0.56);
+        petal.position.set(Math.cos(a) * 0.38, 0.04 * hScale, Math.sin(a) * 0.38);
+        petal.rotation.y = -a + Math.PI / 2;
+        petal.rotation.x = 0.34;
+        torsoGroup.add(petal);
+      }
+      // Cute ribbon collar
+      const collar = createComicMesh(new THREE.TorusGeometry(0.3, 0.055, 10, 22), pal.secondary, 0.018);
+      collar.rotation.x = Math.PI / 2;
+      collar.position.y = 0.72 * hScale;
+      torsoGroup.add(collar);
+    }
+  } else {
+    // Plush barrel/heroic sculpted torso using LatheGeometry (ZERO blocky boxes!)
+    const bellyR = isDwarf ? 0.5 * wScale : 0.42 * wScale;
+    const chestR = isDwarf ? 0.48 * wScale : isElf ? 0.37 * wScale : 0.46 * wScale;
+    const torsoGeo = createPlushLathe(
+      [
+        [0.01, -0.06 * hScale],
+        [bellyR * 0.84, -0.02 * hScale],
+        [bellyR, 0.16 * hScale],
+        [chestR, 0.48 * hScale],
+        [chestR * 0.86, 0.72 * hScale],
+        [0.24 * wScale, 0.8 * hScale],
+        [0.01, 0.82 * hScale],
+      ],
+      26
+    );
+    const chest = createComicMesh(torsoGeo, pal.primary, 0.03);
+    chest.scale.set(1.06, 1.0, 0.88);
+    torsoGroup.add(chest);
+
+    // Sculpted domed front breastplate (soft sphere shell instead of rectangular box!)
+    const plate = createComicMesh(
+      new THREE.SphereGeometry(0.36 * wScale, 20, 16),
+      pal.secondary,
+      0.024
+    );
+    plate.scale.set(1.06, 0.88, 0.55);
+    plate.position.set(0, 0.46 * hScale, 0.24 * wScale);
+    torsoGroup.add(plate);
+
+    // Golden emblem medallion on chest
+    const emblemRing = createComicMesh(new THREE.TorusGeometry(0.13, 0.032, 10, 18), pal.trim, 0.015);
+    emblemRing.position.set(0, 0.48 * hScale, 0.43 * wScale);
+    const gem = createComicMesh(
+      new THREE.SphereGeometry(0.1, 14, 12),
+      classId === 'elf' ? '#34d399' : '#fbbf24',
+      0.015,
+      { emissive: classId === 'elf' ? '#10b981' : '#d97706', emissiveIntensity: 0.2 }
+    );
+    gem.scale.set(1, 1.1, 0.6);
+    gem.position.set(0, 0.48 * hScale, 0.44 * wScale);
+    torsoGroup.add(emblemRing, gem);
+
+    // Plush rounded belt torus + soft circular golden buckle
+    const belt = createComicMesh(
+      new THREE.TorusGeometry(bellyR * 0.96, 0.085, 12, 26),
+      '#593622',
+      0.022
+    );
+    belt.rotation.x = Math.PI / 2;
+    belt.scale.set(1.06, 0.88, 1);
+    belt.position.y = 0.1 * hScale;
+
+    const buckle = createComicMesh(new THREE.TorusGeometry(0.11, 0.038, 10, 18), pal.trim, 0.016);
+    buckle.position.set(0, 0.1 * hScale, bellyR * 0.91);
+    torsoGroup.add(belt, buckle);
+
+    if (classId === 'krasnolud') {
+      // Fluffy cartoon fur mantle puffs around Dwarf shoulders!
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2;
+        const fur = createComicMesh(new THREE.SphereGeometry(0.16, 14, 12), '#e8dcc8', 0.02);
+        fur.position.set(Math.cos(a) * 0.42 * wScale, 0.72 * hScale, Math.sin(a) * 0.34 * wScale);
+        torsoGroup.add(fur);
+      }
+    } else if (classId === 'wojownik') {
+      // Rounded scalloped armored skirt tassets (flattened soft spheres, zero boxes!)
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + 0.3;
+        const tasset = createComicMesh(new THREE.SphereGeometry(0.18 * wScale, 14, 12), pal.secondary, 0.02);
+        tasset.scale.set(1.0, 1.25, 0.55);
+        tasset.position.set(Math.cos(a) * 0.36 * wScale, -0.05 * hScale, Math.sin(a) * 0.3 * wScale);
+        tasset.rotation.y = -a + Math.PI / 2;
+        tasset.rotation.x = 0.25;
         torsoGroup.add(tasset);
+      }
+    } else if (classId === 'elf') {
+      // Soft leaf-shaped tunic flaps around Elf waist
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        const leaf = createComicMesh(new THREE.SphereGeometry(0.17, 14, 12), pal.primary, 0.02);
+        leaf.scale.set(0.9, 1.4, 0.45);
+        leaf.position.set(Math.cos(a) * 0.34, -0.06 * hScale, Math.sin(a) * 0.3);
+        leaf.rotation.y = -a + Math.PI / 2;
+        leaf.rotation.x = 0.28;
+        torsoGroup.add(leaf);
       }
     }
   }
 
-  // Curved Flowing Cartoon Cape (bent cylindrical mantle instead of flat slab!)
+  // Smooth Curved Flowing Cartoon Cape
   let capePivot: THREE.Group | undefined;
   if (classId === 'wojownik' || classId === 'elf') {
     capePivot = new THREE.Group();
-    capePivot.position.set(0, 1.38 * hScale, -0.22 * wScale);
+    capePivot.position.set(0, 1.3 * hScale, -0.24 * wScale);
     const capeGeo = new THREE.CylinderGeometry(
       0.34 * wScale,
-      0.56 * wScale,
+      0.62 * wScale,
       0.98 * hScale,
-      14,
-      1,
+      20,
+      2,
       true,
-      Math.PI * 0.68,
-      Math.PI * 0.64
+      Math.PI * 0.66,
+      Math.PI * 0.68
     );
-    const capeMesh = new THREE.Mesh(
+    const capeMesh = createComicMesh(
       capeGeo,
-      createToonMaterial(classId === 'wojownik' ? '#a62626' : '#18663d', {
-        side: THREE.DoubleSide,
-      })
+      classId === 'wojownik' ? '#c82832' : '#1b7a4a',
+      0.016,
+      { side: THREE.DoubleSide }
     );
-    capeMesh.position.set(0, -0.46 * hScale, 0.06);
-    capeMesh.rotation.x = 0.18;
-    capeMesh.castShadow = true;
+    capeMesh.position.set(0, -0.45 * hScale, 0.08);
+    capeMesh.rotation.x = 0.2;
     capePivot.add(capeMesh);
     bodyGroup.add(capePivot);
   }
 
   // ==========================================
-  // 3. EXPRESSIVE SOFT CARTOON HEAD & FACE
+  // 3. BIG EXPRESSIVE CHIBI-CARTOON HEAD & FACE
   // ==========================================
   const headGroup = new THREE.Group();
-  headGroup.position.set(0, 1.65 * hScale, 0);
+  headGroup.position.set(0, 1.68 * hScale, 0);
   bodyGroup.add(headGroup);
 
-  const neck = createComicMesh(new THREE.CapsuleGeometry(0.13, 0.10, 6, 12), pal.skin, 0.016);
-  neck.position.y = -0.24;
+  const neck = createComicMesh(new THREE.CapsuleGeometry(0.14, 0.1, 8, 14), pal.skin, 0.018);
+  neck.position.y = -0.28;
   headGroup.add(neck);
 
-  // Plush slightly stylized round head!
-  const skull = createComicMesh(new THREE.SphereGeometry(0.355, 20, 16), pal.skin, 0.026);
-  skull.scale.set(1.02, 0.99, 0.98);
+  // Big plush round stylized cartoon head (radius 0.435 — soft & adorable heroic proportion!)
+  const skull = createComicMesh(new THREE.SphereGeometry(0.435, 28, 22), pal.skin, 0.03);
+  skull.scale.set(1.04, 0.97, 0.98);
   headGroup.add(skull);
 
-  // Expressive glossy cartoon eyes + dual highlights + soft rosy cheeks + curved brows!
-  const eyeMat = new THREE.MeshBasicMaterial({ color: pal.eye });
-  const glintMat = new THREE.MeshBasicMaterial({ color: '#ffffff' });
-  const cheekMat = createToonMaterial(pal.cheek, { transparent: true, opacity: 0.45 });
+  // Cute round side ears (for non-elves; elves get long pointed ears below)
+  if (classId !== 'elf') {
+    for (const s of [-1, 1]) {
+      const ear = createComicMesh(new THREE.SphereGeometry(0.095, 12, 10), pal.skin, 0.018);
+      ear.scale.set(0.65, 1.0, 0.85);
+      ear.position.set(s * 0.43, -0.02, -0.02);
+      headGroup.add(ear);
+    }
+  }
+
+  // Expressive Layered Cartoon Eyes (White Sclera + Colored Iris + Dark Pupil + Twin Glints + Rosy Cheeks + Smile!)
+  const scleraMat = new THREE.MeshBasicMaterial({ color: '#ffffff' });
+  const irisMat = new THREE.MeshBasicMaterial({ color: pal.iris });
+  const pupilMat = new THREE.MeshBasicMaterial({ color: '#141124' });
+  const cheekMat = createToonMaterial(pal.cheek, { transparent: true, opacity: 0.48, rimStrength: 0 });
   const browMat = createToonMaterial(pal.hair);
 
   for (const s of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.056, 12, 10), eyeMat);
-    eye.scale.set(0.88, 1.18, 0.55);
-    eye.position.set(s * 0.125, 0.02, 0.318);
+    const sclera = new THREE.Mesh(new THREE.SphereGeometry(0.088, 14, 12), scleraMat);
+    sclera.scale.set(0.92, 1.15, 0.42);
+    sclera.position.set(s * 0.155, 0.02, 0.39);
 
-    const glintBig = new THREE.Mesh(new THREE.SphereGeometry(0.022, 8, 8), glintMat);
-    glintBig.position.set(s * 0.125 + 0.016, 0.048, 0.348);
+    const iris = new THREE.Mesh(new THREE.SphereGeometry(0.064, 14, 12), irisMat);
+    iris.scale.set(0.9, 1.12, 0.42);
+    iris.position.set(s * 0.155, 0.016, 0.408);
 
-    const glintSmall = new THREE.Mesh(new THREE.SphereGeometry(0.011, 6, 6), glintMat);
-    glintSmall.position.set(s * 0.125 - 0.014, 0.002, 0.345);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.042, 12, 10), pupilMat);
+    pupil.scale.set(0.9, 1.1, 0.42);
+    pupil.position.set(s * 0.155, 0.014, 0.42);
 
-    const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), cheekMat);
-    cheek.scale.set(1.2, 0.72, 0.4);
-    cheek.position.set(s * 0.20, -0.055, 0.275);
+    const glintBig = new THREE.Mesh(new THREE.SphereGeometry(0.026, 10, 8), scleraMat);
+    glintBig.position.set(s * 0.155 + 0.022, 0.052, 0.435);
 
-    const brow = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.085, 6, 8), browMat);
-    brow.rotation.z =
-      Math.PI / 2 + (classId === 'wojownik' || classId === 'krasnolud' ? -s * 0.22 : s * 0.1);
-    brow.position.set(s * 0.125, 0.125, 0.325);
+    const glintSmall = new THREE.Mesh(new THREE.SphereGeometry(0.013, 8, 8), scleraMat);
+    glintSmall.position.set(s * 0.155 - 0.018, -0.008, 0.434);
 
-    headGroup.add(eye, glintBig, glintSmall, cheek, brow);
+    // Soft rosy cartoon cheeks
+    const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.072, 12, 10), cheekMat);
+    cheek.scale.set(1.25, 0.72, 0.35);
+    cheek.position.set(s * 0.255, -0.075, 0.345);
+
+    // Expressive curved eyebrows
+    const browCurve = createTaperedCurveGeometry(
+      [
+        [s * 0.085, 0.145 + (classId === 'wojownik' || classId === 'krasnolud' ? -0.02 : 0.01), 0.395],
+        [s * 0.16, 0.175, 0.39],
+        [s * 0.235, 0.155 + (classId === 'wojownik' || classId === 'krasnolud' ? 0.02 : -0.01), 0.365],
+      ],
+      0.024,
+      0.018,
+      10,
+      8
+    );
+    const brow = new THREE.Mesh(browCurve, browMat);
+
+    headGroup.add(sclera, iris, pupil, glintBig, glintSmall, cheek, brow);
   }
 
-  // Cute rounded button nose
-  const nose = createComicMesh(new THREE.SphereGeometry(0.042, 10, 8), pal.skin, 0.01);
-  nose.scale.set(1.0, 0.85, 1.1);
-  nose.position.set(0, -0.025, 0.352);
+  // Cute round button nose
+  const nose = createComicMesh(new THREE.SphereGeometry(0.048, 12, 10), pal.skin, 0.012);
+  nose.scale.set(1.05, 0.85, 1.1);
+  nose.position.set(0, -0.035, 0.432);
   headGroup.add(nose);
+
+  // Cute curved cartoon smile (visible for classes without giant mustache covering it)
+  if (classId !== 'krasnolud') {
+    const smileGeo = createTaperedCurveGeometry(
+      [
+        [-0.075, -0.115, 0.405],
+        [0, -0.145, 0.422],
+        [0.075, -0.115, 0.405],
+      ],
+      0.014,
+      0.014,
+      10,
+      8
+    );
+    const smile = new THREE.Mesh(smileGeo, new THREE.MeshBasicMaterial({ color: '#7a3538' }));
+    headGroup.add(smile);
+  }
 
   let wingLeftGroup: THREE.Group | undefined;
   let wingRightGroup: THREE.Group | undefined;
   let orbitProp: THREE.Group | undefined;
 
   if (classId === 'wojownik') {
-    // Rounded Domed Cartoon Knight Helm + Plump Curved Ivory Horns + Fluffy Crest Plume
+    // Plush Domed Cartoon Knight Helm + Smooth Tapered Curved Ivory Horns + Bouncy Crest Plume!
     const dome = createComicMesh(
-      new THREE.SphereGeometry(0.395, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.6),
-      '#68778d',
-      0.026
+      new THREE.SphereGeometry(0.475, 24, 18, 0, Math.PI * 2, 0, Math.PI * 0.57),
+      '#7487a3',
+      0.028
     );
-    dome.position.y = 0.05;
-    const helmBand = createComicMesh(new THREE.TorusGeometry(0.39, 0.045, 8, 20), pal.trim, 0.018);
-    helmBand.rotation.x = Math.PI / 2;
-    helmBand.position.y = 0.08;
-    const noseGuard = createComicMesh(new THREE.CapsuleGeometry(0.036, 0.18, 6, 10), pal.trim, 0.016);
-    noseGuard.position.set(0, 0.03, 0.37);
+    dome.position.y = 0.06;
 
-    // Sculpted bubbly comic plume along crest!
-    for (let p = 0; p < 4; p++) {
+    const helmBand = createComicMesh(new THREE.TorusGeometry(0.47, 0.056, 12, 28), pal.trim, 0.02);
+    helmBand.rotation.x = Math.PI / 2;
+    helmBand.position.y = 0.085;
+
+    const noseGuard = createComicMesh(new THREE.CapsuleGeometry(0.042, 0.16, 8, 12), pal.trim, 0.016);
+    noseGuard.position.set(0, 0.03, 0.455);
+
+    // Fluffy cloud-like comic crest plume along helm top!
+    for (let p = 0; p < 5; p++) {
       const puff = createComicMesh(
-        new THREE.SphereGeometry(0.115 - p * 0.012, 10, 8),
-        '#dc2626',
-        0.018
+        new THREE.SphereGeometry(0.145 - p * 0.014, 14, 12),
+        p % 2 === 0 ? '#ef4444' : '#dc2626',
+        0.02
       );
-      puff.position.set(0, 0.44 - p * 0.04, 0.06 - p * 0.14);
+      puff.position.set(0, 0.54 - p * 0.045, 0.08 - p * 0.15);
       headGroup.add(puff);
     }
 
-    // Smooth curved horns (bent torus arcs!)
+    // Smooth tapered curved Viking/Knight horns using Catmull-Rom tube!
     for (const s of [-1, 1]) {
-      const horn = createComicMesh(
-        new THREE.TorusGeometry(0.22, 0.065, 8, 14, Math.PI * 0.72),
-        '#f2ece0',
-        0.02
+      const hornGeo = createTaperedCurveGeometry(
+        [
+          [s * 0.41, 0.24, 0.02],
+          [s * 0.64, 0.34, 0.08],
+          [s * 0.72, 0.56, 0.14],
+          [s * 0.58, 0.74, 0.16],
+        ],
+        0.095,
+        0.02,
+        16,
+        12
       );
-      horn.position.set(s * 0.36, 0.24, 0.02);
-      horn.rotation.z = s === 1 ? -0.45 : Math.PI + 0.45;
-      horn.rotation.y = s * 0.25;
-      headGroup.add(horn);
+      const horn = createComicMesh(hornGeo, '#fbf5e6', 0.022);
+      const hornRing = createComicMesh(new THREE.TorusGeometry(0.1, 0.03, 8, 16), pal.trim, 0.014);
+      hornRing.position.set(s * 0.44, 0.25, 0.03);
+      hornRing.rotation.y = Math.PI / 2;
+      headGroup.add(horn, hornRing);
     }
     headGroup.add(dome, helmBand, noseGuard);
   } else if (classId === 'czarnoksieznik') {
-    // Plump Curled Cartoon Wizard Hat + Floating Rounded Spellbook!
-    const brim = createComicMesh(new THREE.CylinderGeometry(0.62, 0.66, 0.08, 22), '#462375', 0.026);
-    brim.position.y = 0.21;
-    brim.rotation.x = -0.07;
-    const band = createComicMesh(new THREE.TorusGeometry(0.37, 0.055, 8, 20), pal.trim, 0.018);
-    band.rotation.x = Math.PI / 2;
-    band.position.y = 0.27;
-    const hatMid = createComicMesh(new THREE.CapsuleGeometry(0.26, 0.26, 8, 16), '#562a8f', 0.026);
-    hatMid.position.set(0, 0.48, -0.05);
-    hatMid.rotation.x = -0.22;
-    const hatTip = createComicMesh(new THREE.ConeGeometry(0.22, 0.52, 16), '#462375', 0.024);
-    hatTip.position.set(0.09, 0.82, -0.24);
-    hatTip.rotation.x = -0.68;
-    hatTip.rotation.z = -0.28;
-    const tipBall = createComicMesh(new THREE.SphereGeometry(0.065, 10, 8), pal.trim, 0.015);
-    tipBall.position.set(0.18, 0.96, -0.44);
-    headGroup.add(brim, band, hatMid, hatTip, tipBall);
+    // Soft silver side hair curls + plush curved Wizard Hat w/ drooping curl & golden star!
+    for (const s of [-1, 1]) {
+      const curl = createComicMesh(new THREE.SphereGeometry(0.14, 14, 12), pal.hair, 0.02);
+      curl.scale.set(0.85, 1.35, 0.95);
+      curl.position.set(s * 0.38, -0.05, -0.08);
+      headGroup.add(curl);
+    }
+    const brim = createComicMesh(
+      createPlushLathe(
+        [
+          [0.01, -0.05],
+          [0.74, -0.04],
+          [0.78, 0.01],
+          [0.72, 0.06],
+          [0.4, 0.12],
+          [0.01, 0.13],
+        ],
+        28
+      ),
+      '#582d99',
+      0.028
+    );
+    brim.position.y = 0.24;
+    brim.rotation.x = -0.08;
 
+    const band = createComicMesh(new THREE.TorusGeometry(0.43, 0.068, 12, 26), pal.trim, 0.02);
+    band.rotation.x = Math.PI / 2;
+    band.position.y = 0.34;
+
+    // Smooth organically bent witch/wizard hat spire using tapered curve!
+    const hatSpireGeo = createTaperedCurveGeometry(
+      [
+        [0, 0.32, 0],
+        [0.02, 0.62, -0.06],
+        [0.12, 0.92, -0.22],
+        [0.24, 1.06, -0.46],
+        [0.18, 0.94, -0.62],
+      ],
+      0.42,
+      0.04,
+      20,
+      16
+    );
+    const hatSpire = createComicMesh(hatSpireGeo, '#6434ad', 0.028);
+
+    const tipStar = createComicMesh(createSoftStarGeometry(0.13, 0.068, 5, 0.045), '#fde047', 0.016, {
+      emissive: '#f59e0b',
+      emissiveIntensity: 0.28,
+    });
+    tipStar.position.set(0.18, 0.9, -0.64);
+    headGroup.add(brim, band, hatSpire, tipStar);
+
+    // Floating rounded spellbook with glowing heart emblem
     orbitProp = new THREE.Group();
-    orbitProp.position.y = 1.15;
-    const book = createComicMesh(createRoundedBoxGeometry(0.28, 0.34, 0.10, 0.03, 3), '#5b21b6', 0.02);
-    book.position.set(-0.82, 0.1, 0.26);
+    orbitProp.position.y = 1.18;
+    const book = createComicMesh(createRoundedBoxGeometry(0.32, 0.38, 0.12, 0.05, 5), '#6d28d9', 0.022);
+    book.position.set(-0.92, 0.12, 0.28);
     book.rotation.y = 0.45;
-    orbitProp.add(book);
+    const bookGem = createComicMesh(new THREE.SphereGeometry(0.08, 12, 10), '#fbbf24', 0.014, {
+      emissive: '#f59e0b',
+      emissiveIntensity: 0.25,
+    });
+    bookGem.position.set(-0.92, 0.12, 0.35);
+    orbitProp.add(book, bookGem);
     bodyGroup.add(orbitProp);
   } else if (classId === 'elf') {
-    // Lush Layered Golden Cartoon Hair + Smooth Pointed Ears + Leaf Circlet + Quiver
-    const hairCrown = createComicMesh(new THREE.SphereGeometry(0.385, 18, 14), pal.hair, 0.024);
-    hairCrown.position.set(0, 0.08, -0.05);
-    const bangL = createComicMesh(new THREE.SphereGeometry(0.18, 12, 10), pal.hair, 0.018);
-    bangL.scale.set(1.2, 0.75, 0.85);
-    bangL.position.set(-0.20, 0.22, 0.20);
-    const bangR = bangL.clone();
-    bangR.position.x = 0.20;
-    const ponytail = createComicMesh(new THREE.CapsuleGeometry(0.13, 0.38, 8, 12), pal.hair, 0.022);
-    ponytail.position.set(0, -0.10, -0.42);
-    ponytail.rotation.x = 0.62;
-    const circlet = createComicMesh(new THREE.TorusGeometry(0.355, 0.036, 8, 20), pal.trim, 0.015);
-    circlet.rotation.x = Math.PI / 2 - 0.1;
-    circlet.position.y = 0.14;
+    // Lush Golden Cartoon Hair with sculpted bangs, bouncy ponytail, leaf circlet & soft long ears!
+    const hairCrown = createComicMesh(new THREE.SphereGeometry(0.46, 24, 18), pal.hair, 0.026);
+    hairCrown.position.set(0, 0.08, -0.06);
 
+    // Soft sculpted hair bang locks framing face
     for (const s of [-1, 1]) {
-      const ear = createComicMesh(new THREE.CapsuleGeometry(0.052, 0.22, 6, 10), pal.skin, 0.018);
-      ear.position.set(s * 0.38, 0.02, -0.02);
-      ear.rotation.z = -s * 1.18;
-      headGroup.add(ear);
-    }
-    headGroup.add(hairCrown, bangL, bangR, ponytail, circlet);
+      const bangGeo = createTaperedCurveGeometry(
+        [
+          [0, 0.42, 0.12],
+          [s * 0.24, 0.3, 0.34],
+          [s * 0.38, 0.08, 0.26],
+        ],
+        0.13,
+        0.045,
+        12,
+        10
+      );
+      const bang = createComicMesh(bangGeo, pal.hair, 0.02);
 
-    const quiver = createComicMesh(new THREE.CapsuleGeometry(0.105, 0.48, 8, 12), '#6b4226', 0.02);
-    quiver.position.set(-0.24, 1.15 * hScale, -0.32);
+      // Cute long rounded elf ears
+      const earGeo = createTaperedCurveGeometry(
+        [
+          [s * 0.4, 0.02, -0.02],
+          [s * 0.58, 0.08, -0.06],
+          [s * 0.72, 0.17, -0.1],
+        ],
+        0.085,
+        0.02,
+        12,
+        10
+      );
+      const ear = createComicMesh(earGeo, pal.skin, 0.018);
+      headGroup.add(bang, ear);
+    }
+
+    // Swishy curved golden ponytail
+    const tailGeo = createTaperedCurveGeometry(
+      [
+        [0, 0.12, -0.44],
+        [0, -0.06, -0.62],
+        [0, -0.34, -0.66],
+        [0, -0.52, -0.58],
+      ],
+      0.16,
+      0.045,
+      14,
+      12
+    );
+    const ponytail = createComicMesh(tailGeo, pal.hair, 0.024);
+
+    const circlet = createComicMesh(new THREE.TorusGeometry(0.43, 0.042, 10, 26), pal.trim, 0.016);
+    circlet.rotation.x = Math.PI / 2 - 0.12;
+    circlet.position.y = 0.18;
+
+    const circletGem = createComicMesh(new THREE.SphereGeometry(0.08, 12, 10), '#34d399', 0.014, {
+      emissive: '#10b981',
+      emissiveIntensity: 0.25,
+    });
+    circletGem.position.set(0, 0.23, 0.44);
+    headGroup.add(hairCrown, ponytail, circlet, circletGem);
+
+    // Rounded leather quiver w/ fluffy green arrow fletchings
+    const quiver = createComicMesh(new THREE.CapsuleGeometry(0.125, 0.48, 10, 14), '#7a4928', 0.022);
+    quiver.position.set(-0.26, 1.15 * hScale, -0.34);
     quiver.rotation.z = 0.28;
     for (let a = -1; a <= 1; a++) {
-      const fletch = createComicMesh(new THREE.SphereGeometry(0.06, 8, 8), '#34d399', 0.014);
-      fletch.scale.set(0.8, 1.6, 0.8);
-      fletch.position.set(a * 0.055, 0.36, 0);
+      const fletch = createComicMesh(new THREE.SphereGeometry(0.072, 10, 10), '#4ade80', 0.014);
+      fletch.scale.set(0.85, 1.65, 0.85);
+      fletch.position.set(a * 0.06, 0.36, 0);
       quiver.add(fletch);
     }
     bodyGroup.add(quiver);
   } else if (classId === 'krasnolud') {
-    // Round Riveted Dwarf Helm + Plump Bubbly Braided Ginger Beard & Big Mustache!
+    // Round Riveted Dwarf Helm + Smooth Curved Horns + GIANT Fluffy Cloud-Beard & Curled Mustache!
     const helm = createComicMesh(
-      new THREE.SphereGeometry(0.40, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.56),
-      '#68758a',
-      0.026
+      new THREE.SphereGeometry(0.475, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.56),
+      '#73849e',
+      0.028
     );
-    helm.position.y = 0.06;
-    const helmRim = createComicMesh(new THREE.TorusGeometry(0.40, 0.052, 8, 20), pal.trim, 0.018);
+    helm.position.y = 0.07;
+    const helmRim = createComicMesh(new THREE.TorusGeometry(0.47, 0.06, 12, 26), pal.trim, 0.02);
     helmRim.rotation.x = Math.PI / 2;
-    helmRim.position.y = 0.06;
+    helmRim.position.y = 0.07;
 
-    // Big plush cartoon mustache puffs!
     for (const s of [-1, 1]) {
-      const stache = createComicMesh(new THREE.CapsuleGeometry(0.085, 0.16, 8, 10), pal.hair, 0.02);
-      stache.rotation.z = Math.PI / 2 - s * 0.24;
-      stache.position.set(s * 0.14, -0.09, 0.32);
-      const miniHorn = createComicMesh(new THREE.TorusGeometry(0.15, 0.05, 8, 12, Math.PI * 0.65), '#f2ece0', 0.018);
-      miniHorn.position.set(s * 0.36, 0.18, 0);
-      miniHorn.rotation.z = s === 1 ? -0.35 : Math.PI + 0.35;
+      // Curled handlebar cartoon mustache!
+      const stacheGeo = createTaperedCurveGeometry(
+        [
+          [0, -0.1, 0.42],
+          [s * 0.16, -0.12, 0.42],
+          [s * 0.32, -0.06, 0.36],
+          [s * 0.38, 0.02, 0.32],
+        ],
+        0.095,
+        0.032,
+        12,
+        10
+      );
+      const stache = createComicMesh(stacheGeo, pal.hair, 0.02);
+
+      // Cute curved stubby dwarf horns
+      const miniHornGeo = createTaperedCurveGeometry(
+        [
+          [s * 0.42, 0.22, 0],
+          [s * 0.58, 0.32, 0.04],
+          [s * 0.56, 0.5, 0.06],
+        ],
+        0.085,
+        0.022,
+        12,
+        10
+      );
+      const miniHorn = createComicMesh(miniHornGeo, '#fbf5e6', 0.02);
       headGroup.add(stache, miniHorn);
     }
-    // Layered rounded beard puffs + golden ring
-    const beardTop = createComicMesh(new THREE.SphereGeometry(0.24, 14, 10), pal.hair, 0.024);
-    beardTop.scale.set(1.15, 1.0, 0.85);
-    beardTop.position.set(0, -0.26, 0.25);
-    const beardMid = createComicMesh(new THREE.SphereGeometry(0.19, 12, 10), pal.hair, 0.022);
-    beardMid.position.set(0, -0.46, 0.25);
-    const beardTip = createComicMesh(new THREE.SphereGeometry(0.13, 10, 8), pal.hair, 0.018);
-    beardTip.position.set(0, -0.62, 0.25);
-    const beardRing = createComicMesh(new THREE.TorusGeometry(0.14, 0.036, 8, 14), pal.trim, 0.014);
-    beardRing.rotation.x = Math.PI / 2;
-    beardRing.position.set(0, -0.52, 0.25);
-    headGroup.add(helm, helmRim, beardTop, beardMid, beardTip, beardRing);
-  } else if (classId === 'wrozka') {
-    // Plush Pastel Cartoon Hair + Twin Round Buns + Star Circlet + Soft Butterfly Wings
-    const hair = createComicMesh(new THREE.SphereGeometry(0.38, 18, 14), pal.hair, 0.024);
-    hair.position.set(0, 0.06, -0.04);
-    for (const s of [-1, 1]) {
-      const bun = createComicMesh(new THREE.SphereGeometry(0.185, 14, 12), pal.hair, 0.022);
-      bun.position.set(s * 0.33, 0.25, -0.08);
-      const ribbon = createComicMesh(new THREE.TorusGeometry(0.13, 0.03, 6, 12), pal.trim, 0.012);
-      ribbon.position.set(s * 0.26, 0.21, -0.06);
-      ribbon.rotation.y = s * 0.8;
-      headGroup.add(bun, ribbon);
+
+    // Lush cloud-shaped braided ginger beard!
+    const beardPuffs: Array<[number, number, number, number]> = [
+      [0, -0.26, 0.32, 0.25],
+      [-0.2, -0.22, 0.26, 0.2],
+      [0.2, -0.22, 0.26, 0.2],
+      [0, -0.47, 0.31, 0.21],
+      [-0.14, -0.4, 0.26, 0.17],
+      [0.14, -0.4, 0.26, 0.17],
+      [0, -0.66, 0.29, 0.15],
+    ];
+    for (const [bx, by, bz, br] of beardPuffs) {
+      const puff = createComicMesh(new THREE.SphereGeometry(br, 16, 14), pal.hair, 0.022);
+      puff.position.set(bx, by, bz);
+      headGroup.add(puff);
     }
-    const tiara = createComicMesh(new THREE.TorusGeometry(0.31, 0.036, 8, 18), pal.trim, 0.016);
+    const beardRing = createComicMesh(new THREE.TorusGeometry(0.155, 0.042, 10, 18), pal.trim, 0.015);
+    beardRing.rotation.x = Math.PI / 2;
+    beardRing.position.set(0, -0.56, 0.3);
+    headGroup.add(helm, helmRim, beardRing);
+  } else if (classId === 'wrozka') {
+    // Plush Pastel Cartoon Hair + Big Cute Twin Buns + Soft 3D Star Tiara + Sculpted Butterfly Wings!
+    const hair = createComicMesh(new THREE.SphereGeometry(0.455, 24, 18), pal.hair, 0.026);
+    hair.position.set(0, 0.07, -0.05);
+
+    // Cute soft bangs
+    for (const s of [-1, 1]) {
+      const bang = createComicMesh(new THREE.SphereGeometry(0.18, 14, 12), pal.hair, 0.02);
+      bang.scale.set(1.25, 0.78, 0.85);
+      bang.position.set(s * 0.2, 0.26, 0.27);
+
+      const bun = createComicMesh(new THREE.SphereGeometry(0.22, 18, 14), pal.hair, 0.024);
+      bun.position.set(s * 0.4, 0.3, -0.08);
+      const ribbon = createComicMesh(new THREE.TorusGeometry(0.16, 0.042, 10, 18), pal.trim, 0.016);
+      ribbon.position.set(s * 0.31, 0.24, -0.06);
+      ribbon.rotation.y = s * 0.85;
+      headGroup.add(bang, bun, ribbon);
+    }
+
+    const tiara = createComicMesh(new THREE.TorusGeometry(0.36, 0.042, 10, 22), pal.trim, 0.016);
     tiara.rotation.x = Math.PI / 2;
-    tiara.position.y = 0.25;
-    const starGem = createComicMesh(new THREE.SphereGeometry(0.085, 10, 8), '#fde047', 0.014, {
+    tiara.position.y = 0.32;
+
+    const starGem = createComicMesh(createSoftStarGeometry(0.14, 0.072, 5, 0.045), '#fde047', 0.016, {
       emissive: '#f59e0b',
-      emissiveIntensity: 0.26,
+      emissiveIntensity: 0.3,
     });
-    starGem.position.set(0, 0.30, 0.28);
+    starGem.position.set(0, 0.38, 0.34);
     headGroup.add(hair, tiara, starGem);
 
+    // Sculpted Bezier Butterfly Wings (translucent pastel sky-blue + soft outline!)
+    const wingGeo = createSoftWingGeometry(0.95, 0.9, 0.04, 'butterfly');
     const makeWingPair = (side: -1 | 1) => {
       const wg = new THREE.Group();
-      wg.position.set(side * 0.14, 1.18 * hScale, -0.24);
-      const wingMat = createToonMaterial('#9bdcf8', {
-        emissive: '#67c8f2',
-        emissiveIntensity: 0.18,
+      wg.position.set(side * 0.14, 1.15 * hScale, -0.26);
+      const wingMat = createToonMaterial('#9be2ff', {
+        emissive: '#60c8f5',
+        emissiveIntensity: 0.25,
         transparent: true,
-        opacity: 0.48,
+        opacity: 0.62,
         side: THREE.DoubleSide,
       });
-      const upper = new THREE.Mesh(new THREE.CircleGeometry(0.48, 20), wingMat);
-      upper.scale.set(1.25, 0.85, 1);
-      upper.position.set(side * 0.46, 0.25, -0.06);
-      upper.rotation.z = side * 0.28;
-
-      const lower = new THREE.Mesh(new THREE.CircleGeometry(0.34, 18), wingMat);
-      lower.scale.set(1.05, 0.92, 1);
-      lower.position.set(side * 0.35, -0.22, -0.06);
-      lower.rotation.z = -side * 0.22;
-
-      wg.add(upper, lower);
+      const wingMesh = new THREE.Mesh(wingGeo, wingMat);
+      if (side === -1) wingMesh.scale.x = -1;
+      wingMesh.rotation.y = -side * 0.25;
+      wg.add(wingMesh);
       return wg;
     };
 
@@ -571,42 +801,46 @@ export function buildCharacterRig(
   }
 
   // ==========================================
-  // 4. PLUSH CAPSULE ARMS & SCULPTED CARTOON WEAPONS
+  // 4. PLUSH ARMS, MITTEN HANDS & SCULPTED WEAPONS
   // ==========================================
   const makeArm = (side: -1 | 1) => {
     const pivot = new THREE.Group();
-    pivot.position.set(side * 0.46 * wScale, 1.32 * hScale, 0);
+    pivot.position.set(side * 0.49 * wScale, 1.24 * hScale, 0);
 
+    // Plush puffed cartoon shoulder / pauldron
     const pauldron = createComicMesh(
       new THREE.SphereGeometry(
-        classId === 'wojownik' || classId === 'krasnolud' ? 0.24 : 0.175,
-        14,
-        12
+        classId === 'wojownik' || classId === 'krasnolud' ? 0.26 : classId === 'wrozka' ? 0.21 : 0.19,
+        18,
+        14
       ),
       classId === 'wrozka' ? pal.secondary : pal.trim,
-      0.022
+      0.024
     );
-    pauldron.scale.set(1.1, 0.86, 1.0);
+    pauldron.scale.set(1.12, 0.9, 1.02);
 
     const arm = createComicMesh(
-      new THREE.CapsuleGeometry(0.11, 0.38 * hScale, 8, 14),
+      new THREE.CapsuleGeometry(0.12, 0.34 * hScale, 10, 16),
       pal.primary,
-      0.022
+      0.024
     );
-    arm.position.y = -0.26 * hScale;
+    arm.position.y = -0.24 * hScale;
 
     const cuff = createComicMesh(
-      new THREE.TorusGeometry(0.115, 0.036, 8, 14),
+      new THREE.TorusGeometry(0.125, 0.042, 10, 18),
       pal.secondary,
-      0.016
+      0.018
     );
     cuff.rotation.x = Math.PI / 2;
-    cuff.position.y = -0.44 * hScale;
+    cuff.position.y = -0.4 * hScale;
 
-    const hand = createComicMesh(new THREE.SphereGeometry(0.12, 12, 10), pal.skin, 0.02);
-    hand.position.y = -0.57 * hScale;
+    // Plump mitten hand + little thumb!
+    const hand = createComicMesh(new THREE.SphereGeometry(0.135, 16, 12), pal.skin, 0.022);
+    hand.position.y = -0.52 * hScale;
+    const thumb = createComicMesh(new THREE.SphereGeometry(0.055, 10, 8), pal.skin, 0.014);
+    thumb.position.set(-side * 0.09, -0.5 * hScale, 0.07);
 
-    pivot.add(pauldron, arm, cuff, hand);
+    pivot.add(pauldron, arm, cuff, hand, thumb);
     return pivot;
   };
 
@@ -614,152 +848,194 @@ export function buildCharacterRig(
   const rightArmPivot = makeArm(1);
   bodyGroup.add(leftArmPivot, rightArmPivot);
 
-  // Rounded offhand gear
+  // Offhand gear (domed shields & rounded dagger — zero boxes!)
   if (classId === 'krasnolud') {
-    const shield = createComicMesh(new THREE.CylinderGeometry(0.46, 0.46, 0.12, 20), '#5c6678', 0.028);
-    shield.rotation.x = Math.PI / 2;
-    shield.position.set(-0.18, -0.46 * hScale, 0.24);
-    const rim = createComicMesh(new THREE.TorusGeometry(0.45, 0.055, 8, 22), pal.trim, 0.018);
-    rim.position.set(-0.18, -0.46 * hScale, 0.26);
-    const boss = createComicMesh(new THREE.SphereGeometry(0.15, 12, 10), pal.trim, 0.018);
-    boss.position.set(-0.18, -0.46 * hScale, 0.32);
+    const shield = createComicMesh(new THREE.SphereGeometry(0.48, 22, 16), '#6b7a94', 0.028);
+    shield.scale.set(1, 1, 0.32);
+    shield.position.set(-0.2, -0.44 * hScale, 0.26);
+    const rim = createComicMesh(new THREE.TorusGeometry(0.47, 0.062, 10, 24), pal.trim, 0.02);
+    rim.position.set(-0.2, -0.44 * hScale, 0.28);
+    const boss = createComicMesh(new THREE.SphereGeometry(0.16, 16, 12), pal.trim, 0.02);
+    boss.position.set(-0.2, -0.44 * hScale, 0.36);
     leftArmPivot.add(shield, rim, boss);
   } else if (classId === 'wojownik') {
-    const buckler = createComicMesh(new THREE.CylinderGeometry(0.32, 0.32, 0.1, 18), '#526075', 0.024);
-    buckler.rotation.z = Math.PI / 2;
-    buckler.position.set(-0.16, -0.42 * hScale, 0.08);
-    leftArmPivot.add(buckler);
+    const buckler = createComicMesh(new THREE.SphereGeometry(0.36, 20, 14), '#6b7a94', 0.024);
+    buckler.scale.set(0.35, 1, 1);
+    buckler.position.set(-0.18, -0.4 * hScale, 0.1);
+    const rim = createComicMesh(new THREE.TorusGeometry(0.35, 0.048, 10, 22), pal.trim, 0.018);
+    rim.rotation.y = Math.PI / 2;
+    rim.position.set(-0.2, -0.4 * hScale, 0.1);
+    leftArmPivot.add(buckler, rim);
   } else if (classId === 'elf') {
-    const dagger = createComicMesh(new THREE.ConeGeometry(0.065, 0.56, 10), '#dce4ee', 0.018);
+    const dagger = createComicMesh(createSoftBladeGeometry(0.14, 0.56, 0.05, 'sword'), '#e4ecf5', 0.018);
     dagger.rotation.x = Math.PI / 2;
-    dagger.position.set(0, -0.56 * hScale, 0.3);
+    dagger.position.set(0, -0.52 * hScale, 0.12);
     leftArmPivot.add(dagger);
   }
 
-  // Primary Weapon on Right Hand (Rounded & Sculpted!)
+  // Primary Weapon on Right Hand (Sculpted Storybook Weapons — ZERO boxes!)
   const weaponAttach = new THREE.Group();
-  weaponAttach.position.set(0, -0.56 * hScale, 0.14);
+  weaponAttach.position.set(0, -0.52 * hScale, 0.16);
   weaponAttach.rotation.x = Math.PI * 0.36;
   rightArmPivot.add(weaponAttach);
 
   let weaponGlowMesh: THREE.Mesh;
 
   if (classId === 'wojownik') {
-    const grip = createComicMesh(new THREE.CapsuleGeometry(0.048, 0.32, 6, 10), '#5c2d12', 0.016);
-    const pommel = createComicMesh(new THREE.SphereGeometry(0.10, 12, 10), '#dc2626', 0.016);
+    const grip = createComicMesh(new THREE.CapsuleGeometry(0.052, 0.32, 8, 14), '#6b3516', 0.018);
+    const pommel = createComicMesh(new THREE.SphereGeometry(0.115, 16, 12), '#ef4444', 0.018);
     pommel.position.y = -0.22;
-    const guard = createComicMesh(createRoundedBoxGeometry(0.58, 0.13, 0.16, 0.045, 3), pal.trim, 0.02);
-    guard.position.y = 0.20;
-    const bladeBody = createComicMesh(createRoundedBoxGeometry(0.22, 1.18, 0.09, 0.035, 3), '#d8e1ec', 0.022);
-    bladeBody.position.y = 0.84;
-    const bladeTip = createComicMesh(new THREE.ConeGeometry(0.13, 0.36, 10), '#e8eef5', 0.02);
-    bladeTip.scale.set(1, 1, 0.45);
-    bladeTip.position.y = 1.56;
-    weaponAttach.add(grip, pommel, guard, bladeBody, bladeTip);
+
+    // Sculpted curved cartoon crossguard!
+    const guardGeo = createTaperedCurveGeometry(
+      [
+        [-0.36, 0.25, 0],
+        [-0.18, 0.18, 0],
+        [0.18, 0.18, 0],
+        [0.36, 0.25, 0],
+      ],
+      0.075,
+      0.075,
+      14,
+      12
+    );
+    const guard = createComicMesh(guardGeo, pal.trim, 0.02);
+    const guardGem = createComicMesh(new THREE.SphereGeometry(0.085, 12, 10), '#38bdf8', 0.014, {
+      emissive: '#0284c7',
+      emissiveIntensity: 0.24,
+    });
+    guardGem.position.set(0, 0.19, 0.08);
+
+    // Chunky sculpted leaf-belly cartoon broadsword blade!
+    const blade = createComicMesh(createSoftBladeGeometry(0.38, 1.48, 0.09, 'sword'), '#e2ebf5', 0.024);
+    blade.position.y = 0.24;
+    weaponAttach.add(grip, pommel, guard, guardGem, blade);
 
     weaponGlowMesh = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.15, 1.25, 6, 12),
+      new THREE.CapsuleGeometry(0.18, 1.3, 8, 14),
       new THREE.MeshBasicMaterial({ color: '#38bdf8', transparent: true, opacity: 0, depthWrite: false })
     );
-    weaponGlowMesh.position.y = 0.94;
+    weaponGlowMesh.position.y = 0.98;
     weaponAttach.add(weaponGlowMesh);
   } else if (classId === 'czarnoksieznik') {
-    const shaft = createComicMesh(new THREE.CapsuleGeometry(0.052, 1.72, 6, 12), '#54321e', 0.02);
-    shaft.position.y = 0.55;
-    const crescent = createComicMesh(
-      new THREE.TorusGeometry(0.26, 0.055, 8, 18, Math.PI * 1.38),
-      pal.trim,
-      0.018
+    // Organic curved gnarled wizard staff!
+    const shaftGeo = createTaperedCurveGeometry(
+      [
+        [0, -0.3, 0],
+        [-0.04, 0.4, 0.02],
+        [0.06, 1.05, -0.02],
+        [0.14, 1.55, 0],
+        [-0.12, 1.82, 0],
+        [-0.24, 1.58, 0],
+      ],
+      0.062,
+      0.036,
+      22,
+      12
     );
-    crescent.position.y = 1.62;
-    crescent.rotation.z = -Math.PI * 0.18;
-    const crystal = createComicMesh(new THREE.SphereGeometry(0.17, 14, 12), '#a855f7', 0.02, {
+    const shaft = createComicMesh(shaftGeo, '#693d22', 0.022);
+    const crystal = createComicMesh(new THREE.SphereGeometry(0.2, 18, 16), '#c084fc', 0.022, {
       emissive: '#9333ea',
-      emissiveIntensity: 0.3,
+      emissiveIntensity: 0.34,
     });
-    crystal.scale.set(0.85, 1.25, 0.85);
-    crystal.position.y = 1.64;
-    weaponAttach.add(shaft, crescent, crystal);
+    crystal.position.set(-0.04, 1.58, 0);
+    const haloRing = createComicMesh(new THREE.TorusGeometry(0.28, 0.035, 10, 22), pal.trim, 0.015);
+    haloRing.position.set(-0.04, 1.58, 0);
+    haloRing.rotation.x = 0.6;
+    weaponAttach.add(shaft, crystal, haloRing);
 
     weaponGlowMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.29, 12, 10),
+      new THREE.SphereGeometry(0.32, 14, 12),
       new THREE.MeshBasicMaterial({ color: '#a855f7', transparent: true, opacity: 0, depthWrite: false })
     );
-    weaponGlowMesh.position.y = 1.64;
+    weaponGlowMesh.position.set(-0.04, 1.58, 0);
     weaponAttach.add(weaponGlowMesh);
   } else if (classId === 'elf') {
-    const bowWood = createComicMesh(
-      new THREE.TorusGeometry(0.56, 0.058, 10, 22, Math.PI * 1.05),
-      '#1f8a5c',
-      0.02
+    // Curved recurve fairytale bow!
+    const bowGeo = createTaperedCurveGeometry(
+      [
+        [0, -0.58, 0.05],
+        [0, -0.36, 0.34],
+        [0, 0, 0.46],
+        [0, 0.36, 0.34],
+        [0, 0.58, 0.05],
+      ],
+      0.038,
+      0.038,
+      20,
+      12
     );
-    bowWood.rotation.z = -Math.PI / 2;
-    bowWood.position.set(0, 0.25, 0.22);
+    const bowWood = createComicMesh(bowGeo, '#229963', 0.02);
+    bowWood.position.set(0, 0.25, 0.06);
     const bowString = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.012, 0.012, 1.1, 6),
-      new THREE.MeshBasicMaterial({ color: '#e2e8f0' })
+      new THREE.CylinderGeometry(0.014, 0.014, 1.16, 8),
+      new THREE.MeshBasicMaterial({ color: '#f1f5f9' })
     );
-    bowString.position.set(0, 0.25, 0.18);
-    const nockedArrow = createComicMesh(new THREE.ConeGeometry(0.06, 0.72, 8), '#34d399', 0.015, {
+    bowString.position.set(0, 0.25, 0.12);
+    const arrowShaft = createComicMesh(new THREE.CapsuleGeometry(0.025, 0.72, 6, 10), '#fde047', 0.012);
+    arrowShaft.rotation.x = Math.PI / 2;
+    arrowShaft.position.set(0, 0.25, 0.48);
+    const arrowHead = createComicMesh(new THREE.SphereGeometry(0.075, 12, 10), '#34d399', 0.015, {
       emissive: '#10b981',
-      emissiveIntensity: 0.2,
+      emissiveIntensity: 0.25,
     });
-    nockedArrow.rotation.x = Math.PI / 2;
-    nockedArrow.position.set(0, 0.25, 0.56);
-    weaponAttach.add(bowWood, bowString, nockedArrow);
+    arrowHead.scale.set(0.85, 0.85, 1.6);
+    arrowHead.position.set(0, 0.25, 0.88);
+    weaponAttach.add(bowWood, bowString, arrowShaft, arrowHead);
 
     weaponGlowMesh = new THREE.Mesh(
-      new THREE.TorusGeometry(0.58, 0.085, 8, 18, Math.PI),
+      new THREE.TorusGeometry(0.56, 0.085, 10, 22, Math.PI),
       new THREE.MeshBasicMaterial({ color: '#34d399', transparent: true, opacity: 0, depthWrite: false })
     );
     weaponGlowMesh.rotation.z = -Math.PI / 2;
-    weaponGlowMesh.position.set(0, 0.25, 0.22);
+    weaponGlowMesh.position.set(0, 0.25, 0.16);
     weaponAttach.add(weaponGlowMesh);
   } else if (classId === 'krasnolud') {
     // Plush rounded barrel-head Dwarven Warhammer!
-    const handle = createComicMesh(new THREE.CapsuleGeometry(0.062, 1.24, 6, 12), '#6b3e1b', 0.02);
+    const handle = createComicMesh(new THREE.CapsuleGeometry(0.065, 1.24, 8, 14), '#7a4520', 0.022);
     handle.position.y = 0.52;
-    const headBarrel = createComicMesh(new THREE.CylinderGeometry(0.24, 0.24, 0.64, 16), '#7c8ba1', 0.026);
+    const headBarrel = createComicMesh(new THREE.CapsuleGeometry(0.28, 0.36, 12, 20), '#8293ad', 0.028);
     headBarrel.rotation.z = Math.PI / 2;
-    headBarrel.position.y = 1.20;
+    headBarrel.position.y = 1.2;
     for (const s of [-1, 1]) {
-      const cap = createComicMesh(new THREE.TorusGeometry(0.23, 0.055, 8, 16), pal.trim, 0.018);
+      const cap = createComicMesh(new THREE.TorusGeometry(0.26, 0.06, 10, 20), pal.trim, 0.02);
       cap.rotation.y = Math.PI / 2;
-      cap.position.set(s * 0.30, 1.20, 0);
+      cap.position.set(s * 0.26, 1.2, 0);
       weaponAttach.add(cap);
     }
     weaponAttach.add(handle, headBarrel);
 
     weaponGlowMesh = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.29, 0.45, 6, 12),
+      new THREE.CapsuleGeometry(0.32, 0.48, 8, 14),
       new THREE.MeshBasicMaterial({ color: '#f59e0b', transparent: true, opacity: 0, depthWrite: false })
     );
     weaponGlowMesh.rotation.z = Math.PI / 2;
-    weaponGlowMesh.position.y = 1.20;
+    weaponGlowMesh.position.y = 1.2;
     weaponAttach.add(weaponGlowMesh);
   } else {
-    const wand = createComicMesh(new THREE.CapsuleGeometry(0.038, 1.05, 6, 12), '#f0c854', 0.016);
+    // Magical Fairy Star Wand!
+    const wand = createComicMesh(new THREE.CapsuleGeometry(0.042, 1.05, 8, 14), '#f7cf54', 0.018);
     wand.position.y = 0.45;
-    const halo = createComicMesh(new THREE.TorusGeometry(0.21, 0.036, 8, 18), '#f7c2d9', 0.014);
-    halo.position.y = 1.12;
-    const star = createComicMesh(new THREE.SphereGeometry(0.145, 12, 10), '#fde047', 0.016, {
+    const halo = createComicMesh(new THREE.TorusGeometry(0.24, 0.042, 10, 22), '#ffcae2', 0.016);
+    halo.position.y = 1.14;
+    const star = createComicMesh(createSoftStarGeometry(0.2, 0.105, 5, 0.065), '#fde047', 0.018, {
       emissive: '#f59e0b',
-      emissiveIntensity: 0.28,
+      emissiveIntensity: 0.3,
     });
-    star.position.y = 1.12;
+    star.position.y = 1.14;
     weaponAttach.add(wand, halo, star);
 
     weaponGlowMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.25, 12, 10),
+      new THREE.SphereGeometry(0.28, 14, 12),
       new THREE.MeshBasicMaterial({ color: '#fde047', transparent: true, opacity: 0, depthWrite: false })
     );
-    weaponGlowMesh.position.y = 1.12;
+    weaponGlowMesh.position.y = 1.14;
     weaponAttach.add(weaponGlowMesh);
   }
 
   // Soft Shield Shell + Ring
   const shieldShell = new THREE.Mesh(
-    new THREE.SphereGeometry(1.22, 20, 16),
+    new THREE.SphereGeometry(1.26, 24, 18),
     new THREE.MeshBasicMaterial({
       color: '#56b4e9',
       transparent: true,
@@ -771,7 +1047,7 @@ export function buildCharacterRig(
   root.add(shieldShell);
 
   const shieldRing = new THREE.Mesh(
-    new THREE.TorusGeometry(1.18, 0.042, 8, 28),
+    new THREE.TorusGeometry(1.22, 0.046, 10, 32),
     new THREE.MeshBasicMaterial({
       color: '#7dd3fc',
       transparent: true,
@@ -783,16 +1059,17 @@ export function buildCharacterRig(
   shieldRing.position.y = 1.05;
   root.add(shieldRing);
 
-  // Orbiting rounded stone pebbles for Dwarf Kamienna Skóra
+  // Orbiting smooth rounded river-pebble shields for Dwarf Kamienna Skóra (ZERO boxes!)
   const stonePlatesGroup = new THREE.Group();
   stonePlatesGroup.position.y = 1.0;
   stonePlatesGroup.visible = false;
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2;
-    const slab = createComicMesh(createRoundedBoxGeometry(0.38, 0.52, 0.16, 0.06, 3), '#7c756d', 0.02);
-    slab.position.set(Math.cos(a) * 1.05, 0, Math.sin(a) * 1.05);
-    slab.rotation.y = -a + Math.PI / 2;
-    stonePlatesGroup.add(slab);
+    const pebble = createComicMesh(new THREE.SphereGeometry(0.32, 14, 12), '#8c847b', 0.022);
+    pebble.scale.set(0.85, 1.15, 0.5);
+    pebble.position.set(Math.cos(a) * 1.08, 0, Math.sin(a) * 1.08);
+    pebble.rotation.y = -a + Math.PI / 2;
+    stonePlatesGroup.add(pebble);
   }
   root.add(stonePlatesGroup);
 
@@ -842,7 +1119,7 @@ export function updateCharacterRig(
 
   if (rig.orbitProp) {
     rig.orbitProp.rotation.y = elapsedSec * 1.4;
-    rig.orbitProp.position.y = 1.15 + Math.sin(elapsedSec * 3.5) * 0.09;
+    rig.orbitProp.position.y = 1.18 + Math.sin(elapsedSec * 3.5) * 0.1;
   }
 
   if (state.animState === 'spin') {
@@ -850,55 +1127,59 @@ export function updateCharacterRig(
     rig.rightArmPivot.rotation.x = -Math.PI / 2;
     rig.rightArmPivot.rotation.z = -0.5;
     rig.leftArmPivot.rotation.x = -Math.PI / 3;
-    rig.bodyGroup.position.y = 0.14;
+    rig.bodyGroup.position.y = 0.16;
   } else {
     rig.bodyGroup.rotation.y = 0;
     rig.rightArmPivot.rotation.z = 0;
 
     if (state.animState === 'run') {
       const stride = Math.sin(elapsedSec * 13);
-      rig.leftLegPivot.rotation.x = stride * 0.68;
-      rig.rightLegPivot.rotation.x = -stride * 0.68;
-      rig.leftArmPivot.rotation.x = -stride * 0.55;
-      rig.rightArmPivot.rotation.x = stride * 0.45 - 0.18;
-      // Playful cartoon squash-and-stretch bounce!
+      rig.leftLegPivot.rotation.x = stride * 0.72;
+      rig.rightLegPivot.rotation.x = -stride * 0.72;
+      rig.leftArmPivot.rotation.x = -stride * 0.58;
+      rig.rightArmPivot.rotation.x = stride * 0.48 - 0.18;
+      // Bouncy cartoon squash-and-stretch run!
       const bounce = Math.abs(stride);
-      rig.bodyGroup.position.y = bounce * 0.14 + (rig.classId === 'wrozka' ? 0.16 : 0);
-      rig.bodyGroup.scale.set(1 + (1 - bounce) * 0.04, 1 - (1 - bounce) * 0.04, 1 + (1 - bounce) * 0.04);
-      rig.bodyGroup.rotation.x = 0.1;
-      if (rig.capePivot) rig.capePivot.rotation.x = 0.25 + bounce * 0.18;
+      rig.bodyGroup.position.y = bounce * 0.16 + (rig.classId === 'wrozka' ? 0.18 : 0);
+      rig.bodyGroup.scale.set(1 + (1 - bounce) * 0.055, 1 - (1 - bounce) * 0.055, 1 + (1 - bounce) * 0.055);
+      rig.bodyGroup.rotation.x = 0.12;
+      rig.headGroup.rotation.z = stride * 0.07;
+      if (rig.capePivot) rig.capePivot.rotation.x = 0.28 + bounce * 0.2;
     } else if (state.animState === 'attack' || state.animState === 'cast') {
       const swing = Math.sin(elapsedSec * 22);
-      rig.rightArmPivot.rotation.x = -1.2 + swing * 0.95;
+      rig.rightArmPivot.rotation.x = -1.25 + swing * 1.0;
       rig.leftArmPivot.rotation.x = -0.45 - swing * 0.3;
-      rig.leftLegPivot.rotation.x = 0.18;
-      rig.rightLegPivot.rotation.x = -0.18;
-      rig.bodyGroup.position.y = 0.06;
-      rig.bodyGroup.scale.set(1, 1, 1);
+      rig.leftLegPivot.rotation.x = 0.2;
+      rig.rightLegPivot.rotation.x = -0.2;
+      rig.bodyGroup.position.y = 0.07;
+      rig.bodyGroup.scale.set(1.04, 0.96, 1.04);
+      rig.headGroup.rotation.z = 0;
     } else if (state.animState === 'dash') {
-      rig.bodyGroup.rotation.x = 0.32;
+      rig.bodyGroup.rotation.x = 0.34;
       rig.leftArmPivot.rotation.x = 0.65;
       rig.rightArmPivot.rotation.x = 0.65;
-      rig.bodyGroup.position.y = 0.22;
-      rig.bodyGroup.scale.set(0.94, 1.08, 0.94);
+      rig.bodyGroup.position.y = 0.24;
+      rig.bodyGroup.scale.set(0.92, 1.1, 0.92);
+      rig.headGroup.rotation.z = 0;
     } else {
-      const breath = Math.sin(elapsedSec * 3.0);
+      const breath = Math.sin(elapsedSec * 3.1);
       rig.leftLegPivot.rotation.x = 0;
       rig.rightLegPivot.rotation.x = 0;
-      rig.leftArmPivot.rotation.x = breath * 0.06;
-      rig.rightArmPivot.rotation.x = -0.15 + breath * 0.07;
-      rig.headGroup.rotation.y = Math.sin(elapsedSec * 1.4) * 0.09;
-      rig.bodyGroup.position.y = (rig.classId === 'wrozka' ? 0.24 : 0) + breath * 0.045;
-      rig.bodyGroup.scale.set(1 - breath * 0.015, 1 + breath * 0.02, 1 - breath * 0.015);
-      if (rig.capePivot) rig.capePivot.rotation.x = 0.06 + breath * 0.04;
+      rig.leftArmPivot.rotation.x = breath * 0.07;
+      rig.rightArmPivot.rotation.x = -0.15 + breath * 0.08;
+      rig.headGroup.rotation.y = Math.sin(elapsedSec * 1.45) * 0.11;
+      rig.headGroup.rotation.z = Math.sin(elapsedSec * 2.1) * 0.035;
+      rig.bodyGroup.position.y = (rig.classId === 'wrozka' ? 0.25 : 0) + breath * 0.05;
+      rig.bodyGroup.scale.set(1 - breath * 0.02, 1 + breath * 0.025, 1 - breath * 0.02);
+      if (rig.capePivot) rig.capePivot.rotation.x = 0.07 + breath * 0.05;
     }
   }
 
   const sMat = rig.shieldShell.material as THREE.MeshBasicMaterial;
   const rMat = rig.shieldRing.material as THREE.MeshBasicMaterial;
   if (state.shield > 0) {
-    sMat.opacity = 0.12 + Math.sin(elapsedSec * 5) * 0.03;
-    rMat.opacity = 0.4 + Math.sin(elapsedSec * 5) * 0.09;
+    sMat.opacity = 0.14 + Math.sin(elapsedSec * 5) * 0.03;
+    rMat.opacity = 0.44 + Math.sin(elapsedSec * 5) * 0.09;
     rig.shieldShell.rotation.y = elapsedSec * 0.8;
     rig.shieldRing.rotation.z = -elapsedSec * 1.6;
   } else {
@@ -917,9 +1198,9 @@ export function updateCharacterRig(
   if (wGlow >= 7) {
     const glowCol = getUpgradeGlowColor(wGlow);
     if (glowCol) {
-      if (wGlow === 13) wMat.color.setHSL((elapsedSec * 0.4) % 1, 0.78, 0.56);
+      if (wGlow === 13) wMat.color.setHSL((elapsedSec * 0.4) % 1, 0.82, 0.58);
       else wMat.color.copy(glowCol);
-      wMat.opacity = 0.16 + ((wGlow - 6) / 7) * 0.13 + Math.sin(elapsedSec * 7) * 0.04;
+      wMat.opacity = 0.18 + ((wGlow - 6) / 7) * 0.14 + Math.sin(elapsedSec * 7) * 0.04;
     }
   } else {
     wMat.opacity = 0;
@@ -930,9 +1211,9 @@ export function updateCharacterRig(
   if (aGlow >= 7) {
     const glowCol = getUpgradeGlowColor(aGlow);
     if (glowCol) {
-      if (aGlow === 13) aMat.color.setHSL((elapsedSec * 0.4 + 0.5) % 1, 0.78, 0.56);
+      if (aGlow === 13) aMat.color.setHSL((elapsedSec * 0.4 + 0.5) % 1, 0.82, 0.58);
       else aMat.color.copy(glowCol);
-      aMat.opacity = 0.26 + Math.sin(elapsedSec * 5) * 0.08;
+      aMat.opacity = 0.28 + Math.sin(elapsedSec * 5) * 0.08;
     }
   } else {
     aMat.opacity = 0;
