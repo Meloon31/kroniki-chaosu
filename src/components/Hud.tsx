@@ -656,11 +656,12 @@ export const Hud: React.FC<HudProps> = ({
             {muted ? '🔇 Wyciszony' : '🔊 Dźwięk'}
           </button>
           <button
-            className="comic-btn comic-btn-dark"
+            className="comic-btn comic-btn-red"
             onClick={onLeaveToLobby}
+            title="Powrót do Menu Głównego"
             style={{ padding: '5px 10px', fontSize: 12 }}
           >
-            🚪 Lobby
+            🏠 Menu
           </button>
         </div>
 

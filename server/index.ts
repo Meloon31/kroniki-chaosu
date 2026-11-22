@@ -1106,22 +1106,13 @@ function spawnEquipmentDrop(
   itemLevel: number,
   guaranteeDrop = false,
   luckBonus = 1.0,
-  classAffinity?: ClassId
+  _classAffinity?: ClassId
 ) {
   const rarity = rollDropRarity(Math.random, guaranteeDrop, luckBonus);
   if (!rarity) return;
 
-  // 65% chance item rolls for killer/party class, 35% chance for any of the 5 classes (encourages Co-op Trade!)
-  const partyClasses = Array.from(room.players.values()).map((p) => p.classId);
-  let targetClass: ClassId;
-  if (classAffinity && Math.random() < 0.65) {
-    targetClass =
-      partyClasses.length > 1 && Math.random() < 0.35
-        ? partyClasses[Math.floor(Math.random() * partyClasses.length)]
-        : classAffinity;
-  } else {
-    targetClass = ALL_CLASS_IDS[Math.floor(Math.random() * ALL_CLASS_IDS.length)];
-  }
+  // Equal 20% drop chance for each of the 5 hero classes (Wojownik, Czarnoksiężnik, Elf, Krasnolud, Wróżka)!
+  const targetClass = ALL_CLASS_IDS[Math.floor(Math.random() * ALL_CLASS_IDS.length)];
 
   const item = generateEquipmentItem(itemLevel, rarity, undefined, targetClass);
   const spreadAngle = Math.random() * Math.PI * 2;
@@ -3911,6 +3902,10 @@ io.on('connection', (socket: Socket) => {
     io.to(session.playerAId).emit('trade:state', session);
     io.to(session.playerBId).emit('trade:state', session);
     room.trades.delete(session.tradeId);
+  });
+
+  socket.on('room:leave', () => {
+    leaveCurrentRoom(socket);
   });
 
   socket.on('disconnect', () => {

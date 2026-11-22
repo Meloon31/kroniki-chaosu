@@ -968,8 +968,16 @@ export function App() {
                 socketRef.current?.emit('trade:request', { targetId });
               }}
               onLeaveToLobby={() => {
+                socketRef.current?.emit('room:leave');
                 setInGame(false);
+                setRoom(null);
+                setMapData(null);
+                setSnapshot(null);
                 setActivePanel(null);
+                setBoonOffer(null);
+                setActiveChest(null);
+                setActiveTrade(null);
+                setIncomingTrade(null);
               }}
             />
           )}
