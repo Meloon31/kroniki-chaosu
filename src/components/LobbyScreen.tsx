@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { getMainBossByAct } from '../../shared/bosses';
+import { BOUNTY_BY_ID, canClaimDailyReward, ensureActiveBounties, getNextDailyDay } from '../../shared/bounties';
 import { CLASS_LIST, CLASSES } from '../../shared/classes';
 import { computePlayerStats } from '../../shared/stats';
 import { ACT_THEMES, ALL_LOCATIONS, getLocationDef } from '../../shared/world';
@@ -21,6 +22,7 @@ interface LobbyScreenProps {
   onSelectLocation: (globalLocation: number) => void;
   onStartGame: (globalLocation: number) => void;
   onToggleSandbox: () => void;
+  onOpenBounties: () => void;
 }
 
 const CLASS_ICONS: Record<ClassId, string> = {
@@ -46,6 +48,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   onSelectLocation,
   onStartGame,
   onToggleSandbox,
+  onOpenBounties,
 }) => {
   const [joinCode, setJoinCode] = useState(initialInviteCode);
   const [serverDraft, setServerDraft] = useState(serverUrl);
@@ -241,6 +244,54 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               🔥 Moc <strong style={{ color: '#fb923c' }}>{heroStats.combatPower}</strong>
             </span>
           </div>
+
+          {(() => {
+            const dailyReady = canClaimDailyReward(profile.lastDailyClaimDate);
+            const dayNum = getNextDailyDay(profile.dailyStreak, profile.lastDailyClaimDate);
+            const readyBounties = ensureActiveBounties(profile.bounties).filter((b) => {
+              const def = BOUNTY_BY_ID[b.defId];
+              return def && b.progress >= def.target;
+            }).length;
+            const totalReady = (dailyReady ? 1 : 0) + readyBounties;
+            return (
+              <button
+                className="glass-pill"
+                onClick={onOpenBounties}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  color: totalReady > 0 ? '#fef08a' : '#e2e8f0',
+                  background: totalReady > 0
+                    ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.36), rgba(234, 88, 12, 0.28))'
+                    : undefined,
+                  border: totalReady > 0 ? '1.5px solid #fbbf24' : undefined,
+                  boxShadow: totalReady > 0 ? '0 0 14px rgba(251, 191, 36, 0.32)' : undefined,
+                }}
+                title="Odbierz codzienną nagrodę i sprawdź aktywne misje!"
+              >
+                <span>{dailyReady ? `🎁 Nagroda Dnia (${dayNum}/7)` : '🏆 Misje & Nagrody'}</span>
+                {totalReady > 0 && (
+                  <span
+                    style={{
+                      background: '#22c55e',
+                      color: '#052e16',
+                      borderRadius: 99,
+                      padding: '0 6px',
+                      fontSize: 11,
+                      fontWeight: 900,
+                    }}
+                  >
+                    {totalReady}
+                  </span>
+                )}
+              </button>
+            );
+          })()}
 
           <button
             className="glass-pill"

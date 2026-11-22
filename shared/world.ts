@@ -882,3 +882,114 @@ export function moveWithWallSweep(
   }
   return { x: cx, z: cz };
 }
+
+/**
+ * Exact 2D Slab Ray-vs-AABB intersection: returns parametric t in [0, 1] of earliest hit, or null.
+ */
+function segmentIntersectsWallT(
+  x1: number,
+  z1: number,
+  x2: number,
+  z2: number,
+  w: MapWall,
+  pad = 0.05
+): number | null {
+  const minX = w.x - w.w / 2 - pad;
+  const maxX = w.x + w.w / 2 + pad;
+  const minZ = w.z - w.d / 2 - pad;
+  const maxZ = w.z + w.d / 2 + pad;
+
+  const dx = x2 - x1;
+  const dz = z2 - z1;
+
+  let tmin = 0;
+  let tmax = 1;
+
+  if (Math.abs(dx) < 1e-8) {
+    if (x1 < minX || x1 > maxX) return null;
+  } else {
+    let tx1 = (minX - x1) / dx;
+    let tx2 = (maxX - x1) / dx;
+    if (tx1 > tx2) {
+      const tmp = tx1;
+      tx1 = tx2;
+      tx2 = tmp;
+    }
+    tmin = Math.max(tmin, tx1);
+    tmax = Math.min(tmax, tx2);
+    if (tmin > tmax) return null;
+  }
+
+  if (Math.abs(dz) < 1e-8) {
+    if (z1 < minZ || z1 > maxZ) return null;
+  } else {
+    let tz1 = (minZ - z1) / dz;
+    let tz2 = (maxZ - z1) / dz;
+    if (tz1 > tz2) {
+      const tmp = tz1;
+      tz1 = tz2;
+      tz2 = tmp;
+    }
+    tmin = Math.max(tmin, tz1);
+    tmax = Math.min(tmax, tz2);
+    if (tmin > tmax) return null;
+  }
+
+  return tmin >= 0 && tmin <= 1 ? tmin : null;
+}
+
+/**
+ * Returns true if there is an unobstructed straight line of sight between (x1,z1) and (x2,z2)
+ * with no active wall, closed rune gate, or unrevealed secret wall blocking it.
+ */
+export function hasLineOfSight(
+  x1: number,
+  z1: number,
+  x2: number,
+  z2: number,
+  walls: MapWall[],
+  solvedGateIds: Set<string>,
+  revealedSecretIds: Set<string>
+): boolean {
+  for (const w of walls) {
+    if (w.gateId && solvedGateIds.has(w.gateId)) continue;
+    if (w.secretId && revealedSecretIds.has(w.secretId)) continue;
+    if (segmentIntersectsWallT(x1, z1, x2, z2, w, 0.0) !== null) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Clips a targeted skill point (targetX, targetZ) to stop cleanly just in front of the
+ * first solid wall along the ray from (startX, startZ), preventing casting into other rooms!
+ */
+export function clipPointToLineOfSight(
+  startX: number,
+  startZ: number,
+  targetX: number,
+  targetZ: number,
+  walls: MapWall[],
+  solvedGateIds: Set<string>,
+  revealedSecretIds: Set<string>
+): { x: number; z: number; blocked: boolean } {
+  let bestT = 1;
+  let blocked = false;
+  for (const w of walls) {
+    if (w.gateId && solvedGateIds.has(w.gateId)) continue;
+    if (w.secretId && revealedSecretIds.has(w.secretId)) continue;
+    const t = segmentIntersectsWallT(startX, startZ, targetX, targetZ, w, 0.25);
+    if (t !== null && t < bestT) {
+      bestT = t;
+      blocked = true;
+    }
+  }
+  if (!blocked) return { x: targetX, z: targetZ, blocked: false };
+  const safeT = Math.max(0, bestT - 0.03);
+  return {
+    x: startX + (targetX - startX) * safeT,
+    z: startZ + (targetZ - startZ) * safeT,
+    blocked: true,
+  };
+}

@@ -33,9 +33,11 @@ import {
 } from '../shared/mutators.js';
 import { getRuneByAct, RUNE_SHARD_DROP_CHANCE } from '../shared/runes.js';
 import {
+  clipPointToLineOfSight,
   createSeededRng,
   generateMapData,
   getLocationDef,
+  hasLineOfSight,
   moveWithWallSweep,
   resolveWallCollisions,
 } from '../shared/world.js';
@@ -213,6 +215,8 @@ interface GameRoom {
   clearBonusAwarded: boolean;
   mutatorId: LocationMutatorId;
   comboCount: number;
+  maxCombo: number;
+  enemiesSlain: number;
   comboExpiresAt: number;
   nextMeteorAt: number;
   trades: Map<string, TradeSessionState>;
@@ -443,6 +447,8 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
   room.clearBonusAwarded = false;
   room.mutatorId = map.location.mutatorId;
   room.comboCount = 0;
+  room.maxCombo = 0;
+  room.enemiesSlain = 0;
   room.comboExpiresAt = 0;
   room.nextMeteorAt = Date.now() + 4500;
 
@@ -984,10 +990,22 @@ function damageEnemy(
   damageType: DamageType,
   now: number,
   canCrit = true,
-  allowBoonProcs = true
+  allowBoonProcs = true,
+  originPos?: { x: number; z: number }
 ): number {
   if (!enemy.alive) return 0;
   if (enemy.burrowUntil && now < enemy.burrowUntil) return 0;
+
+  // Strict Line-of-Sight check: NEVER allow hitting mobs or bosses through solid walls from another room!
+  if (room.mapData && enemy.tier !== 'root_trap') {
+    const ox = originPos ? originPos.x : attacker.x;
+    const oz = originPos ? originPos.z : attacker.z;
+    const solvedGates = getSolvedGateIds(room.mapData);
+    const revealedSecrets = getRevealedSecretIds(room.mapData);
+    if (!hasLineOfSight(ox, oz, enemy.x, enemy.z, room.mapData.walls, solvedGates, revealedSecrets)) {
+      return 0;
+    }
+  }
 
   enemy.aggro = true;
   let dmg = rawDamage;
@@ -1162,7 +1180,7 @@ function handleEnemyDeath(
       if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 6.8 + other.radius) {
         const blastPct = other.tier === 'boss' ? 0.06 : other.tier === 'miniboss' ? 0.1 : 0.42;
         const blastDmg = Math.max(120, Math.round(other.maxHp * blastPct));
-        damageEnemy(room, killer, other, blastDmg, 'magical', now, false, false);
+        damageEnemy(room, killer, other, blastDmg, 'magical', now, false, false, { x: enemy.x, z: enemy.z });
       }
     }
     return;
@@ -1175,8 +1193,10 @@ function handleEnemyDeath(
   const fortuneLuck = killer.activeBoons.includes('golden_fortune') ? 1.65 : 1.0;
   const effectiveLuck = mutDef.luckBonus * fortuneLuck;
 
-  // Update Party Kill-Streak Combo!
+  // Update Party Kill-Streak Combo & Expedition Stats!
   room.comboCount = now <= room.comboExpiresAt ? room.comboCount + 1 : 1;
+  if (room.comboCount > room.maxCombo) room.maxCombo = room.comboCount;
+  room.enemiesSlain++;
   room.comboExpiresAt = now + 5500;
   if (room.comboCount === 5 || room.comboCount === 10 || room.comboCount === 20 || room.comboCount === 30) {
     const label =
@@ -2352,7 +2372,11 @@ function tickRoom(room: GameRoom) {
     const dist = Math.hypot(target.x - e.x, target.z - e.z);
     const aggroRange = e.tier === 'boss' || e.tier === 'miniboss' ? 23 : 19;
 
-    if (!e.aggro && dist <= aggroRange) e.aggro = true;
+    if (!e.aggro && dist <= aggroRange) {
+      if (hasLineOfSight(e.x, e.z, target.x, target.z, map.walls, solvedGates, revealedSecrets)) {
+        e.aggro = true;
+      }
+    }
     if (!e.aggro) {
       e.animState = 'idle';
       continue;
@@ -2688,7 +2712,7 @@ function tickRoom(room: GameRoom) {
             if (Math.hypot(foe.x - tel.x, foe.z - tel.z) <= tel.radius + foe.radius) {
               const envPct = foe.tier === 'boss' ? 0.04 : foe.tier === 'miniboss' ? 0.08 : 0.28;
               const envDmg = Math.max(tel.damage, Math.round(foe.maxHp * envPct));
-              damageEnemy(room, refPlayer, foe, envDmg, 'magical', now, false, false);
+              damageEnemy(room, refPlayer, foe, envDmg, 'magical', now, false, false, { x: tel.x, z: tel.z });
             }
           }
         }
@@ -2915,13 +2939,24 @@ function handleSkillCast(
   const dirZ = dz / distToAim;
   player.rotY = Math.atan2(dirX, dirZ);
 
-  const clampedRange = Math.min(distToAim, skillDef.range || 0);
-  const targetX = player.x + dirX * clampedRange;
-  const targetZ = player.z + dirZ * clampedRange;
-
   const map = room.mapData;
   const solvedGates = getSolvedGateIds(map);
   const revealedSecrets = getRevealedSecretIds(map);
+
+  const clampedRange = Math.min(distToAim, skillDef.range || 0);
+  const rawTargetX = player.x + dirX * clampedRange;
+  const rawTargetZ = player.z + dirZ * clampedRange;
+  const clippedTarget = clipPointToLineOfSight(
+    player.x,
+    player.z,
+    rawTargetX,
+    rawTargetZ,
+    map.walls,
+    solvedGates,
+    revealedSecrets
+  );
+  const targetX = clippedTarget.x;
+  const targetZ = clippedTarget.z;
 
   const checkCrackedWallHit = (hx: number, hz: number, rad: number) => {
     for (const sec of map.secrets) {
@@ -3348,6 +3383,8 @@ io.on('connection', (socket: Socket) => {
       clearBonusAwarded: false,
       mutatorId: 'treasure_goblin',
       comboCount: 0,
+      maxCombo: 0,
+      enemiesSlain: 0,
       comboExpiresAt: 0,
       nextMeteorAt: 0,
       trades: new Map(),
@@ -3723,14 +3760,41 @@ io.on('connection', (socket: Socket) => {
       if (!room.clearBonusAwarded) {
         room.clearBonusAwarded = true;
         const clearXp = Math.round(targetLocationXpPool(room.globalLocation) * 0.12);
+        const chestsOpened = map.chests.filter((c) => c.opened).length;
+        const secretsFound = map.secrets.filter((s) => s.revealed).length;
+        const score =
+          (room.maxCombo >= 10 ? 2 : room.maxCombo >= 5 ? 1 : 0) +
+          (chestsOpened >= 2 ? 1 : 0) +
+          (secretsFound >= 1 ? 1 : 0) +
+          (remaining === 0 ? 1 : 0);
+        const grade = score >= 4 ? 'S' : score >= 2 ? 'A' : 'B';
         io.to(room.code).emit('location:completed', {
           globalLocation: room.globalLocation,
+          locationName: loc.name,
           clearXp,
+          enemiesSlain: room.enemiesSlain,
+          maxCombo: room.maxCombo,
+          chestsOpened,
+          totalChests: map.chests.length,
+          secretsFound,
+          totalSecrets: map.secrets.length,
+          grade,
         });
       }
       const nextLoc = Math.min(60, room.globalLocation + 1);
       initializeLocation(room, nextLoc);
     }
+  });
+
+  socket.on('player:emote', (payload: { text: string }) => {
+    const code = socketToRoom.get(socket.id);
+    if (!code) return;
+    const room = rooms.get(code);
+    const p = room?.players.get(socket.id);
+    if (!room || !p || !p.alive) return;
+    const clean = String(payload?.text || '').slice(0, 24);
+    if (!clean) return;
+    pushCombatText(room, p.x, 3.3, p.z, clean, 'heal', true, true);
   });
 
   socket.on('boon:choose', (payload: { boonId: BoonId }) => {

@@ -7,6 +7,7 @@ import {
   createStarterEquipment,
   createStarterShards,
   EQUIP_SLOTS,
+  generateEquipmentItem,
   getPlus13ClassBonus,
   getSalvageShardYield,
   getUpgradeShardCost,
@@ -14,6 +15,16 @@ import {
   MAX_UPGRADE_LEVEL,
   RARITY_META,
 } from '../shared/items';
+import {
+  BOUNTY_BY_ID,
+  BountyKind,
+  canClaimDailyReward,
+  DAILY_REWARDS,
+  ensureActiveBounties,
+  getNextDailyDay,
+  getTodayDateKey,
+  rollReplacementBounty,
+} from '../shared/bounties';
 import { createStarterRunes, createStarterRuneShards, RUNE_MAX_LEVEL, RUNES } from '../shared/runes';
 import { BoonId, CHAOS_BOONS } from '../shared/mutators';
 import { computePlayerStats } from '../shared/stats';
@@ -36,6 +47,7 @@ import type {
 import { soundEngine } from './audio/soundEngine';
 import { musicEngine, MusicTrackInfo } from './audio/musicEngine';
 import { BlacksmithModal } from './components/BlacksmithModal';
+import { BountiesModal } from './components/BountiesModal';
 import { ChestPuzzleModal } from './components/ChestPuzzleModal';
 import { ActivePanel, Hud } from './components/Hud';
 import { InventoryModal } from './components/InventoryModal';
@@ -91,6 +103,9 @@ function createDefaultProfile(classId: ClassId = 'wojownik'): PlayerProfile {
     unlockedLocationGlobal: 1,
     completedLocations: [],
     sandboxUnlockAll: false,
+    dailyStreak: 0,
+    bounties: ensureActiveBounties(),
+    lifetimeKills: 0,
   };
 }
 
@@ -110,10 +125,25 @@ function loadProfile(): PlayerProfile {
       runeShards: { ...def.runeShards, ...(parsed.runeShards || {}) },
       inventory: Array.isArray(parsed.inventory) ? parsed.inventory : [],
       completedLocations: Array.isArray(parsed.completedLocations) ? parsed.completedLocations : [],
+      bounties: ensureActiveBounties(parsed.bounties),
+      lifetimeKills: typeof parsed.lifetimeKills === 'number' ? parsed.lifetimeKills : 0,
     };
   } catch {
     return createDefaultProfile();
   }
+}
+
+interface VictorySummaryData {
+  locationName: string;
+  globalLocation: number;
+  clearXp: number;
+  enemiesSlain: number;
+  maxCombo: number;
+  chestsOpened: number;
+  totalChests: number;
+  secretsFound: number;
+  totalSecrets: number;
+  grade: 'S' | 'A' | 'B';
 }
 
 interface BannerMessage {
@@ -159,6 +189,7 @@ export function App() {
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
   const [activeChest, setActiveChest] = useState<LockedChestState | null>(null);
   const [boonOffer, setBoonOffer] = useState<{ title: string; choices: BoonId[] } | null>(null);
+  const [victorySummary, setVictorySummary] = useState<VictorySummaryData | null>(null);
   const [activeTrade, setActiveTrade] = useState<TradeSessionState | null>(null);
   const [incomingTrade, setIncomingTrade] = useState<TradeSessionState | null>(null);
   const [banner, setBanner] = useState<BannerMessage | null>(null);
@@ -177,6 +208,9 @@ export function App() {
   const canvasHostRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<GameEngine | null>(null);
   const bannerTimerRef = useRef<number | null>(null);
+  const victoryTimerRef = useRef<number | null>(null);
+  const aliveEnemyIdsRef = useRef<Set<string>>(new Set());
+  const lastEmoteAtRef = useRef<number>(0);
   const toastCounter = useRef(1);
 
   const showBanner = useCallback(
@@ -198,6 +232,40 @@ export function App() {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 3400);
   }, []);
+
+  const advanceBounty = useCallback(
+    (kind: BountyKind, value: number, mode: 'add' | 'max' = 'add') => {
+      if (value <= 0) return;
+      const newlyCompleted: string[] = [];
+      setProfile((prev) => {
+        const list = ensureActiveBounties(prev.bounties);
+        let changed = false;
+        const nextList = list.map((b) => {
+          const def = BOUNTY_BY_ID[b.defId];
+          if (!def || def.kind !== kind || b.progress >= def.target) return b;
+          const nextProg =
+            mode === 'max' ? Math.max(b.progress, value) : Math.min(def.target, b.progress + value);
+          const clamped = Math.min(def.target, nextProg);
+          if (clamped !== b.progress) {
+            changed = true;
+            if (b.progress < def.target && clamped >= def.target) {
+              newlyCompleted.push(def.title);
+            }
+            return { ...b, progress: clamped };
+          }
+          return b;
+        });
+        const nextKills = kind === 'kills' ? (prev.lifetimeKills || 0) + value : prev.lifetimeKills || 0;
+        if (!changed && nextKills === (prev.lifetimeKills || 0)) return prev;
+        return { ...prev, bounties: nextList, lifetimeKills: nextKills };
+      });
+      for (const title of newlyCompleted) {
+        soundEngine.playPuzzleSolve();
+        pushToast(`🏆 Misja ukończona: ${title}! Odbierz w [J] Misje!`, '#4ade80');
+      }
+    },
+    [pushToast]
+  );
 
   // Persist profile & push stat updates to server live
   useEffect(() => {
@@ -373,6 +441,7 @@ export function App() {
     sock.on('world:loaded', (payload: { mapData: GeneratedMapData }) => {
       setMapData(payload.mapData);
       setBoonOffer(null);
+      aliveEnemyIdsRef.current = new Set();
       setInGame(true);
       setActiveChest(null);
       engineRef.current?.loadMap(payload.mapData);
@@ -391,6 +460,29 @@ export function App() {
     sock.on('world:snapshot', (snap: WorldSnapshot) => {
       setSnapshot(snap);
       engineRef.current?.applySnapshot(snap);
+
+      // Track live enemy kills & max combo for active bounties!
+      const prevAlive = aliveEnemyIdsRef.current;
+      const curAlive = new Set<string>();
+      for (const e of snap.enemies) {
+        if (e.alive && e.tier !== 'barrel' && e.tier !== 'root_trap') {
+          curAlive.add(e.id);
+        }
+      }
+      if (prevAlive.size > 0) {
+        let slainDelta = 0;
+        for (const id of prevAlive) {
+          if (!curAlive.has(id)) slainDelta++;
+        }
+        if (slainDelta > 0) {
+          advanceBounty('kills', slainDelta, 'add');
+        }
+      }
+      aliveEnemyIdsRef.current = curAlive;
+
+      if ((snap.comboCount || 0) >= 2) {
+        advanceBounty('combo', snap.comboCount || 0, 'max');
+      }
     });
 
     sock.on('world:vfx', (events: SkillVfxEvent[]) => {
@@ -447,6 +539,7 @@ export function App() {
           ...prev,
           inventory: [it, ...prev.inventory].slice(0, 60),
         }));
+        advanceBounty('loot', 1, 'add');
       }
       if (payload.runeShard) {
         const rid = payload.runeShard;
@@ -467,16 +560,50 @@ export function App() {
       grantXp(payload.amount);
     });
 
-    sock.on('location:completed', (payload: { globalLocation: number; clearXp: number }) => {
-      grantXp(payload.clearXp);
-      setProfile((prev) => ({
-        ...prev,
-        unlockedLocationGlobal: Math.min(60, Math.max(prev.unlockedLocationGlobal, payload.globalLocation + 1)),
-        completedLocations: prev.completedLocations.includes(payload.globalLocation)
-          ? prev.completedLocations
-          : [...prev.completedLocations, payload.globalLocation],
-      }));
-    });
+    sock.on(
+      'location:completed',
+      (payload: {
+        globalLocation: number;
+        clearXp: number;
+        locationName?: string;
+        enemiesSlain?: number;
+        maxCombo?: number;
+        chestsOpened?: number;
+        totalChests?: number;
+        secretsFound?: number;
+        totalSecrets?: number;
+        grade?: 'S' | 'A' | 'B';
+      }) => {
+        grantXp(payload.clearXp);
+        advanceBounty('clear', 1, 'add');
+        soundEngine.playLevelUp();
+        setProfile((prev) => ({
+          ...prev,
+          unlockedLocationGlobal: Math.min(60, Math.max(prev.unlockedLocationGlobal, payload.globalLocation + 1)),
+          completedLocations: prev.completedLocations.includes(payload.globalLocation)
+            ? prev.completedLocations
+            : [...prev.completedLocations, payload.globalLocation],
+        }));
+
+        const summary: VictorySummaryData = {
+          locationName: payload.locationName || `Lokacja #${payload.globalLocation}`,
+          globalLocation: payload.globalLocation,
+          clearXp: payload.clearXp,
+          enemiesSlain: payload.enemiesSlain ?? 0,
+          maxCombo: payload.maxCombo ?? 0,
+          chestsOpened: payload.chestsOpened ?? 0,
+          totalChests: payload.totalChests ?? 0,
+          secretsFound: payload.secretsFound ?? 0,
+          totalSecrets: payload.totalSecrets ?? 0,
+          grade: payload.grade ?? 'A',
+        };
+        setVictorySummary(summary);
+        if (victoryTimerRef.current) window.clearTimeout(victoryTimerRef.current);
+        victoryTimerRef.current = window.setTimeout(() => {
+          setVictorySummary(null);
+        }, 9500);
+      }
+    );
 
     sock.on('chest:open_modal', (chest: LockedChestState) => {
       setActiveChest(chest);
@@ -528,7 +655,7 @@ export function App() {
     return () => {
       sock.disconnect();
     };
-  }, [grantXp, pushToast, serverUrl, showBanner]);
+  }, [advanceBounty, grantXp, pushToast, serverUrl, showBanner]);
 
   // Mount Three.js GameEngine when entering game
   useEffect(() => {
@@ -611,6 +738,7 @@ export function App() {
       else if (k === 'b') setActivePanel((p) => (p === 'blacksmith' ? null : 'blacksmith'));
       else if (k === 'u') setActivePanel((p) => (p === 'runes' ? null : 'runes'));
       else if (k === 'm') setActivePanel((p) => (p === 'worldmap' ? null : 'worldmap'));
+      else if (k === 'j') setActivePanel((p) => (p === 'bounties' ? null : 'bounties'));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -820,7 +948,11 @@ export function App() {
       };
     });
 
-    if (success && newLevel >= MAX_UPGRADE_LEVEL) {
+      if (success) {
+        advanceBounty('upgrade', 1, 'add');
+      }
+
+      if (success && newLevel >= MAX_UPGRADE_LEVEL) {
       const bonusClass = target.classAffinity ?? cur.classId;
       const p13 = getPlus13ClassBonus(bonusClass);
       soundEngine.playLevelUp();
@@ -851,6 +983,113 @@ export function App() {
   const handleToggleSandbox = () => {
     setProfile((prev) => ({ ...prev, sandboxUnlockAll: !prev.sandboxUnlockAll }));
   };
+
+  const handleClaimDaily = () => {
+    const cur = profileRef.current;
+    if (!canClaimDailyReward(cur.lastDailyClaimDate)) return;
+    const dayNum = getNextDailyDay(cur.dailyStreak, cur.lastDailyClaimDate);
+    const rew = DAILY_REWARDS[dayNum - 1] || DAILY_REWARDS[0];
+    const todayKey = getTodayDateKey();
+
+    let bonusItem: EquipmentItem | null = null;
+    if (rew.itemRarity) {
+      bonusItem = generateEquipmentItem(
+        Math.max(1, cur.level),
+        rew.itemRarity,
+        undefined,
+        cur.classId
+      );
+    }
+
+    setProfile((prev) => {
+      const nextShards = { ...prev.shards };
+      if (rew.shards) {
+        for (const [rKey, amt] of Object.entries(rew.shards)) {
+          if (amt && amt > 0) {
+            nextShards[rKey as Rarity] = (nextShards[rKey as Rarity] || 0) + amt;
+          }
+        }
+      }
+      return {
+        ...prev,
+        dailyStreak: dayNum,
+        lastDailyClaimDate: todayKey,
+        shards: nextShards,
+        inventory: bonusItem ? [bonusItem, ...prev.inventory].slice(0, 60) : prev.inventory,
+      };
+    });
+
+    grantXp(rew.xp);
+    soundEngine.playLevelUp();
+    pushToast(`🎁 Odebrano Nagrodę Dnia ${dayNum}/7! (${rew.summary})`, '#fde047');
+    if (bonusItem) {
+      pushToast(`✨ Otrzymano: ${bonusItem.name}!`, RARITY_META[bonusItem.rarity].color);
+    }
+  };
+
+  const handleClaimBounty = (slotIndex: number) => {
+    const cur = profileRef.current;
+    const list = ensureActiveBounties(cur.bounties);
+    const entry = list[slotIndex];
+    if (!entry) return;
+    const def = BOUNTY_BY_ID[entry.defId];
+    if (!def || entry.progress < def.target) return;
+
+    let bonusItem: EquipmentItem | null = null;
+    if (def.rewardItemRarity) {
+      bonusItem = generateEquipmentItem(
+        Math.max(1, cur.level),
+        def.rewardItemRarity,
+        undefined,
+        cur.classId
+      );
+    }
+
+    setProfile((prev) => {
+      const activeList = ensureActiveBounties(prev.bounties);
+      const nextShards = { ...prev.shards };
+      if (def.rewardShards) {
+        for (const [rKey, amt] of Object.entries(def.rewardShards)) {
+          if (amt && amt > 0) {
+            nextShards[rKey as Rarity] = (nextShards[rKey as Rarity] || 0) + amt;
+          }
+        }
+      }
+      const existingIds = activeList.map((b) => b.defId);
+      const nextBounties = activeList.map((b, i) =>
+        i === slotIndex ? rollReplacementBounty(existingIds) : b
+      );
+      return {
+        ...prev,
+        shards: nextShards,
+        bounties: nextBounties,
+        inventory: bonusItem ? [bonusItem, ...prev.inventory].slice(0, 60) : prev.inventory,
+      };
+    });
+
+    grantXp(def.rewardXp);
+    soundEngine.playRuneUpgrade();
+    pushToast(`🏆 Ukończono misję „${def.title}”! (+${def.rewardXp} XP)`, '#4ade80');
+    if (bonusItem) {
+      pushToast(`🎁 Nagroda: ${bonusItem.name}!`, RARITY_META[bonusItem.rarity].color);
+    }
+  };
+
+  const handleSendEmote = (text: string) => {
+    const now = Date.now();
+    if (now - lastEmoteAtRef.current < 1100) return;
+    lastEmoteAtRef.current = now;
+    socketRef.current?.emit('player:emote', { text });
+    soundEngine.playPuzzleTick();
+    advanceBounty('emote', 1, 'add');
+  };
+
+  const readyBountyCount =
+    (canClaimDailyReward(profile.lastDailyClaimDate) ? 1 : 0) +
+    ensureActiveBounties(profile.bounties).filter((b) => {
+      const def = BOUNTY_BY_ID[b.defId];
+      return def && b.progress >= def.target;
+    }).length;
 
   const handleChangeServerUrl = (nextUrl: string) => {
     const cleaned = nextUrl.trim().replace(/\/+$/, '');
@@ -927,6 +1166,7 @@ export function App() {
           onSelectLocation={handleSelectLocation}
           onStartGame={handleStartGame}
           onToggleSandbox={handleToggleSandbox}
+          onOpenBounties={() => setActivePanel('bounties')}
         />
       ) : (
         <>
@@ -950,6 +1190,7 @@ export function App() {
               muted={muted}
               currentTrack={currentTrack}
               musicVolume={musicVolume}
+              readyBountyCount={readyBountyCount}
               onToggleMute={() => {
                 const next = !muted;
                 soundEngine.muted = next;
@@ -967,6 +1208,7 @@ export function App() {
               onRequestTrade={(targetId) => {
                 socketRef.current?.emit('trade:request', { targetId });
               }}
+              onSendEmote={handleSendEmote}
               onLeaveToLobby={() => {
                 socketRef.current?.emit('room:leave');
                 setInGame(false);
@@ -975,42 +1217,13 @@ export function App() {
                 setSnapshot(null);
                 setActivePanel(null);
                 setBoonOffer(null);
+                setVictorySummary(null);
                 setActiveChest(null);
                 setActiveTrade(null);
                 setIncomingTrade(null);
               }}
             />
           )}
-
-          {/* Loot / System Toasts (Bottom-Right) */}
-          <div
-            style={{
-              position: 'fixed',
-              bottom: 152,
-              right: 16,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 6,
-              zIndex: 45,
-              pointerEvents: 'none',
-            }}
-          >
-            {toasts.map((t) => (
-              <div
-                key={t.id}
-                className="comic-panel-sm"
-                style={{
-                  padding: '6px 12px',
-                  fontSize: 12,
-                  fontWeight: 900,
-                  color: t.color,
-                  borderColor: t.color,
-                }}
-              >
-                {t.text}
-              </div>
-            ))}
-          </div>
 
           {/* Dramatic Event / Boss / Boski Banner */}
           {banner && (
@@ -1172,6 +1385,114 @@ export function App() {
             </div>
           )}
 
+          {/* Expedition Victory Summary Card (Grade S / A / B) */}
+          {victorySummary && (
+            <div
+              className="comic-panel"
+              style={{
+                position: 'fixed',
+                top: 96,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 84,
+                width: 'min(480px, 92vw)',
+                padding: '16px 20px',
+                borderColor:
+                  victorySummary.grade === 'S'
+                    ? '#fde047'
+                    : victorySummary.grade === 'A'
+                      ? '#38bdf8'
+                      : '#a855f7',
+                background: 'linear-gradient(155deg, rgba(22, 26, 56, 0.96), rgba(11, 14, 30, 0.98))',
+                pointerEvents: 'auto',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 900, color: '#4ade80', letterSpacing: 1 }}>
+                    ✨ WYPRAWA UKOŃCZONA!
+                  </div>
+                  <div className="comic-title" style={{ fontSize: 24, color: '#fde047', lineHeight: 1.1 }}>
+                    {victorySummary.locationName}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    width: 58,
+                    height: 58,
+                    borderRadius: 16,
+                    border: '3px solid #111118',
+                    background:
+                      victorySummary.grade === 'S'
+                        ? 'linear-gradient(135deg, #facc15, #f97316)'
+                        : victorySummary.grade === 'A'
+                          ? 'linear-gradient(135deg, #38bdf8, #6366f1)'
+                          : 'linear-gradient(135deg, #c084fc, #7e22ce)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: '0 4px 16px rgba(250,204,21,0.35)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <span style={{ fontSize: 9, fontWeight: 900, color: '#111118', lineHeight: 1 }}>OCENA</span>
+                  <span className="comic-title" style={{ fontSize: 30, color: '#fff', lineHeight: 1 }}>
+                    {victorySummary.grade}
+                  </span>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(4, 1fr)',
+                  gap: 8,
+                  marginTop: 12,
+                  marginBottom: 12,
+                }}
+              >
+                <div className="comic-panel-sm" style={{ padding: '6px 4px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 10, color: '#94a3b8' }}>⚔️ Pokonani</div>
+                  <div style={{ fontSize: 16, fontWeight: 900, color: '#f8fafc' }}>
+                    {victorySummary.enemiesSlain}
+                  </div>
+                </div>
+                <div className="comic-panel-sm" style={{ padding: '6px 4px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 10, color: '#94a3b8' }}>🔥 Max Combo</div>
+                  <div style={{ fontSize: 16, fontWeight: 900, color: '#fb923c' }}>
+                    {victorySummary.maxCombo}×
+                  </div>
+                </div>
+                <div className="comic-panel-sm" style={{ padding: '6px 4px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 10, color: '#94a3b8' }}>🗝️ Skrzynie</div>
+                  <div style={{ fontSize: 16, fontWeight: 900, color: '#fde047' }}>
+                    {victorySummary.chestsOpened}/{victorySummary.totalChests}
+                  </div>
+                </div>
+                <div className="comic-panel-sm" style={{ padding: '6px 4px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 10, color: '#94a3b8' }}>⭐ Bonus XP</div>
+                  <div style={{ fontSize: 15, fontWeight: 900, color: '#4ade80' }}>
+                    +{victorySummary.clearXp}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, color: '#cbd5e1', fontWeight: 700 }}>
+                  🔍 Sekrety: {victorySummary.secretsFound}/{victorySummary.totalSecrets} • Gotowi na kolejny etap!
+                </span>
+                <button
+                  className="comic-btn comic-btn-gold"
+                  onClick={() => setVictorySummary(null)}
+                  style={{ padding: '5px 14px', fontSize: 12 }}
+                >
+                  Super! ✕
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Active Modals */}
           {activePanel === 'inventory' && (
             <InventoryModal
@@ -1223,6 +1544,7 @@ export function App() {
               chest={activeChest}
               onSolved={(chestId) => {
                 socketRef.current?.emit('chest:solved', { chestId });
+                advanceBounty('chest', 1, 'add');
                 setActiveChest(null);
               }}
               onClose={() => setActiveChest(null)}
@@ -1254,6 +1576,46 @@ export function App() {
           )}
         </>
       )}
+
+      {/* Bounties & Daily Rewards Modal (accessible from both Main Menu AND in-game [J]!) */}
+      {activePanel === 'bounties' && (
+        <BountiesModal
+          profile={profile}
+          onClaimDaily={handleClaimDaily}
+          onClaimBounty={handleClaimBounty}
+          onClose={() => setActivePanel(null)}
+        />
+      )}
+
+      {/* Loot / System Toasts (Bottom-Right, works in both Main Menu & In-Game) */}
+      <div
+        style={{
+          position: 'fixed',
+          bottom: inGame ? 152 : 24,
+          right: 16,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6,
+          zIndex: 95,
+          pointerEvents: 'none',
+        }}
+      >
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className="comic-panel-sm"
+            style={{
+              padding: '6px 12px',
+              fontSize: 12,
+              fontWeight: 900,
+              color: t.color,
+              borderColor: t.color,
+            }}
+          >
+            {t.text}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

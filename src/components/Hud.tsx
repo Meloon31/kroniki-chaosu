@@ -19,7 +19,16 @@ export type ActivePanel =
   | 'blacksmith'
   | 'runes'
   | 'worldmap'
-  | 'trade';
+  | 'trade'
+  | 'bounties';
+
+const COOP_EMOTES = [
+  { icon: '👍', label: '👍 SUPER!' },
+  { icon: '🔥', label: '🔥 DAWAJ!' },
+  { icon: '❤️', label: '❤️ DZIĘKI!' },
+  { icon: '⚠️', label: '⚠️ UWAGA!' },
+  { icon: '💰', label: '💰 SKARB!' },
+];
 
 interface HudProps {
   profile: PlayerProfile;
@@ -33,6 +42,7 @@ interface HudProps {
   muted: boolean;
   currentTrack?: MusicTrackInfo;
   musicVolume?: number;
+  readyBountyCount?: number;
   onToggleMute: () => void;
   onMusicVolumeChange?: (v: number) => void;
   onNextTrack?: () => void;
@@ -40,6 +50,7 @@ interface HudProps {
   onCastSkill: (slot: 'active1' | 'active2' | 'active3') => void;
   onUsePotion: () => void;
   onRequestTrade: (targetId: string) => void;
+  onSendEmote?: (text: string) => void;
   onLeaveToLobby: () => void;
 }
 
@@ -55,6 +66,7 @@ export const Hud: React.FC<HudProps> = ({
   muted,
   currentTrack,
   musicVolume = 0.42,
+  readyBountyCount = 0,
   onToggleMute,
   onMusicVolumeChange,
   onNextTrack,
@@ -62,6 +74,7 @@ export const Hud: React.FC<HudProps> = ({
   onCastSkill,
   onUsePotion,
   onRequestTrade,
+  onSendEmote,
   onLeaveToLobby,
 }) => {
   const minimapRef = useRef<HTMLCanvasElement | null>(null);
@@ -753,7 +766,36 @@ export const Hud: React.FC<HudProps> = ({
           width: 'min(760px, 95vw)',
         }}
       >
-        <div className="comic-panel" style={{ padding: '10px 14px' }}>
+        <div className="comic-panel" style={{ padding: '10px 14px', position: 'relative' }}>
+          {/* Co-op Quick Comic Emotes Strip (top-right above HUD) */}
+          {onSendEmote && (
+            <div
+              style={{
+                position: 'absolute',
+                top: -32,
+                right: 12,
+                display: 'flex',
+                gap: 4,
+              }}
+            >
+              {COOP_EMOTES.map((em) => (
+                <button
+                  key={em.label}
+                  className="comic-btn comic-btn-dark"
+                  onClick={() => onSendEmote(em.label)}
+                  title={`Wyślij emotkę drużynie: ${em.label}`}
+                  style={{
+                    padding: '2px 7px',
+                    fontSize: 13,
+                    borderRadius: 9,
+                  }}
+                >
+                  {em.icon}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Active Set Bonus Pill if active */}
           {localPlayer?.activeSetRarity && (
             <div
@@ -1084,6 +1126,29 @@ export const Hud: React.FC<HudProps> = ({
                 style={{ padding: '8px 10px', fontSize: 12 }}
               >
                 🗺️ [M] Mapa
+              </button>
+              <button
+                className="comic-btn comic-btn-gold"
+                onClick={() => onOpenPanel('bounties')}
+                style={{ padding: '8px 10px', fontSize: 12, position: 'relative' }}
+                title="Misje Wyprawowe i Nagroda Dnia [J]"
+              >
+                🏆 [J] Misje
+                {readyBountyCount > 0 && (
+                  <span
+                    style={{
+                      background: '#22c55e',
+                      color: '#052e16',
+                      borderRadius: 99,
+                      padding: '0 6px',
+                      fontSize: 11,
+                      fontWeight: 900,
+                      marginLeft: 4,
+                    }}
+                  >
+                    {readyBountyCount}
+                  </span>
+                )}
               </button>
             </div>
           </div>

@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import type { ClassId, NetPlayerState } from '../../shared/types';
 import {
   createComicMesh,
+  createComicSurfaceTexture,
   createContactShadow,
+  createHeroFaceTexture,
   createPlushLathe,
   createRoundedBoxGeometry,
   createSoftBladeGeometry,
@@ -222,7 +224,8 @@ export function buildCharacterRig(
       ],
       26
     );
-    const robe = createComicMesh(robeGeo, pal.primary, 0.03);
+    const robeTex = createComicSurfaceTexture(pal.primary, pal.trim, 'robe');
+    const robe = createComicMesh(robeGeo, pal.primary, 0.032, { map: robeTex });
 
     const hemTrim = createComicMesh(
       new THREE.TorusGeometry(0.53 * wScale, 0.056, 10, 26),
@@ -294,15 +297,18 @@ export function buildCharacterRig(
       ],
       26
     );
-    const chest = createComicMesh(torsoGeo, pal.primary, 0.03);
+    const armorTex = createComicSurfaceTexture(pal.primary, pal.trim, 'armor');
+    const chest = createComicMesh(torsoGeo, pal.primary, 0.032, { map: armorTex });
     chest.scale.set(1.06, 1.0, 0.88);
     torsoGroup.add(chest);
 
-    // Sculpted domed front breastplate (soft sphere shell instead of rectangular box!)
+    // Sculpted domed front breastplate with painted metallic highlight!
+    const plateTex = createComicSurfaceTexture(pal.secondary, pal.trim, 'armor');
     const plate = createComicMesh(
-      new THREE.SphereGeometry(0.36 * wScale, 20, 16),
+      new THREE.SphereGeometry(0.36 * wScale, 24, 18),
       pal.secondary,
-      0.024
+      0.024,
+      { map: plateTex }
     );
     plate.scale.set(1.06, 0.88, 0.55);
     plate.position.set(0, 0.46 * hScale, 0.24 * wScale);
@@ -396,100 +402,46 @@ export function buildCharacterRig(
   }
 
   // ==========================================
-  // 3. BIG EXPRESSIVE CHIBI-CARTOON HEAD & FACE
+  // 3. HAND-PAINTED COMIC CHIBI HEAD & EXPRESSIVE FACE
   // ==========================================
   const headGroup = new THREE.Group();
   headGroup.position.set(0, 1.68 * hScale, 0);
   bodyGroup.add(headGroup);
 
-  const neck = createComicMesh(new THREE.CapsuleGeometry(0.14, 0.1, 8, 14), pal.skin, 0.018);
+  const neck = createComicMesh(new THREE.CapsuleGeometry(0.135, 0.1, 8, 16), pal.skin, 0.018);
   neck.position.y = -0.28;
   headGroup.add(neck);
 
-  // Big plush round stylized cartoon head (radius 0.435 — soft & adorable heroic proportion!)
-  const skull = createComicMesh(new THREE.SphereGeometry(0.435, 28, 22), pal.skin, 0.03);
-  skull.scale.set(1.04, 0.97, 0.98);
+  // Smooth high-segment comic hero head with hand-painted anime/comic face texture (zero clunky button spheres!)
+  const faceExpression: Record<ClassId, 'heroic' | 'arcane' | 'cheerful' | 'fierce' | 'cute'> = {
+    wojownik: 'heroic',
+    czarnoksieznik: 'arcane',
+    elf: 'cheerful',
+    krasnolud: 'fierce',
+    wrozka: 'cute',
+  };
+  const faceTex = createHeroFaceTexture({
+    skin: pal.skin,
+    iris: pal.iris,
+    cheek: pal.cheek,
+    brow: pal.hair,
+    expression: faceExpression[classId],
+  });
+  const skull = createComicMesh(new THREE.SphereGeometry(0.445, 32, 24), pal.skin, 0.032, {
+    map: faceTex,
+  });
+  skull.rotation.y = -Math.PI / 2; // aligns equirectangular face center (u=0.5) cleanly to +Z!
+  skull.scale.set(0.98, 0.97, 1.04);
   headGroup.add(skull);
 
   // Cute round side ears (for non-elves; elves get long pointed ears below)
   if (classId !== 'elf') {
     for (const s of [-1, 1]) {
-      const ear = createComicMesh(new THREE.SphereGeometry(0.095, 12, 10), pal.skin, 0.018);
-      ear.scale.set(0.65, 1.0, 0.85);
-      ear.position.set(s * 0.43, -0.02, -0.02);
+      const ear = createComicMesh(new THREE.SphereGeometry(0.09, 14, 12), pal.skin, 0.018);
+      ear.scale.set(0.62, 0.98, 0.85);
+      ear.position.set(s * 0.44, -0.02, -0.02);
       headGroup.add(ear);
     }
-  }
-
-  // Expressive Layered Cartoon Eyes (White Sclera + Colored Iris + Dark Pupil + Twin Glints + Rosy Cheeks + Smile!)
-  const scleraMat = new THREE.MeshBasicMaterial({ color: '#ffffff' });
-  const irisMat = new THREE.MeshBasicMaterial({ color: pal.iris });
-  const pupilMat = new THREE.MeshBasicMaterial({ color: '#141124' });
-  const cheekMat = createToonMaterial(pal.cheek, { transparent: true, opacity: 0.48, rimStrength: 0 });
-  const browMat = createToonMaterial(pal.hair);
-
-  for (const s of [-1, 1]) {
-    const sclera = new THREE.Mesh(new THREE.SphereGeometry(0.088, 14, 12), scleraMat);
-    sclera.scale.set(0.92, 1.15, 0.42);
-    sclera.position.set(s * 0.155, 0.02, 0.39);
-
-    const iris = new THREE.Mesh(new THREE.SphereGeometry(0.064, 14, 12), irisMat);
-    iris.scale.set(0.9, 1.12, 0.42);
-    iris.position.set(s * 0.155, 0.016, 0.408);
-
-    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.042, 12, 10), pupilMat);
-    pupil.scale.set(0.9, 1.1, 0.42);
-    pupil.position.set(s * 0.155, 0.014, 0.42);
-
-    const glintBig = new THREE.Mesh(new THREE.SphereGeometry(0.026, 10, 8), scleraMat);
-    glintBig.position.set(s * 0.155 + 0.022, 0.052, 0.435);
-
-    const glintSmall = new THREE.Mesh(new THREE.SphereGeometry(0.013, 8, 8), scleraMat);
-    glintSmall.position.set(s * 0.155 - 0.018, -0.008, 0.434);
-
-    // Soft rosy cartoon cheeks
-    const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.072, 12, 10), cheekMat);
-    cheek.scale.set(1.25, 0.72, 0.35);
-    cheek.position.set(s * 0.255, -0.075, 0.345);
-
-    // Expressive curved eyebrows
-    const browCurve = createTaperedCurveGeometry(
-      [
-        [s * 0.085, 0.145 + (classId === 'wojownik' || classId === 'krasnolud' ? -0.02 : 0.01), 0.395],
-        [s * 0.16, 0.175, 0.39],
-        [s * 0.235, 0.155 + (classId === 'wojownik' || classId === 'krasnolud' ? 0.02 : -0.01), 0.365],
-      ],
-      0.024,
-      0.018,
-      10,
-      8
-    );
-    const brow = new THREE.Mesh(browCurve, browMat);
-
-    headGroup.add(sclera, iris, pupil, glintBig, glintSmall, cheek, brow);
-  }
-
-  // Cute round button nose
-  const nose = createComicMesh(new THREE.SphereGeometry(0.048, 12, 10), pal.skin, 0.012);
-  nose.scale.set(1.05, 0.85, 1.1);
-  nose.position.set(0, -0.035, 0.432);
-  headGroup.add(nose);
-
-  // Cute curved cartoon smile (visible for classes without giant mustache covering it)
-  if (classId !== 'krasnolud') {
-    const smileGeo = createTaperedCurveGeometry(
-      [
-        [-0.075, -0.115, 0.405],
-        [0, -0.145, 0.422],
-        [0.075, -0.115, 0.405],
-      ],
-      0.014,
-      0.014,
-      10,
-      8
-    );
-    const smile = new THREE.Mesh(smileGeo, new THREE.MeshBasicMaterial({ color: '#7a3538' }));
-    headGroup.add(smile);
   }
 
   let wingLeftGroup: THREE.Group | undefined;

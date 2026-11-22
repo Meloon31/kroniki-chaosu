@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import type { EnemyState } from '../../shared/types';
 import {
   createComicMesh,
+  createComicSurfaceTexture,
   createContactShadow,
+  createMonsterFaceTexture,
   createPlushLathe,
   createSoftBladeGeometry,
   createSoftWingGeometry,
@@ -22,11 +24,16 @@ export interface EnemyRig {
   flameMesh?: THREE.Object3D;
   leftArm?: THREE.Object3D;
   rightArm?: THREE.Object3D;
+  leftLeg?: THREE.Object3D;
+  rightLeg?: THREE.Object3D;
   spiderLegs?: THREE.Object3D[];
   tauntRing: THREE.Mesh;
   tier: EnemyState['tier'];
   bossId?: EnemyState['bossId'];
   archetype: string;
+  lastHp: number;
+  hitFlashUntil: number;
+  flashMats: Array<{ mat: THREE.MeshToonMaterial; origHex: number; origInt: number }>;
 }
 
 /**
@@ -86,6 +93,8 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
   let flameMesh: THREE.Object3D | undefined;
   let leftArm: THREE.Object3D | undefined;
   let rightArm: THREE.Object3D | undefined;
+  let leftLeg: THREE.Object3D | undefined;
+  let rightLeg: THREE.Object3D | undefined;
   let spiderLegs: THREE.Object3D[] | undefined;
 
   if (enemy.tier === 'barrel') {
@@ -194,10 +203,20 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       '#34a853',
       0.028
     );
-    const head = createComicMesh(new THREE.SphereGeometry(0.42, 22, 18), '#4ade80', 0.028);
-    head.scale.set(1.08, 0.94, 0.96);
-    head.position.y = 1.42;
-    addMonsterEyes(body, 1.46, 0.37, 0.16, 0.095, '#fde047', '#166534');
+    const headTex = createMonsterFaceTexture({
+      skin: '#52e078',
+      eyeColor: '#fde047',
+      style: 'goblin',
+    });
+    const head = createComicMesh(new THREE.SphereGeometry(0.45, 26, 20), '#52e078', 0.03, { map: headTex });
+    head.rotation.y = -Math.PI / 2;
+    head.scale.set(0.96, 0.94, 1.08);
+    head.position.y = 1.44;
+    leftLeg = createComicMesh(new THREE.CapsuleGeometry(0.11, 0.22, 8, 12), '#166534', 0.02);
+    leftLeg.position.set(-0.2, 0.22, 0);
+    rightLeg = createComicMesh(new THREE.CapsuleGeometry(0.11, 0.22, 8, 12), '#166534', 0.02);
+    rightLeg.position.set(0.2, 0.22, 0);
+    body.add(leftLeg, rightLeg);
 
     // Long playful pointy goblin ears!
     for (const s of [-1, 1]) {
@@ -350,8 +369,11 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     }
 
     // Domed cartoon knight pauldrons + smooth curved ivory horns!
+    const malArmorTex = createComicSurfaceTexture('#3f4e6b', '#e6b842', 'armor');
     for (const s of [-1, 1]) {
-      const paul = createComicMesh(new THREE.SphereGeometry(0.74, 20, 16), '#3f4e6b', 0.04);
+      const paul = createComicMesh(new THREE.SphereGeometry(0.74, 20, 16), '#3f4e6b', 0.04, {
+        map: malArmorTex,
+      });
       paul.scale.set(1.12, 0.9, 1.0);
       paul.position.set(s * 1.22, 3.4, 0);
       const paulRim = createComicMesh(new THREE.TorusGeometry(0.7, 0.1, 10, 22), '#e6b842', 0.024);
@@ -387,23 +409,22 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     cloak.position.set(0, 2.15, -0.35);
     cloak.rotation.x = 0.18;
 
-    // Big expressive cartoon skull + rounded jaw + glowing emerald eyes + tilted golden crown!
-    const skull = createComicMesh(new THREE.SphereGeometry(0.74, 24, 20), '#f1f5f9', 0.042);
-    skull.scale.set(1.05, 0.96, 0.98);
-    skull.position.y = 4.2;
+    // Big expressive hand-painted comic skull + tilted golden crown!
+    const skullFaceTex = createMonsterFaceTexture({
+      skin: '#f4f7fb',
+      eyeColor: '#4ade80',
+      style: 'skull',
+    });
+    const skull = createComicMesh(new THREE.SphereGeometry(0.78, 28, 22), '#f4f7fb', 0.044, {
+      map: skullFaceTex,
+    });
+    skull.rotation.y = -Math.PI / 2;
+    skull.scale.set(0.98, 0.98, 1.06);
+    skull.position.y = 4.18;
 
-    const jaw = createComicMesh(new THREE.SphereGeometry(0.46, 18, 14), '#e2e8f0', 0.032);
-    jaw.scale.set(1.05, 0.62, 0.95);
-    jaw.position.set(0, 3.68, 0.2);
-
-    // Cute chunky cartoon skeleton teeth
-    for (let t = -2; t <= 2; t++) {
-      const tooth = createComicMesh(new THREE.CapsuleGeometry(0.055, 0.08, 6, 8), '#ffffff', 0.012);
-      tooth.position.set(t * 0.13, 3.76, 0.6);
-      body.add(tooth);
-    }
-
-    addMonsterEyes(body, 4.25, 0.66, 0.26, 0.16, '#4ade80', '#94a3b8');
+    const jaw = createComicMesh(new THREE.SphereGeometry(0.42, 18, 14), '#e2e8f0', 0.03);
+    jaw.scale.set(1.02, 0.56, 0.92);
+    jaw.position.set(0, 3.62, 0.16);
 
     const crownGroup = new THREE.Group();
     crownGroup.position.y = 4.78;
@@ -491,7 +512,10 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     // =========================================================
     // AKT 2 BOSS: AZIRATH, POŻERACZ WYDM (Plush Cartoon Scorpion-Pharaoh!)
     // =========================================================
-    const carapace = createComicMesh(new THREE.SphereGeometry(1.55, 24, 18), '#e0a229', 0.042);
+    const azScaleTex = createComicSurfaceTexture('#e0a229', '#1b82b8', 'scales');
+    const carapace = createComicMesh(new THREE.SphereGeometry(1.55, 24, 18), '#e0a229', 0.042, {
+      map: azScaleTex,
+    });
     carapace.scale.set(1.02, 0.68, 1.32);
     carapace.position.y = 1.25;
 
@@ -548,9 +572,17 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     chestCollar.rotation.x = Math.PI / 2;
     chestCollar.position.set(0, 3.12, 0.95);
 
-    const head = createComicMesh(new THREE.SphereGeometry(0.68, 24, 18), '#f0be4a', 0.04);
-    head.position.set(0, 3.75, 1.05);
-    addMonsterEyes(body, 3.82, 1.65, 0.24, 0.14, '#38bdf8', '#146d9c');
+    const azFaceTex = createMonsterFaceTexture({
+      skin: '#f5c756',
+      eyeColor: '#38bdf8',
+      accent: '#1b82b8',
+      style: 'pharaoh',
+    });
+    const head = createComicMesh(new THREE.SphereGeometry(0.72, 28, 22), '#f5c756', 0.042, {
+      map: azFaceTex,
+    });
+    head.rotation.y = -Math.PI / 2;
+    head.position.set(0, 3.78, 1.05);
 
     // Soft sculpted rounded Pharaoh Nemes hood (domed crown + plush side lappets, ZERO boxes!)
     const nemesCrown = createComicMesh(new THREE.SphereGeometry(0.86, 22, 16), '#1b82b8', 0.036, {
@@ -678,6 +710,7 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     // =========================================================
     // AKT 3 BOSS: SYLVARA, MATKA CIERNI (Fairytale Dryad Queen!)
     // =========================================================
+    const sylBarkTex = createComicSurfaceTexture('#225c3a', '#4ade80', 'bark');
     const rootGown = createComicMesh(
       createPlushLathe(
         [
@@ -693,7 +726,8 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
         26
       ),
       '#225c3a',
-      0.042
+      0.042,
+      { map: sylBarkTex }
     );
 
     // 6 graceful swirling curved root tendrils around base!
@@ -751,10 +785,18 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       else rightArm = arm;
     }
 
-    // Expressive dryad head + glowing violet eyes + sweeping curved stag antlers w/ glowing orchids!
-    const head = createComicMesh(new THREE.SphereGeometry(0.66, 24, 18), '#6b2fa0', 0.04);
+    // Expressive dryad head w/ painted glowing violet eyes & forest runic swirls!
+    const sylFaceTex = createMonsterFaceTexture({
+      skin: '#7c3ab8',
+      eyeColor: '#f0abfc',
+      accent: '#4ade80',
+      style: 'dryad',
+    });
+    const head = createComicMesh(new THREE.SphereGeometry(0.7, 28, 22), '#7c3ab8', 0.042, {
+      map: sylFaceTex,
+    });
+    head.rotation.y = -Math.PI / 2;
     head.position.y = 4.65;
-    addMonsterEyes(body, 4.72, 0.58, 0.23, 0.13, '#f0abfc', '#2e1065');
 
     for (const s of [-1, 1]) {
       const antlerGeo = createTaperedCurveGeometry(
@@ -825,6 +867,7 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     // =========================================================
     // AKT 4 BOSS: VAELGOR, ARCHONT CHAOSU (Epic Soft Cartoon Demon Lord!)
     // =========================================================
+    const vaelMagmaTex = createComicSurfaceTexture('#241c33', '#f43f5e', 'magma');
     const lowerRobe = createComicMesh(
       createPlushLathe(
         [
@@ -840,7 +883,7 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       ),
       '#241c33',
       0.046,
-      { emissive: '#991b1b', emissiveIntensity: 0.2 }
+      { map: vaelMagmaTex, emissive: '#991b1b', emissiveIntensity: 0.2 }
     );
     lowerRobe.scale.set(1.08, 1, 0.88);
 
@@ -863,11 +906,19 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       body.add(paul);
     }
 
-    // Expressive smooth demon head + glowing golden eyes + sweeping curved ram horns!
-    const head = createComicMesh(new THREE.SphereGeometry(0.76, 24, 18), '#1d1c30', 0.044);
-    head.scale.set(1.04, 1.02, 0.96);
+    // Expressive smooth demon head w/ painted molten-gold eyes & fanged grin!
+    const vaelFaceTex = createMonsterFaceTexture({
+      skin: '#241e38',
+      eyeColor: '#fbbf24',
+      accent: '#f43f5e',
+      style: 'imp',
+    });
+    const head = createComicMesh(new THREE.SphereGeometry(0.8, 28, 22), '#241e38', 0.046, {
+      map: vaelFaceTex,
+    });
+    head.rotation.y = -Math.PI / 2;
+    head.scale.set(0.98, 1.02, 1.05);
     head.position.y = 5.15;
-    addMonsterEyes(body, 5.2, 0.68, 0.28, 0.16, '#fbbf24', '#be123c');
 
     for (const s of [-1, 1]) {
       const hornGeo = createTaperedCurveGeometry(
@@ -980,85 +1031,141 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     const col = colorMap[enemy.act] || '#cf3a56';
 
     if (arch.includes('golem')) {
-      // Plump rounded boulder-golem made of smooth overlapping stones!
-      const belly = createComicMesh(new THREE.SphereGeometry(0.66, 20, 16), col, 0.03);
-      belly.scale.set(1.12, 1.05, 0.96);
-      belly.position.y = 0.92;
-      const head = createComicMesh(new THREE.SphereGeometry(0.42, 18, 14), col, 0.028);
-      head.position.set(0, 1.66, 0.1);
-      addMonsterEyes(body, 1.7, 0.48, 0.15, 0.08, enemy.act === 4 ? '#f97316' : '#38bdf8');
-      leftArm = createComicMesh(new THREE.SphereGeometry(0.32, 16, 12), col, 0.026);
-      leftArm.scale.set(0.9, 1.35, 0.9);
-      leftArm.position.set(-0.78, 0.95, 0.1);
-      rightArm = createComicMesh(new THREE.SphereGeometry(0.32, 16, 12), col, 0.026);
-      rightArm.scale.set(0.9, 1.35, 0.9);
-      rightArm.position.set(0.78, 0.95, 0.1);
-      body.add(belly, head, leftArm, rightArm);
+      // Plump rounded boulder-golem with painted rune-stone texture, face & sturdy boots!
+      const golemTex = createComicSurfaceTexture(col, enemy.act === 4 ? '#f97316' : '#38bdf8', 'armor');
+      const golemFaceTex = createMonsterFaceTexture({
+        skin: col,
+        eyeColor: enemy.act === 4 ? '#fb923c' : '#38bdf8',
+        accent: enemy.act === 4 ? '#facc15' : '#7dd3fc',
+        style: 'golem',
+      });
+      const belly = createComicMesh(new THREE.SphereGeometry(0.68, 22, 18), col, 0.032, {
+        map: golemTex,
+      });
+      belly.scale.set(1.12, 1.02, 0.96);
+      belly.position.y = 0.96;
+      const head = createComicMesh(new THREE.SphereGeometry(0.44, 24, 18), col, 0.03, {
+        map: golemFaceTex,
+      });
+      head.rotation.y = -Math.PI / 2;
+      head.position.set(0, 1.7, 0.12);
+      leftArm = createComicMesh(new THREE.SphereGeometry(0.32, 16, 12), col, 0.026, { map: golemTex });
+      leftArm.scale.set(0.92, 1.35, 0.92);
+      leftArm.position.set(-0.78, 0.98, 0.1);
+      rightArm = createComicMesh(new THREE.SphereGeometry(0.32, 16, 12), col, 0.026, { map: golemTex });
+      rightArm.scale.set(0.92, 1.35, 0.92);
+      rightArm.position.set(0.78, 0.98, 0.1);
+      leftLeg = createComicMesh(new THREE.CapsuleGeometry(0.18, 0.28, 8, 12), '#334155', 0.022);
+      leftLeg.position.set(-0.3, 0.28, 0.02);
+      rightLeg = createComicMesh(new THREE.CapsuleGeometry(0.18, 0.28, 8, 12), '#334155', 0.022);
+      rightLeg.position.set(0.3, 0.28, 0.02);
+      body.add(belly, head, leftArm, rightArm, leftLeg, rightLeg);
     } else if (arch.includes('dzinn') || arch.includes('nekro') || arch.includes('szczelina')) {
-      // Swirly floating cartoon spirit / necromancer / void wisp!
+      // Swirly floating cartoon spirit / necromancer / void wisp with painted robe & face!
+      const robeTex = createComicSurfaceTexture(col, '#fde047', 'robe');
+      const spiritFaceTex = createMonsterFaceTexture({
+        skin: col,
+        eyeColor: '#fde047',
+        accent: '#f0abfc',
+        style: 'dryad',
+      });
       const robe = createComicMesh(
         createPlushLathe(
           [
             [0.01, 0.18],
             [0.14, 0.45],
-            [0.44, 0.95],
-            [0.52, 1.35],
-            [0.34, 1.6],
-            [0.01, 1.66],
+            [0.46, 0.95],
+            [0.54, 1.35],
+            [0.34, 1.62],
+            [0.01, 1.68],
           ],
-          22
+          24
         ),
         col,
-        0.028
+        0.028,
+        { map: robeTex }
       );
-      const head = createComicMesh(new THREE.SphereGeometry(0.44, 20, 16), col, 0.028);
-      head.position.y = 1.85;
-      addMonsterEyes(body, 1.88, 0.39, 0.15, 0.085, '#fde047', '#1e1b2e');
+      const head = createComicMesh(new THREE.SphereGeometry(0.45, 24, 18), col, 0.028, {
+        map: spiritFaceTex,
+      });
+      head.rotation.y = -Math.PI / 2;
+      head.position.y = 1.88;
+      // Cute floating mystic hood/halo trim!
+      const hoodRing = createComicMesh(new THREE.TorusGeometry(0.42, 0.08, 10, 20), '#1e1b2e', 0.02);
+      hoodRing.rotation.x = Math.PI / 2 + 0.35;
+      hoodRing.position.set(0, 1.72, -0.05);
       leftArm = createComicMesh(new THREE.CapsuleGeometry(0.11, 0.38, 8, 12), col, 0.022);
       leftArm.position.set(-0.56, 1.25, 0.12);
       rightArm = createComicMesh(new THREE.CapsuleGeometry(0.11, 0.38, 8, 12), col, 0.022);
       rightArm.position.set(0.56, 1.25, 0.12);
-      body.add(robe, head, leftArm, rightArm);
+      body.add(robe, head, hoodRing, leftArm, rightArm);
     } else {
-      // Plump cartoon fantasy minion (Skeleton / Mummy / Forest Shroomling / Imp!)
+      // Plump comic fantasy minion (Skeleton / Mummy / Forest Shroomling / Imp) with painted face + animated feet!
+      const texPattern =
+        enemy.act === 1 ? 'bone' : enemy.act === 2 ? 'scales' : enemy.act === 3 ? 'bark' : 'magma';
+      const texAccent =
+        enemy.act === 1 ? '#94a3b8' : enemy.act === 2 ? '#f5c249' : enemy.act === 3 ? '#86efac' : '#fb7185';
+      const minionTex = createComicSurfaceTexture(col, texAccent, texPattern);
+      const faceStyle =
+        enemy.act === 1
+          ? 'skull'
+          : enemy.act === 2
+            ? 'pharaoh'
+            : enemy.act === 3
+              ? 'dryad'
+              : 'imp';
+      const minionFaceTex = createMonsterFaceTexture({
+        skin: col,
+        eyeColor: enemy.act === 3 ? '#fde047' : enemy.act === 2 ? '#38bdf8' : '#fb7185',
+        accent: texAccent,
+        style: faceStyle,
+      });
+
       const torso = createComicMesh(
         createPlushLathe(
           [
-            [0.01, 0.25],
-            [0.48, 0.4],
-            [0.52, 0.85],
-            [0.44, 1.25],
-            [0.01, 1.35],
+            [0.01, 0.32],
+            [0.46, 0.45],
+            [0.52, 0.9],
+            [0.44, 1.28],
+            [0.01, 1.38],
           ],
-          22
+          24
         ),
         col,
-        0.028
+        0.028,
+        { map: minionTex }
       );
-      const head = createComicMesh(new THREE.SphereGeometry(0.45, 22, 16), col, 0.028);
-      head.scale.set(1.04, 0.96, 0.98);
-      head.position.y = 1.68;
-      addMonsterEyes(body, 1.7, 0.4, 0.16, 0.09, enemy.act === 3 ? '#fde047' : '#fb7185', '#2a2238');
+      const head = createComicMesh(new THREE.SphereGeometry(0.46, 26, 20), col, 0.028, {
+        map: minionFaceTex,
+      });
+      head.rotation.y = -Math.PI / 2;
+      head.scale.set(1.03, 0.96, 1.0);
+      head.position.y = 1.7;
 
       // Cute thematic headgear per Act!
       if (enemy.act === 3) {
-        // Adorable forest mushroom cap on Act 3 minions!
+        // Adorable spotted forest mushroom cap on Act 3 minions!
         const cap = createComicMesh(
-          new THREE.SphereGeometry(0.64, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.56),
+          new THREE.SphereGeometry(0.65, 22, 14, 0, Math.PI * 2, 0, Math.PI * 0.56),
           arch.includes('driada') ? '#9333ea' : '#22a355',
           0.026
         );
-        cap.position.y = 1.88;
-        body.add(cap);
+        cap.position.y = 1.9;
+        const spot = createComicMesh(new THREE.SphereGeometry(0.11, 10, 8), '#fef08a', 0.012);
+        spot.position.set(0.24, 2.34, 0.22);
+        const spot2 = createComicMesh(new THREE.SphereGeometry(0.09, 10, 8), '#fef08a', 0.012);
+        spot2.position.set(-0.26, 2.28, 0.16);
+        body.add(cap, spot, spot2);
       } else if (enemy.act === 4) {
         // Cute curved imp horns on Act 4 minions!
         for (const s of [-1, 1]) {
           const horn = createComicMesh(
             createTaperedCurveGeometry(
               [
-                [s * 0.26, 2.02, 0],
-                [s * 0.44, 2.24, 0.06],
-                [s * 0.38, 2.45, 0.1],
+                [s * 0.26, 2.04, 0],
+                [s * 0.44, 2.26, 0.06],
+                [s * 0.38, 2.47, 0.1],
               ],
               0.08,
               0.02,
@@ -1075,15 +1182,22 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
         for (let b = 0; b < 3; b++) {
           const wrap = createComicMesh(new THREE.TorusGeometry(0.5 - b * 0.03, 0.06, 8, 18), '#f5ead0', 0.016);
           wrap.rotation.x = Math.PI / 2 + 0.12;
-          wrap.position.y = 0.55 + b * 0.28;
+          wrap.position.y = 0.58 + b * 0.26;
           body.add(wrap);
         }
       }
 
+      // Cute articulated cartoon boots/feet!
+      const bootCol = enemy.act === 1 ? '#475569' : enemy.act === 2 ? '#92400e' : enemy.act === 3 ? '#3f2e26' : '#311b3b';
+      leftLeg = createComicMesh(new THREE.CapsuleGeometry(0.13, 0.22, 8, 12), bootCol, 0.02);
+      leftLeg.position.set(-0.22, 0.24, 0.04);
+      rightLeg = createComicMesh(new THREE.CapsuleGeometry(0.13, 0.22, 8, 12), bootCol, 0.02);
+      rightLeg.position.set(0.22, 0.24, 0.04);
+
       leftArm = createComicMesh(new THREE.CapsuleGeometry(0.12, 0.36, 8, 14), col, 0.022);
-      leftArm.position.set(-0.56, 0.96, 0.1);
+      leftArm.position.set(-0.56, 0.98, 0.1);
       rightArm = new THREE.Group();
-      rightArm.position.set(0.56, 1.08, 0.1);
+      rightArm.position.set(0.56, 1.1, 0.1);
       const rMesh = createComicMesh(new THREE.CapsuleGeometry(0.12, 0.36, 8, 14), col, 0.022);
       rMesh.position.y = -0.2;
       const club = createComicMesh(new THREE.CapsuleGeometry(0.1, 0.62, 8, 12), '#68778f', 0.02);
@@ -1091,7 +1205,7 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       club.rotation.x = Math.PI * 0.4;
       rightArm.add(rMesh, club);
 
-      body.add(torso, head, leftArm, rightArm);
+      body.add(torso, head, leftArm, rightArm, leftLeg, rightLeg);
     }
 
     if (isElite) {
@@ -1198,6 +1312,18 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
   hpBarFill.visible = enemy.tier !== 'barrel';
   root.add(hpBarFill);
 
+  const flashMats: Array<{ mat: THREE.MeshToonMaterial; origHex: number; origInt: number }> = [];
+  body.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.isMesh && mesh.material instanceof THREE.MeshToonMaterial) {
+      flashMats.push({
+        mat: mesh.material,
+        origHex: mesh.material.emissive.getHex(),
+        origInt: mesh.material.emissiveIntensity,
+      });
+    }
+  });
+
   return {
     root,
     body,
@@ -1210,11 +1336,16 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     flameMesh,
     leftArm,
     rightArm,
+    leftLeg,
+    rightLeg,
     spiderLegs,
     tauntRing,
     tier: enemy.tier,
     bossId: enemy.bossId,
     archetype: enemy.archetype,
+    lastHp: enemy.hp,
+    hitFlashUntil: 0,
+    flashMats,
   };
 }
 
@@ -1772,22 +1903,47 @@ export function updateEnemyRig(
   elapsedSec: number,
   nowMs: number
 ) {
+  // Trigger crisp white-gold comic Hit-Flash & squash when damaged!
+  if (state.hp < rig.lastHp) {
+    rig.hitFlashUntil = nowMs + 115;
+  }
+  rig.lastHp = state.hp;
+  const isFlashing = nowMs < rig.hitFlashUntil;
+
+  for (let i = 0; i < rig.flashMats.length; i++) {
+    const fm = rig.flashMats[i];
+    if (isFlashing) {
+      fm.mat.emissive.setHex(0xfff2cc);
+      fm.mat.emissiveIntensity = 0.58;
+    } else if (fm.mat.emissiveIntensity !== fm.origInt || fm.mat.emissive.getHex() !== fm.origHex) {
+      fm.mat.emissive.setHex(fm.origHex);
+      fm.mat.emissiveIntensity = fm.origInt;
+    }
+  }
+
+  const baseScale = rig.tier === 'elite' ? 1.28 : 1.0;
+
   if (state.animState === 'burrow') {
     rig.body.position.y = -4.2;
   } else if (rig.bossId === 'vaelgor' || rig.archetype === 'mb_nekro_lord') {
     rig.body.position.y = 0.55 + Math.sin(elapsedSec * 2.8) * 0.28;
+    rig.body.scale.setScalar(baseScale);
   } else if (state.animState === 'run') {
     const bounce = Math.abs(Math.sin(elapsedSec * 10));
     rig.body.position.y = bounce * 0.2;
     rig.body.scale.set(
-      1 + (1 - bounce) * 0.045,
-      1 - (1 - bounce) * 0.045,
-      1 + (1 - bounce) * 0.045
+      baseScale * (1 + (1 - bounce) * 0.045),
+      baseScale * (1 - (1 - bounce) * 0.045),
+      baseScale * (1 + (1 - bounce) * 0.045)
     );
+    const s = Math.sin(elapsedSec * 10);
     if (rig.leftArm && rig.rightArm) {
-      const s = Math.sin(elapsedSec * 10);
       rig.leftArm.rotation.x = s * 0.48;
       rig.rightArm.rotation.x = -s * 0.48;
+    }
+    if (rig.leftLeg && rig.rightLeg) {
+      rig.leftLeg.rotation.x = -s * 0.55;
+      rig.rightLeg.rotation.x = s * 0.55;
     }
     if (rig.spiderLegs) {
       rig.spiderLegs.forEach((leg, i) => {
@@ -1796,11 +1952,25 @@ export function updateEnemyRig(
     }
   } else if (state.animState === 'attack' || state.animState === 'cast') {
     if (rig.rightArm) rig.rightArm.rotation.x = -1.05 + Math.sin(elapsedSec * 16) * 0.9;
-    rig.body.scale.set(1.03, 0.97, 1.03);
+    rig.body.scale.set(baseScale * 1.04, baseScale * 0.96, baseScale * 1.04);
   } else {
     const breath = Math.sin(elapsedSec * 3.0);
     rig.body.position.y = breath * 0.065;
-    rig.body.scale.set(1 - breath * 0.018, 1 + breath * 0.022, 1 - breath * 0.018);
+    rig.body.scale.set(
+      baseScale * (1 - breath * 0.018),
+      baseScale * (1 + breath * 0.022),
+      baseScale * (1 - breath * 0.018)
+    );
+    if (rig.leftLeg && rig.rightLeg) {
+      rig.leftLeg.rotation.x *= 0.8;
+      rig.rightLeg.rotation.x *= 0.8;
+    }
+  }
+
+  if (isFlashing) {
+    rig.body.scale.x *= 1.12;
+    rig.body.scale.y *= 0.88;
+    rig.body.scale.z *= 1.12;
   }
 
   if (rig.orbitGroup) rig.orbitGroup.rotation.y = elapsedSec * 1.5;
@@ -1850,6 +2020,13 @@ export function updateEnemyRig(
   } else {
     rm.opacity = 0;
   }
+
+  const showBar =
+    state.tier !== 'barrel' &&
+    state.tier !== 'root_trap' &&
+    (state.tier !== 'normal' || state.hp < state.maxHp);
+  rig.hpBarBg.visible = showBar;
+  rig.hpBarFill.visible = showBar;
 
   const ratio = Math.max(0.001, Math.min(1, state.hp / Math.max(1, state.maxHp)));
   rig.hpBarFill.scale.x = ratio;

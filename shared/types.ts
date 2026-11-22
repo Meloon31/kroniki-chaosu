@@ -7,6 +7,7 @@ export type EquipSlot = 'bron' | 'helm' | 'zbroja' | 'rekawice' | 'buty' | 'amul
 export type RuneId = 'malakor' | 'azirath' | 'sylvara' | 'vaelgor';
 
 import type { BoonId, EliteAffix, LocationMutatorId } from './mutators.js';
+import type { ActiveBountyState } from './bounties.js';
 
 export type ActNumber = 1 | 2 | 3 | 4;
 
@@ -100,6 +101,10 @@ export interface PlayerProfile {
   unlockedLocationGlobal: number; // 1..60
   completedLocations: number[];   // global indices 1..60
   sandboxUnlockAll: boolean;
+  dailyStreak?: number;
+  lastDailyClaimDate?: string;
+  bounties?: ActiveBountyState[];
+  lifetimeKills?: number;
 }
 
 export interface NetPlayerState {

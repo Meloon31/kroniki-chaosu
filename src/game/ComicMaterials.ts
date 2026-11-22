@@ -11,8 +11,8 @@ let contactShadowTexture: THREE.CanvasTexture | null = null;
 export function getToonGradientMap(): THREE.DataTexture {
   if (softToonGradient) return softToonGradient;
 
-  // 10-sample warm cartoon S-curve (luminous shadow -> plush midtone -> soft creamy highlight)
-  const samples = [108, 114, 128, 168, 184, 198, 218, 232, 242, 248];
+  // Crisp yet velvety comic cel-shading ramp: warm shadow -> rich midtone -> bright comic highlight!
+  const samples = [104, 108, 114, 178, 186, 194, 232, 240, 248, 255];
   const data = new Uint8Array(samples.length * 4);
   for (let i = 0; i < samples.length; i++) {
     const v = samples[i];
@@ -317,6 +317,419 @@ export function createSoftStarGeometry(
   return geo;
 }
 
+const faceTextureCache = new Map<string, THREE.CanvasTexture>();
+const surfaceTextureCache = new Map<string, THREE.CanvasTexture>();
+
+/**
+ * Hand-painted HD comic hero face texture (512x256 equirectangular mapped onto a smooth sphere).
+ * Center of face sits at u=0.5 (rotate sphere Y by -Math.PI/2 so it faces +Z cleanly!).
+ * Eliminates clunky protruding eye/nose spheres and delivers crisp Brawl Stars / Anime-Comic charm!
+ */
+export function createHeroFaceTexture(options: {
+  skin: string;
+  iris: string;
+  cheek: string;
+  brow: string;
+  expression: 'heroic' | 'arcane' | 'cheerful' | 'fierce' | 'cute';
+}): THREE.CanvasTexture {
+  const key = `${options.skin}_${options.iris}_${options.cheek}_${options.brow}_${options.expression}`;
+  const cached = faceTextureCache.get(key);
+  if (cached) return cached;
+
+  const W = 512;
+  const H = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d')!;
+
+  // Warm smooth painterly skin gradient (lighter forehead, soft warm chin shadow)
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, options.skin);
+  bg.addColorStop(0.72, options.skin);
+  bg.addColorStop(1, '#d49576');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  const cx = W * 0.5;
+  const cy = H * 0.52;
+
+  // Soft rosy anime/comic cheeks + cute diagonal blush ticks!
+  for (const s of [-1, 1]) {
+    const chX = cx + s * 54;
+    const chY = cy + 20;
+    const rg = ctx.createRadialGradient(chX, chY, 2, chX, chY, 22);
+    rg.addColorStop(0, options.cheek);
+    rg.addColorStop(1, 'rgba(255,140,140,0)');
+    ctx.fillStyle = rg;
+    ctx.beginPath();
+    ctx.ellipse(chX, chY, 22, 13, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Comic blush hatch lines
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    for (let k = -1; k <= 1; k++) {
+      ctx.beginPath();
+      ctx.moveTo(chX + k * 6 - 3, chY + 4);
+      ctx.lineTo(chX + k * 6 + 3, chY - 4);
+      ctx.stroke();
+    }
+  }
+
+  // Big glossy hand-drawn comic eyes!
+  for (const s of [-1, 1]) {
+    const ex = cx + s * 32;
+    const ey = cy - 4;
+    const rx = options.expression === 'cute' ? 18 : 16;
+    const ry = options.expression === 'cute' ? 22 : 20;
+
+    // Crisp white sclera with comic ink border
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#1f1530';
+    ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    ctx.ellipse(ex, ey, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Rich gradient colored iris
+    const irisGrad = ctx.createLinearGradient(ex, ey - ry * 0.7, ex, ey + ry * 0.7);
+    irisGrad.addColorStop(0, '#141126');
+    irisGrad.addColorStop(0.35, options.iris);
+    irisGrad.addColorStop(1, '#ffffff');
+    ctx.fillStyle = irisGrad;
+    ctx.beginPath();
+    ctx.ellipse(ex, ey + 1, rx * 0.68, ry * 0.74, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Deep glossy pupil
+    ctx.fillStyle = '#151026';
+    ctx.beginPath();
+    ctx.ellipse(ex, ey + 1, rx * 0.38, ry * 0.44, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Twin comic sparkles (big top-right + tiny bottom-left)
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(ex + 5, ey - 7, 5.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(ex - 4, ey + 7, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Bold upper comic eyelash arc
+    ctx.strokeStyle = '#1a112b';
+    ctx.lineWidth = 5.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(ex, ey + 2, rx + 2, Math.PI * 1.12, Math.PI * 1.88);
+    ctx.stroke();
+
+    // Expressive shaped eyebrow
+    ctx.strokeStyle = options.brow;
+    ctx.lineWidth = options.expression === 'fierce' || options.expression === 'heroic' ? 6.5 : 4.5;
+    ctx.beginPath();
+    if (options.expression === 'fierce' || options.expression === 'heroic') {
+      ctx.moveTo(ex - s * 16, ey - 25);
+      ctx.quadraticCurveTo(ex, ey - 31, ex + s * 16, ey - 29);
+    } else {
+      ctx.moveTo(ex - s * 15, ey - 28);
+      ctx.quadraticCurveTo(ex, ey - 35, ex + s * 15, ey - 26);
+    }
+    ctx.stroke();
+  }
+
+  // Cute tiny comic button nose highlight
+  ctx.fillStyle = 'rgba(165, 92, 68, 0.45)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 12, 4.5, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Expressive comic mouth / smile!
+  ctx.strokeStyle = '#5c2429';
+  ctx.lineWidth = 3.8;
+  ctx.lineCap = 'round';
+  if (options.expression === 'cute' || options.expression === 'cheerful') {
+    ctx.fillStyle = '#e05c72';
+    ctx.beginPath();
+    ctx.arc(cx, cy + 25, 11, 0.1 * Math.PI, 0.9 * Math.PI);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  } else if (options.expression === 'heroic') {
+    // Confident heroic smirk!
+    ctx.beginPath();
+    ctx.moveTo(cx - 12, cy + 27);
+    ctx.quadraticCurveTo(cx + 2, cy + 34, cx + 15, cy + 23);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(cx - 11, cy + 26);
+    ctx.quadraticCurveTo(cx, cy + 33, cx + 11, cy + 26);
+    ctx.stroke();
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.LinearFilter;
+  faceTextureCache.set(key, tex);
+  return tex;
+}
+
+/**
+ * Hand-painted expressive comic monster / boss face texture!
+ */
+export function createMonsterFaceTexture(options: {
+  skin: string;
+  eyeColor: string;
+  accent?: string;
+  style: 'skull' | 'imp' | 'goblin' | 'pharaoh' | 'dryad' | 'golem';
+}): THREE.CanvasTexture {
+  const key = `m_${options.skin}_${options.eyeColor}_${options.accent || ''}_${options.style}`;
+  const cached = faceTextureCache.get(key);
+  if (cached) return cached;
+
+  const W = 512;
+  const H = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = options.skin;
+  ctx.fillRect(0, 0, W, H);
+
+  // Subtle painted comic shading band at bottom
+  const shade = ctx.createLinearGradient(0, 0, 0, H);
+  shade.addColorStop(0, 'rgba(255,255,255,0.12)');
+  shade.addColorStop(0.55, 'rgba(0,0,0,0)');
+  shade.addColorStop(1, 'rgba(18,12,32,0.34)');
+  ctx.fillStyle = shade;
+  ctx.fillRect(0, 0, W, H);
+
+  const cx = W * 0.5;
+  const cy = H * 0.52;
+
+  for (const s of [-1, 1]) {
+    const ex = cx + s * 34;
+    const ey = cy - 6;
+
+    // Dark comic eye socket
+    ctx.fillStyle = '#150f24';
+    ctx.beginPath();
+    ctx.ellipse(ex, ey, 20, 17, s * -0.18, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Vivid glowing comic eye core
+    ctx.fillStyle = options.eyeColor;
+    ctx.beginPath();
+    ctx.ellipse(ex, ey, 13, 11, s * -0.18, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Crisp cartoon sparkle
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(ex + 4, ey - 4, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Fierce comic brow
+    ctx.strokeStyle = '#150f24';
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(ex - s * 20, ey - 14);
+    ctx.lineTo(ex + s * 18, ey - 26);
+    ctx.stroke();
+  }
+
+  if (options.style === 'skull') {
+    // Stylized comic nose cavity + cheeky grinning teeth!
+    ctx.fillStyle = '#150f24';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + 4);
+    ctx.lineTo(cx - 8, cy + 18);
+    ctx.lineTo(cx + 8, cy + 18);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#150f24';
+    ctx.beginPath();
+    ctx.roundRect(cx - 34, cy + 25, 68, 18, 8);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    for (let t = 0; t < 5; t++) {
+      ctx.beginPath();
+      ctx.roundRect(cx - 29 + t * 12, cy + 28, 9, 12, 3);
+      ctx.fill();
+    }
+  } else if (options.style === 'goblin' || options.style === 'imp') {
+    // Cheeky toothed grin!
+    ctx.fillStyle = '#240f1e';
+    ctx.strokeStyle = '#150f24';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(cx, cy + 22, 22, 0.08 * Math.PI, 0.92 * Math.PI);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Cute cartoon fangs!
+    ctx.fillStyle = '#ffffff';
+    for (const s of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(cx + s * 13, cy + 26);
+      ctx.lineTo(cx + s * 9, cy + 36);
+      ctx.lineTo(cx + s * 5, cy + 26);
+      ctx.closePath();
+      ctx.fill();
+    }
+  } else if (options.style === 'pharaoh' && options.accent) {
+    // Royal golden-lapis warpaint stripes
+    ctx.strokeStyle = options.accent;
+    ctx.lineWidth = 5;
+    for (const s of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(cx + s * 54, cy - 6);
+      ctx.lineTo(cx + s * 72, cy + 4);
+      ctx.stroke();
+    }
+  } else if (options.style === 'dryad' && options.accent) {
+    // Glowing forest runic cheek swirls
+    ctx.strokeStyle = options.accent;
+    ctx.lineWidth = 4;
+    for (const s of [-1, 1]) {
+      ctx.beginPath();
+      ctx.arc(cx + s * 52, cy + 16, 10, 0, Math.PI * 1.5);
+      ctx.stroke();
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.LinearFilter;
+  faceTextureCache.set(key, tex);
+  return tex;
+}
+
+/**
+ * Hand-painted stylized comic surface texture for armor, robes, scales, bark, and magma —
+ * eliminates plain plastic look and adds crisp storybook depth!
+ */
+export function createComicSurfaceTexture(
+  baseHex: string,
+  accentHex: string,
+  pattern: 'armor' | 'robe' | 'scales' | 'bark' | 'magma' | 'bone'
+): THREE.CanvasTexture {
+  const key = `${baseHex}_${accentHex}_${pattern}`;
+  const cached = surfaceTextureCache.get(key);
+  if (cached) return cached;
+
+  const S = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = S;
+  canvas.height = S;
+  const ctx = canvas.getContext('2d')!;
+
+  const grad = ctx.createLinearGradient(0, 0, 0, S);
+  grad.addColorStop(0, baseHex);
+  grad.addColorStop(0.75, baseHex);
+  grad.addColorStop(1, accentHex);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, S, S);
+
+  if (pattern === 'armor') {
+    // Painted brushed highlight bands + cute comic gold trim stripe & rivets
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.fillRect(0, 26, S, 22);
+    ctx.fillStyle = accentHex;
+    ctx.fillRect(0, S - 36, S, 16);
+    ctx.fillStyle = 'rgba(255,245,200,0.45)';
+    for (let x = 16; x < S; x += 32) {
+      ctx.beginPath();
+      ctx.arc(x, S - 28, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (pattern === 'robe') {
+    // Soft vertical cloth folds + ornate storybook hem stars/diamonds!
+    for (let x = 0; x < S; x += 32) {
+      ctx.fillStyle = x % 64 === 0 ? 'rgba(255,255,255,0.08)' : 'rgba(18,12,35,0.12)';
+      ctx.fillRect(x, 0, 16, S);
+    }
+    ctx.strokeStyle = accentHex;
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(0, S - 28);
+    ctx.lineTo(S, S - 28);
+    ctx.stroke();
+    ctx.fillStyle = accentHex;
+    for (let x = 16; x < S; x += 32) {
+      ctx.beginPath();
+      ctx.arc(x, S - 46, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (pattern === 'scales') {
+    // Stylized golden-lapis overlapping rounded scales
+    ctx.strokeStyle = accentHex;
+    ctx.lineWidth = 4;
+    for (let row = 0; row < 6; row++) {
+      for (let col = 0; col < 6; col++) {
+        const sx = col * 44 + (row % 2) * 22;
+        const sy = row * 44;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 20, 0.1 * Math.PI, 0.9 * Math.PI);
+        ctx.stroke();
+      }
+    }
+  } else if (pattern === 'bark') {
+    // Organic curved fairytale wood grain + glowing vine veins
+    ctx.strokeStyle = accentHex;
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 8; i++) {
+      const x = i * 32 + 12;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.bezierCurveTo(x + 14, S * 0.35, x - 14, S * 0.65, x, S);
+      ctx.stroke();
+    }
+  } else if (pattern === 'magma') {
+    // Glowing molten magma veins over dark obsidian!
+    ctx.strokeStyle = accentHex;
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 6; i++) {
+      const x = i * 44 + 10;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.quadraticCurveTo(x + 28, S * 0.5, x - 12, S);
+      ctx.stroke();
+    }
+  } else if (pattern === 'bone') {
+    // Soft comic ivory bone sheen + subtle stylized cracks
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.beginPath();
+    ctx.ellipse(S * 0.35, S * 0.3, 60, 26, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = accentHex;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(S * 0.6, S * 0.18);
+    ctx.lineTo(S * 0.66, S * 0.34);
+    ctx.lineTo(S * 0.74, S * 0.42);
+    ctx.stroke();
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.LinearFilter;
+  surfaceTextureCache.set(key, tex);
+  return tex;
+}
+
 /**
  * Soft Cartoon Toon material with subtle warm Fresnel rim-light injection so
  * curved silhouettes glow gently like modern stylized 3D games (Nintendo / Brawl Stars / Pixar).
@@ -324,6 +737,7 @@ export function createSoftStarGeometry(
 export function createToonMaterial(
   color: THREE.ColorRepresentation,
   options?: {
+    map?: THREE.Texture;
     emissive?: THREE.ColorRepresentation;
     emissiveIntensity?: number;
     transparent?: boolean;
@@ -334,10 +748,11 @@ export function createToonMaterial(
   }
 ): THREE.MeshToonMaterial {
   const clampedEmissive = Math.min(0.45, options?.emissiveIntensity ?? 0);
-  const rimStrength = options?.rimStrength ?? 0.24;
+  const rimStrength = options?.rimStrength ?? 0.28;
 
   const mat = new THREE.MeshToonMaterial({
-    color,
+    color: options?.map ? 0xffffff : color,
+    map: options?.map ?? null,
     gradientMap: getToonGradientMap(),
     emissive: options?.emissive ? new THREE.Color(options.emissive) : new THREE.Color(0x000000),
     emissiveIntensity: clampedEmissive,
@@ -357,8 +772,8 @@ export function createToonMaterial(
         )
         .replace(
           '#include <dithering_fragment>',
-          `float softRim = pow(1.0 - max(dot(normalize(vNormal), normalize(vViewPosition)), 0.0), 2.4);
-           gl_FragColor.rgb += mix(diffuseColor.rgb, vec3(1.0, 0.97, 0.92), 0.55) * softRim * uRimStrength;
+          `float softRim = pow(1.0 - max(dot(normalize(vNormal), normalize(vViewPosition)), 0.0), 2.3);
+           gl_FragColor.rgb += mix(diffuseColor.rgb, vec3(1.0, 0.98, 0.93), 0.58) * softRim * uRimStrength;
            #include <dithering_fragment>`
         );
     };
@@ -371,8 +786,9 @@ export function createToonMaterial(
 export function createComicMesh(
   geometry: THREE.BufferGeometry,
   color: THREE.ColorRepresentation,
-  outlineThickness = 0.028,
+  outlineThickness = 0.032,
   options?: {
+    map?: THREE.Texture;
     emissive?: THREE.ColorRepresentation;
     emissiveIntensity?: number;
     outlineColor?: string;
@@ -386,6 +802,7 @@ export function createComicMesh(
   }
 ): THREE.Mesh {
   const mat = createToonMaterial(color, {
+    map: options?.map,
     emissive: options?.emissive,
     emissiveIntensity: options?.emissiveIntensity,
     transparent: options?.transparent,
@@ -400,7 +817,7 @@ export function createComicMesh(
   if (outlineThickness > 0) {
     const outline = new THREE.Mesh(
       geometry,
-      getOutlineMaterial(outlineThickness * 0.92, options?.outlineColor ?? '#231836')
+      getOutlineMaterial(outlineThickness, options?.outlineColor ?? '#1f1433')
     );
     outline.castShadow = false;
     outline.receiveShadow = false;
