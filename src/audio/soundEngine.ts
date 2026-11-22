@@ -162,6 +162,11 @@ class SoundEngine {
     this.playTone(620, 740, 0.1, 'triangle', 0.2);
   }
 
+  public playPuzzleFail() {
+    this.playTone(230, 145, 0.24, 'sawtooth', 0.22);
+    this.playTone(170, 110, 0.28, 'triangle', 0.2, 0.08);
+  }
+
   public playPuzzleSolve() {
     [440, 554.37, 659.25, 880].forEach((f, i) =>
       this.playTone(f, f, 0.28, 'triangle', 0.22, i * 0.08)

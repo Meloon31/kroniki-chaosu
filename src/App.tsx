@@ -3,11 +3,14 @@ import { io, Socket } from 'socket.io-client';
 import { CLASSES, MAX_LEVEL, MAX_SKILL_RANK, xpToNextLevel } from '../shared/classes';
 import { getMainBossByAct } from '../shared/bosses';
 import {
+  canClassEquipItem,
   createStarterEquipment,
   createStarterShards,
   EQUIP_SLOTS,
+  getPlus13ClassBonus,
   getSalvageShardYield,
   getUpgradeShardCost,
+  getUpgradeSuccessChance,
   MAX_UPGRADE_LEVEL,
   RARITY_META,
 } from '../shared/items';
@@ -603,7 +606,20 @@ export function App() {
   });
 
   const handleUpdateHero = (name: string, classId: ClassId) => {
-    setProfile((prev) => ({ ...prev, name, classId }));
+    setProfile((prev) => {
+      if (prev.classId === classId) return { ...prev, name };
+      // Move any equipped gear belonging to the previous class cleanly into the backpack!
+      const nextEquipped = { ...prev.equipped };
+      const nextInventory = [...prev.inventory];
+      for (const s of EQUIP_SLOTS) {
+        const it = nextEquipped[s];
+        if (it && !canClassEquipItem(it, classId)) {
+          nextEquipped[s] = null;
+          if (nextInventory.length < 60) nextInventory.unshift(it);
+        }
+      }
+      return { ...prev, name, classId, equipped: nextEquipped, inventory: nextInventory };
+    });
   };
 
   const handleCreateRoom = (globalLocation: number) => {
@@ -639,8 +655,15 @@ export function App() {
   };
 
   const handleEquip = (item: EquipmentItem) => {
+    if (!canClassEquipItem(item, profileRef.current.classId)) {
+      const reqName = item.classAffinity ? CLASSES[item.classAffinity].name : 'innej klasy';
+      soundEngine.playPuzzleFail();
+      pushToast(`🔒 Tylko dla klasy: ${reqName}! (Użyj Handlu lub Rozbierz)`, '#f87171');
+      return;
+    }
     soundEngine.playPuzzleTick();
     setProfile((prev) => {
+      if (!canClassEquipItem(item, prev.classId)) return prev;
       const currentlyEquipped = prev.equipped[item.slot];
       const nextInv = prev.inventory.filter((i) => i.id !== item.id);
       if (currentlyEquipped) nextInv.unshift(currentlyEquipped);
@@ -718,31 +741,39 @@ export function App() {
     });
   };
 
-  const handleUpgradeItem = (itemId: string) => {
-    setProfile((prev) => {
-      // Find in equipped or inventory
-      let target: EquipmentItem | null = null;
-      let eqSlot: EquipSlot | null = null;
-      for (const s of EQUIP_SLOTS) {
-        if (prev.equipped[s]?.id === itemId) {
-          target = prev.equipped[s];
-          eqSlot = s;
-          break;
-        }
+  const handleUpgradeItem = (
+    itemId: string
+  ): { success: boolean; newLevel: number; chancePct: number } | null => {
+    const cur = profileRef.current;
+    let target: EquipmentItem | null = null;
+    let eqSlot: EquipSlot | null = null;
+    for (const s of EQUIP_SLOTS) {
+      if (cur.equipped[s]?.id === itemId) {
+        target = cur.equipped[s];
+        eqSlot = s;
+        break;
       }
-      if (!target) {
-        target = prev.inventory.find((i) => i.id === itemId) ?? null;
-      }
-      if (!target || target.upgradeLevel >= MAX_UPGRADE_LEVEL) return prev;
-      const cost = getUpgradeShardCost(target.upgradeLevel);
-      if ((prev.shards[target.rarity] || 0) < cost) return prev;
+    }
+    if (!target) {
+      target = cur.inventory.find((i) => i.id === itemId) ?? null;
+    }
+    if (!target || target.upgradeLevel >= MAX_UPGRADE_LEVEL) return null;
+    const cost = getUpgradeShardCost(target.upgradeLevel);
+    if ((cur.shards[target.rarity] || 0) < cost) return null;
 
-      const updated: EquipmentItem = { ...target, upgradeLevel: target.upgradeLevel + 1 };
+    const chancePct = getUpgradeSuccessChance(target.upgradeLevel);
+    const success = Math.random() * 100 < chancePct;
+    const newLevel = success ? target.upgradeLevel + 1 : target.upgradeLevel;
+
+    setProfile((prev) => {
       const nextShards = {
         ...prev.shards,
-        [target.rarity]: (prev.shards[target.rarity] || 0) - cost,
+        [target!.rarity]: Math.max(0, (prev.shards[target!.rarity] || 0) - cost),
       };
-
+      if (!success) {
+        return { ...prev, shards: nextShards };
+      }
+      const updated: EquipmentItem = { ...target!, upgradeLevel: newLevel };
       if (eqSlot) {
         return {
           ...prev,
@@ -756,6 +787,20 @@ export function App() {
         inventory: prev.inventory.map((i) => (i.id === itemId ? updated : i)),
       };
     });
+
+    if (success && newLevel >= MAX_UPGRADE_LEVEL) {
+      const bonusClass = target.classAffinity ?? cur.classId;
+      const p13 = getPlus13ClassBonus(bonusClass);
+      soundEngine.playLevelUp();
+      showBanner(
+        'boski',
+        `👑 MISTRZOWSKIE +13 ODBLOKOWANE!`,
+        `${p13.icon} ${p13.title}: ${p13.summary}`,
+        5000
+      );
+    }
+
+    return { success, newLevel, chancePct };
   };
 
   const handleUpgradeRune = (runeId: RuneId) => {

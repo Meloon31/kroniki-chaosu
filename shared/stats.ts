@@ -1,8 +1,11 @@
 import { CLASSES } from './classes.js';
 import {
+  canClassEquipItem,
   EQUIP_SLOTS,
   getEffectiveItemBaseStats,
   getFullSetBonus,
+  getPlus13ClassBonus,
+  MAX_UPGRADE_LEVEL,
 } from './items.js';
 import type {
   ClassId,
@@ -55,9 +58,11 @@ export function computePlayerStats(
     boski: 0,
   };
 
+  let plus13Count = 0;
+
   for (const slot of EQUIP_SLOTS) {
     const item = equipped[slot];
-    if (!item) continue;
+    if (!item || !canClassEquipItem(item, classId)) continue;
     setCounts[item.rarity]++;
 
     const eff = getEffectiveItemBaseStats(item);
@@ -81,6 +86,25 @@ export function computePlayerStats(
       shieldPowerPct += b.healPower;
     }
     if (b.dodge) dodgeChance += b.dodge;
+
+    // Unique +13 Class Mastery Bonus per equipped +13 item!
+    if (item.upgradeLevel >= MAX_UPGRADE_LEVEL) {
+      plus13Count++;
+      const p13 = getPlus13ClassBonus(classId);
+      if (p13.adPct) adPct += p13.adPct;
+      if (p13.apPct) apPct += p13.apPct;
+      if (p13.hpPct) hpPct += p13.hpPct;
+      if (p13.defPct) defPct += p13.defPct;
+      if (p13.critChance) critChance += p13.critChance;
+      if (p13.critDamage) critDamage += p13.critDamage;
+      if (p13.attackSpeedPct) attackSpeedPct += p13.attackSpeedPct;
+      if (p13.moveSpeedPct) moveSpeedPct += p13.moveSpeedPct;
+      if (p13.cdrPct) cdr += p13.cdrPct;
+      if (p13.dodgeChance) dodgeChance += p13.dodgeChance;
+      if (p13.damageReduction) damageReduction += p13.damageReduction;
+      if (p13.healPowerPct) healPowerPct += p13.healPowerPct;
+      if (p13.shieldPowerPct) shieldPowerPct += p13.shieldPowerPct;
+    }
   }
 
   // 3. Full Set Bonus (all 6 slots matching rarity)
@@ -155,11 +179,12 @@ export function computePlayerStats(
   apPct += rVaelgor * 1.0;
   cdr += rVaelgor * 0.5;
 
-  // Hard anti-immortality / anti-one-shot caps
-  const maxHp = Math.round(flatHp * (1 + Math.min(75, hpPct) / 100));
-  const ad = Math.round(flatAd * (1 + Math.min(70, adPct) / 100));
-  const ap = Math.round(flatAp * (1 + Math.min(70, apPct) / 100));
-  const def = Math.round(flatDef * (1 + Math.min(75, defPct) / 100));
+  // Hard anti-immortality / anti-one-shot caps (expanded gently for hard-earned +13 Mastery gear!)
+  const p13CapBoost = Math.min(30, plus13Count * 8);
+  const maxHp = Math.round(flatHp * (1 + Math.min(75 + p13CapBoost, hpPct) / 100));
+  const ad = Math.round(flatAd * (1 + Math.min(70 + p13CapBoost, adPct) / 100));
+  const ap = Math.round(flatAp * (1 + Math.min(70 + p13CapBoost, apPct) / 100));
+  const def = Math.round(flatDef * (1 + Math.min(75 + p13CapBoost, defPct) / 100));
 
   // Transparent RPG Combat Power metric used to show boss readiness (Normal -> Mityczny+7 -> Legendarny+7 -> Legendarny+9)
   const combatPower = Math.round(ad + ap + def * 1.15 + maxHp * 0.12);
@@ -170,15 +195,15 @@ export function computePlayerStats(
     ad,
     ap,
     def,
-    moveSpeed: Math.min(1.65, Number((cls.baseMoveSpeed * (1 + moveSpeedPct / 100)).toFixed(3))),
-    attackSpeed: Math.min(1.75, Number((1 + attackSpeedPct / 100).toFixed(3))),
-    critChance: Math.min(60, Number(critChance.toFixed(1))),
-    critDamage: Math.min(235, Math.round(critDamage)),
-    cdr: Math.min(35, Number(cdr.toFixed(1))),
-    damageReduction: Math.min(22, Number(damageReduction.toFixed(1))),
-    dodgeChance: Math.min(32, Number(dodgeChance.toFixed(1))),
-    healPower: Math.min(1.85, Number((1 + healPowerPct / 100).toFixed(3))),
-    shieldPower: Math.min(1.85, Number((1 + shieldPowerPct / 100).toFixed(3))),
+    moveSpeed: Math.min(1.75, Number((cls.baseMoveSpeed * (1 + moveSpeedPct / 100)).toFixed(3))),
+    attackSpeed: Math.min(2.0, Number((1 + attackSpeedPct / 100).toFixed(3))),
+    critChance: Math.min(75, Number(critChance.toFixed(1))),
+    critDamage: Math.min(275, Math.round(critDamage)),
+    cdr: Math.min(45, Number(cdr.toFixed(1))),
+    damageReduction: Math.min(32, Number(damageReduction.toFixed(1))),
+    dodgeChance: Math.min(42, Number(dodgeChance.toFixed(1))),
+    healPower: Math.min(2.25, Number((1 + healPowerPct / 100).toFixed(3))),
+    shieldPower: Math.min(2.25, Number((1 + shieldPowerPct / 100).toFixed(3))),
     activeSetRarity,
     setCounts,
     weaponUpgradeGlow: equipped.bron?.upgradeLevel ?? 0,

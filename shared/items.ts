@@ -117,6 +117,104 @@ export const RARITY_META: Record<Rarity, RarityMeta> = {
 
 export const MAX_UPGRADE_LEVEL = 13;
 
+export const ALL_CLASS_IDS: ClassId[] = [
+  'wojownik',
+  'czarnoksieznik',
+  'elf',
+  'krasnolud',
+  'wrozka',
+];
+
+/**
+ * Upgrade success chances:
+ * +0 -> +6: 60%
+ * +6 -> +9: 35%
+ * +9 -> +12: 20%
+ * +12 -> +13: 10%
+ */
+export function getUpgradeSuccessChance(currentLevel: number): number {
+  if (currentLevel < 6) return 60;
+  if (currentLevel < 9) return 35;
+  if (currentLevel < 12) return 20;
+  return 10;
+}
+
+export interface Plus13ClassBonus {
+  title: string;
+  icon: string;
+  adPct?: number;
+  apPct?: number;
+  hpPct?: number;
+  defPct?: number;
+  critChance?: number;
+  critDamage?: number;
+  attackSpeedPct?: number;
+  moveSpeedPct?: number;
+  cdrPct?: number;
+  dodgeChance?: number;
+  damageReduction?: number;
+  healPowerPct?: number;
+  shieldPowerPct?: number;
+  summary: string;
+}
+
+export function getPlus13ClassBonus(classId: ClassId): Plus13ClassBonus {
+  switch (classId) {
+    case 'wojownik':
+      return {
+        title: 'Furia Tytana (+13)',
+        icon: '⚔️',
+        adPct: 10,
+        defPct: 8,
+        critChance: 6,
+        summary: '+10% AD, +8% Obrony, +6% Szansy na Krytyk',
+      };
+    case 'czarnoksieznik':
+      return {
+        title: 'Pieczęć Arcymaga (+13)',
+        icon: '🔮',
+        apPct: 12,
+        cdrPct: 6,
+        critDamage: 14,
+        summary: '+12% AP, +6% CDR, +14% Obrażeń Krytycznych',
+      };
+    case 'elf':
+      return {
+        title: 'Gracja Wichru (+13)',
+        icon: '🏹',
+        attackSpeedPct: 9,
+        critChance: 7,
+        dodgeChance: 6,
+        moveSpeedPct: 5,
+        summary: '+9% Szyb. Ataku, +7% Kryt, +6% Unik, +5% Ruch',
+      };
+    case 'krasnolud':
+      return {
+        title: 'Serce Góry (+13)',
+        icon: '🔨',
+        hpPct: 12,
+        defPct: 10,
+        damageReduction: 4,
+        summary: '+12% Max HP, +10% Obrony, +4% Redukcji Obrażeń',
+      };
+    case 'wrozka':
+      return {
+        title: 'Blask Gwiazd (+13)',
+        icon: '✨',
+        healPowerPct: 14,
+        shieldPowerPct: 14,
+        apPct: 9,
+        cdrPct: 5,
+        summary: '+14% Leczenia i Tarcz, +9% AP, +5% CDR',
+      };
+  }
+}
+
+export function canClassEquipItem(item: EquipmentItem, classId: ClassId): boolean {
+  if (!item.classAffinity) return true;
+  return item.classAffinity === classId;
+}
+
 /**
  * Calibrated +0..+13 upgrade stat curve:
  * +1..+6: +8% per level (+6 = 1.48x)
@@ -256,17 +354,51 @@ const SLOT_PREFIXES: Record<Rarity, string[]> = {
   boski: ['Boski', 'Pradawny', 'Wieczny', 'Karmazynowy', 'Archoncki'],
 };
 
-const SLOT_NOUNS: Record<EquipSlot, string[]> = {
-  bron: ['Miecz', 'Młot', 'Kostur', 'Łuk', 'Różdżka', 'Ostrze'],
-  helm: ['Hełm', 'Korona', 'Kaptur', 'Diadem', 'Przyłbica'],
-  zbroja: ['Napierśnik', 'Szata', 'Kolczuga', 'Pancerz', 'Tunika'],
-  rekawice: ['Rękawice', 'Karwasze', 'Naramienniki', 'Chwytaki'],
-  buty: ['Buty', 'Nagolenniki', 'Trzewiki', 'Sandały Wiatru'],
-  amulet: ['Amulet', 'Talizman', 'Medalion', 'Serce Run'],
+const CLASS_SLOT_NOUNS: Record<ClassId, Record<EquipSlot, string[]>> = {
+  wojownik: {
+    bron: ['Miecz', 'Wielki Miecz', 'Ostrze Rycerskie'],
+    helm: ['Hełm Rycerski', 'Przyłbica', 'Szyszak'],
+    zbroja: ['Napierśnik', 'Pancerz Rycerski', 'Kirys'],
+    rekawice: ['Rękawice Płytowe', 'Karwasze', 'Rękawice Miecza'],
+    buty: ['Nagolenniki', 'Buty Rycerskie', 'Okute Buty'],
+    amulet: ['Amulet Męstwa', 'Medalion Tytana', 'Talizman Furii'],
+  },
+  czarnoksieznik: {
+    bron: ['Kostur', 'Berło Arkany', 'Laska Pustki'],
+    helm: ['Kapelusz Maga', 'Kaptur Mroku', 'Korona Arkany'],
+    zbroja: ['Szata Arkany', 'Płaszcz Maga', 'Toga Cienia'],
+    rekawice: ['Rękawice Runiczne', 'Mankiety Mocy', 'Rękawice Arkany'],
+    buty: ['Trzewiki Maga', 'Buty Cienia', 'Obuwie Arkany'],
+    amulet: ['Serce Run', 'Amulet Arkany', 'Kryształ Duszy'],
+  },
+  elf: {
+    bron: ['Łuk', 'Łuk Refleksyjny', 'Ostrze Wiatru'],
+    helm: ['Diadem Lasu', 'Kaptur Łowcy', 'Opaska Wichru'],
+    zbroja: ['Tunika Łowcy', 'Skórznia Lasu', 'Płaszcz Wiatru'],
+    rekawice: ['Karwasze Łucznika', 'Rękawice Wiatru', 'Chwytaki Elfów'],
+    buty: ['Sandały Wiatru', 'Buty Zwiadowcy', 'Lekkie Buty'],
+    amulet: ['Talizman Wichru', 'Medalion Liścia', 'Amulet Polowania'],
+  },
+  krasnolud: {
+    bron: ['Młot Bojowy', 'Topór Górski', 'Kafar Kuźni'],
+    helm: ['Hełm Górski', 'Rogaty Hełm', 'Hełm Tarczownika'],
+    zbroja: ['Pancerz Płytowy', 'Kolczuga Góry', 'Zbroja Kuźni'],
+    rekawice: ['Pancerne Rękawice', 'Rękawice Kuźni', 'Karwasze Skały'],
+    buty: ['Stalowe Buty', 'Buty Górskie', 'Ciężkie Nagolenniki'],
+    amulet: ['Serce Góry', 'Amulet Kamienia', 'Medalion Kuźni'],
+  },
+  wrozka: {
+    bron: ['Różdżka', 'Gwiazdka Światła', 'Laska Natury'],
+    helm: ['Tiara Gwiazd', 'Wianek Światła', 'Diadem Wróżki'],
+    zbroja: ['Suknia Światła', 'Szata Wróżki', 'Płaszcz Gwiazd'],
+    rekawice: ['Jedwabne Rękawice', 'Mankiety Blasku', 'Bransolety Światła'],
+    buty: ['Pantofelki Gwiazd', 'Buty Blasku', 'Sandały Światła'],
+    amulet: ['Gwiazda Opieki', 'Amulet Blasku', 'Talizman Życia'],
+  },
 };
 
 const SUFFIXES: Record<Rarity, string[]> = {
-  zwykly: ['Rekruta', 'Piechura', 'Zwiadowcy'],
+  zwykly: ['Rekruta', 'Wędrowca', 'Nowicjusza'],
   normalny: ['Weterana', 'Strażnika', 'Czeladnika'],
   mityczny: ['Mrozu', 'Burzy', 'Cienia', 'Światła'],
   legendarny: ['Tytanów', 'Katakumb', 'Pustyni', 'Lasu'],
@@ -284,17 +416,22 @@ export function generateEquipmentItem(
 ): EquipmentItem {
   const lvl = Math.max(1, Math.min(60, Math.round(itemLevel)));
   const slot = preferredSlot ?? EQUIP_SLOTS[Math.floor(rng() * EQUIP_SLOTS.length)];
+  const assignedClass: ClassId =
+    classAffinity ?? ALL_CLASS_IDS[Math.floor(rng() * ALL_CLASS_IDS.length)];
   const meta = RARITY_META[rarity];
 
   // Controlled power growth from lvl 1 to lvl 60
   const lvlScale = (1 + (lvl - 1) * 0.16 + Math.pow(lvl, 1.24) * 0.024) * meta.baseMultiplier;
   const jitter = () => 0.93 + rng() * 0.14;
 
+  const isPhys = assignedClass === 'wojownik' || assignedClass === 'krasnolud';
+  const isMag = assignedClass === 'czarnoksieznik' || assignedClass === 'wrozka';
+
   const baseStats = { hp: 0, ad: 0, ap: 0, def: 0 };
   switch (slot) {
     case 'bron':
-      baseStats.ad = Math.round(9.5 * lvlScale * jitter());
-      baseStats.ap = Math.round(9.5 * lvlScale * jitter());
+      baseStats.ad = isMag ? 0 : Math.round((isPhys ? 11.2 : 9.5) * lvlScale * jitter());
+      baseStats.ap = isPhys ? 0 : Math.round((isMag ? 11.2 : 9.5) * lvlScale * jitter());
       break;
     case 'helm':
       baseStats.hp = Math.round(24 * lvlScale * jitter());
@@ -305,8 +442,8 @@ export function generateEquipmentItem(
       baseStats.def = Math.round(7.8 * lvlScale * jitter());
       break;
     case 'rekawice':
-      baseStats.ad = Math.round(4.5 * lvlScale * jitter());
-      baseStats.ap = Math.round(4.5 * lvlScale * jitter());
+      baseStats.ad = isMag ? 0 : Math.round((isPhys ? 5.5 : 4.5) * lvlScale * jitter());
+      baseStats.ap = isPhys ? 0 : Math.round((isMag ? 5.5 : 4.5) * lvlScale * jitter());
       baseStats.def = Math.round(3.5 * lvlScale * jitter());
       break;
     case 'buty':
@@ -315,8 +452,8 @@ export function generateEquipmentItem(
       break;
     case 'amulet':
       baseStats.hp = Math.round(18 * lvlScale * jitter());
-      baseStats.ad = Math.round(5.5 * lvlScale * jitter());
-      baseStats.ap = Math.round(5.5 * lvlScale * jitter());
+      baseStats.ad = isMag ? 0 : Math.round((isPhys ? 6.5 : 5.5) * lvlScale * jitter());
+      baseStats.ap = isPhys ? 0 : Math.round((isMag ? 6.5 : 5.5) * lvlScale * jitter());
       break;
   }
 
@@ -387,7 +524,8 @@ export function generateEquipmentItem(
   }
 
   const pref = SLOT_PREFIXES[rarity][Math.floor(rng() * SLOT_PREFIXES[rarity].length)];
-  const noun = SLOT_NOUNS[slot][Math.floor(rng() * SLOT_NOUNS[slot].length)];
+  const nouns = CLASS_SLOT_NOUNS[assignedClass][slot];
+  const noun = nouns[Math.floor(rng() * nouns.length)];
   const suf = SUFFIXES[rarity][Math.floor(rng() * SUFFIXES[rarity].length)];
 
   const id = `itm_${Date.now().toString(36)}_${(itemSeq++).toString(36)}_${Math.floor(
@@ -403,7 +541,7 @@ export function generateEquipmentItem(
     upgradeLevel: 0,
     baseStats,
     bonusStats,
-    classAffinity,
+    classAffinity: assignedClass,
   };
 }
 

@@ -21,7 +21,7 @@ import {
   getMiniBoss,
   MAIN_BOSSES,
 } from '../shared/bosses.js';
-import { generateEquipmentItem, rollDropRarity } from '../shared/items.js';
+import { ALL_CLASS_IDS, generateEquipmentItem, rollDropRarity } from '../shared/items.js';
 import {
   ALL_BOON_IDS,
   BoonId,
@@ -36,6 +36,7 @@ import {
   createSeededRng,
   generateMapData,
   getLocationDef,
+  moveWithWallSweep,
   resolveWallCollisions,
 } from '../shared/world.js';
 import type {
@@ -344,7 +345,7 @@ function spawnObeliskWave(room: GameRoom, waveNum: number) {
   const countMult = getEnemyCountMultiplier(partySize);
   const actRoster = ACT_ENEMIES[loc.act];
   const L = loc.globalIndex;
-  const baseMobHp = Math.round(180 + L * 68 + Math.pow(L, 2.25) * 2.35);
+  const baseMobHp = Math.round((180 + L * 68 + Math.pow(L, 2.25) * 2.35) * 1.25);
   const baseMobDmg = Math.round(16 + L * 5.2 + Math.pow(L, 1.72) * 0.72);
   const mobArmor = Math.round(12 + L * 4.5);
 
@@ -461,7 +462,7 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
   // Loc 1 ~ 240 HP; Loc 15 ~ 1,650 HP; Loc 30 ~ 6,200 HP; Loc 45 ~ 14,500 HP; Loc 60 ~ 27,500 HP!
   // Prevents one-shotting even in maxed Boski +13!
   const L = loc.globalIndex;
-  const baseMobHp = Math.round(180 + L * 68 + Math.pow(L, 2.25) * 2.35);
+  const baseMobHp = Math.round((180 + L * 68 + Math.pow(L, 2.25) * 2.35) * 1.25);
   const baseMobDmg = Math.round(16 + L * 5.2 + Math.pow(L, 1.72) * 0.72);
   const mobArmor = Math.round(12 + L * 4.5);
 
@@ -474,7 +475,7 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
     if (r.index === 8) {
       if (loc.isMainBoss) {
         const bossDef = getMainBossByAct(loc.act);
-        const scaledHp = Math.round(bossDef.baseHp * bossHpMult);
+        const scaledHp = Math.round(bossDef.baseHp * bossHpMult * 1.25);
         const scaledDmg = Math.round(bossDef.baseDamage * bossDmgMult);
         const boss: ServerEnemy = {
           id: nextId('boss'),
@@ -1110,7 +1111,19 @@ function spawnEquipmentDrop(
   const rarity = rollDropRarity(Math.random, guaranteeDrop, luckBonus);
   if (!rarity) return;
 
-  const item = generateEquipmentItem(itemLevel, rarity, undefined, classAffinity);
+  // 65% chance item rolls for killer/party class, 35% chance for any of the 5 classes (encourages Co-op Trade!)
+  const partyClasses = Array.from(room.players.values()).map((p) => p.classId);
+  let targetClass: ClassId;
+  if (classAffinity && Math.random() < 0.65) {
+    targetClass =
+      partyClasses.length > 1 && Math.random() < 0.35
+        ? partyClasses[Math.floor(Math.random() * partyClasses.length)]
+        : classAffinity;
+  } else {
+    targetClass = ALL_CLASS_IDS[Math.floor(Math.random() * ALL_CLASS_IDS.length)];
+  }
+
+  const item = generateEquipmentItem(itemLevel, rarity, undefined, targetClass);
   const spreadAngle = Math.random() * Math.PI * 2;
   const spreadDist = 0.8 + Math.random() * 2.2;
   const drop: GroundLoot = {
@@ -1366,6 +1379,17 @@ function pickBossAbility(
   return weighted[0].ab;
 }
 
+function isInsideBossChamber(boss: ServerEnemy, x: number, z: number, margin = 17.8): boolean {
+  return Math.abs(x - boss.homeX) <= margin && Math.abs(z - boss.homeZ) <= margin;
+}
+
+function clampToBossChamber(boss: ServerEnemy, x: number, z: number, halfLimit = 14.8): { x: number; z: number } {
+  return {
+    x: Math.max(boss.homeX - halfLimit, Math.min(boss.homeX + halfLimit, x)),
+    z: Math.max(boss.homeZ - halfLimit, Math.min(boss.homeZ + halfLimit, z)),
+  };
+}
+
 function startBossAbility(
   room: GameRoom,
   boss: ServerEnemy,
@@ -1373,11 +1397,17 @@ function startBossAbility(
   primaryTarget: ServerPlayer,
   now: number
 ) {
-  const alivePlayers = Array.from(room.players.values()).filter((p) => p.alive);
+  const alivePlayers = Array.from(room.players.values()).filter(
+    (p) => p.alive && isInsideBossChamber(boss, p.x, p.z)
+  );
   if (alivePlayers.length === 0) return;
 
   const randomTarget = alivePlayers[Math.floor(Math.random() * alivePlayers.length)];
-  const target = ab.id === 'uderzenie_zadlem' || ab.id === 'kat_ciecie' ? primaryTarget : randomTarget;
+  const target =
+    (ab.id === 'uderzenie_zadlem' || ab.id === 'kat_ciecie') && isInsideBossChamber(boss, primaryTarget.x, primaryTarget.z)
+      ? primaryTarget
+      : randomTarget;
+  const clampedTarget = clampToBossChamber(boss, target.x, target.z);
 
   boss.lastAbilityId = ab.id;
   boss.abilityCooldowns[ab.id] = now + ab.cooldownMs;
@@ -1387,8 +1417,8 @@ function startBossAbility(
     name: ab.name,
     startedAt: now,
     executeAt: now + ab.telegraphMs,
-    targetX: target.x,
-    targetZ: target.z,
+    targetX: clampedTarget.x,
+    targetZ: clampedTarget.z,
   };
 
   const angleToTarget = Math.atan2(target.z - boss.z, target.x - boss.x);
@@ -1548,15 +1578,15 @@ function startBossAbility(
 
     case 'nurkowanie_w_piasku': {
       boss.burrowUntil = now + ab.telegraphMs;
-      boss.burrowTargetX = target.x;
-      boss.burrowTargetZ = target.z;
+      boss.burrowTargetX = clampedTarget.x;
+      boss.burrowTargetZ = clampedTarget.z;
       boss.animState = 'burrow';
       const id = nextId('tel');
       room.telegraphs.set(id, {
         id,
         shape: 'circle',
-        x: target.x,
-        z: target.z,
+        x: clampedTarget.x,
+        z: clampedTarget.z,
         radius: 5.0,
         color: ab.color,
         label: ab.name,
@@ -1866,11 +1896,13 @@ function executeBossAbilityImpact(room: GameRoom, boss: ServerEnemy, now: number
   const partySize = Math.max(1, room.players.size);
 
   switch (cast.id) {
-    case 'skok_z_uderzeniem':
-      boss.x = cast.targetX;
-      boss.z = cast.targetZ;
+    case 'skok_z_uderzeniem': {
+      const clamped = clampToBossChamber(boss, cast.targetX, cast.targetZ);
+      boss.x = clamped.x;
+      boss.z = clamped.z;
       pushVfx(room, { kind: 'boss_leap_slam', x: boss.x, z: boss.z, radius: 5.5, color: '#22a355' });
       break;
+    }
 
     case 'kat_ciecie':
       pushVfx(room, { kind: 'miniboss_cleave', x: boss.x, z: boss.z, tx: cast.targetX, tz: cast.targetZ, radius: 4.8, color: '#dc2626' });
@@ -1943,8 +1975,9 @@ function executeBossAbilityImpact(room: GameRoom, boss: ServerEnemy, now: number
 
     case 'nurkowanie_w_piasku':
       if (boss.burrowTargetX !== undefined && boss.burrowTargetZ !== undefined) {
-        boss.x = boss.burrowTargetX;
-        boss.z = boss.burrowTargetZ;
+        const clamped = clampToBossChamber(boss, boss.burrowTargetX, boss.burrowTargetZ);
+        boss.x = clamped.x;
+        boss.z = clamped.z;
       }
       boss.burrowUntil = 0;
       pushVfx(room, { kind: 'boss_burrow', x: boss.x, z: boss.z, radius: 5.0, color: '#d97706' });
@@ -1969,11 +2002,13 @@ function executeBossAbilityImpact(room: GameRoom, boss: ServerEnemy, now: number
       break;
     }
 
-    case 'rozdarcie_wymiaru':
-      boss.x = cast.targetX;
-      boss.z = cast.targetZ;
+    case 'rozdarcie_wymiaru': {
+      const clamped = clampToBossChamber(boss, cast.targetX, cast.targetZ);
+      boss.x = clamped.x;
+      boss.z = clamped.z;
       pushVfx(room, { kind: 'boss_rift_slash', x: boss.x, z: boss.z, radius: 5.0, color: '#be123c' });
       break;
+    }
 
     case 'roj_cierni':
       pushVfx(room, { kind: 'boss_thorn_nova', x: boss.x, z: boss.z, radius: 13.5, color: '#9333ea' });
@@ -2261,11 +2296,44 @@ function tickRoom(room: GameRoom) {
       continue;
     }
 
+    const isBossUnit = e.tier === 'boss' || e.tier === 'miniboss';
+    const eligiblePlayers = isBossUnit
+      ? alivePlayers.filter((p) => isInsideBossChamber(e, p.x, p.z))
+      : alivePlayers;
+
+    // If all players died or left the Boss/Mini-Boss chamber, Boss STAYS in its chamber and returns to center!
+    if (isBossUnit && eligiblePlayers.length === 0) {
+      if (e.aggro || e.castingAbility || (e.burrowUntil && now < e.burrowUntil)) {
+        e.aggro = false;
+        e.castingAbility = undefined;
+        e.burrowUntil = 0;
+        e.tauntedBy = null;
+        for (const [tid, tel] of room.telegraphs.entries()) {
+          if (tel.ownerId === e.id) room.telegraphs.delete(tid);
+        }
+      }
+      const hx = e.homeX - e.x;
+      const hz = e.homeZ - e.z;
+      const hDist = Math.hypot(hx, hz);
+      if (hDist > 0.6) {
+        const step = Math.min(hDist, e.speed * 1.15 * dt);
+        e.x += (hx / hDist) * step;
+        e.z += (hz / hDist) * step;
+        e.rotY = Math.atan2(hx, hz);
+        e.animState = 'run';
+      } else {
+        e.x = e.homeX;
+        e.z = e.homeZ;
+        e.animState = 'idle';
+      }
+      continue;
+    }
+
     if (e.castingAbility && now >= e.castingAbility.executeAt) {
       executeBossAbilityImpact(room, e, now);
     }
 
-    if (alivePlayers.length === 0) {
+    if (eligiblePlayers.length === 0) {
       e.animState = 'idle';
       continue;
     }
@@ -2273,12 +2341,14 @@ function tickRoom(room: GameRoom) {
     let target: ServerPlayer | null = null;
     if (e.tauntedBy && now < e.tauntedUntil) {
       const taunter = room.players.get(e.tauntedBy);
-      if (taunter && taunter.alive) target = taunter;
+      if (taunter && taunter.alive && (!isBossUnit || isInsideBossChamber(e, taunter.x, taunter.z))) {
+        target = taunter;
+      }
     }
 
     if (!target) {
       let bestDist = Infinity;
-      for (const p of alivePlayers) {
+      for (const p of eligiblePlayers) {
         const d = Math.hypot(p.x - e.x, p.z - e.z);
         if (d < bestDist) {
           bestDist = d;
@@ -2415,8 +2485,14 @@ function tickRoom(room: GameRoom) {
       const nx = e.x + (dx / Math.max(0.01, dist)) * step;
       const nz = e.z + (dz / Math.max(0.01, dist)) * step;
       const resolved = resolveWallCollisions(nx, nz, e.radius, map.walls, solvedGates, revealedSecrets);
-      e.x = resolved.x;
-      e.z = resolved.z;
+      if (isBossUnit) {
+        const clamped = clampToBossChamber(e, resolved.x, resolved.z);
+        e.x = clamped.x;
+        e.z = clamped.z;
+      } else {
+        e.x = resolved.x;
+        e.z = resolved.z;
+      }
       e.animState = 'run';
     } else if (now >= e.nextAttackAt) {
       e.animState = 'attack';
@@ -2902,7 +2978,7 @@ function handleSkillCast(
 
     case 'szarza_z_ogluszeniem': {
       const dmg = player.stats.ad * (skillDef.damageScaleAd ?? 1.55) * rankMult;
-      const resolved = resolveWallCollisions(targetX, targetZ, 0.9, map.walls, solvedGates, revealedSecrets);
+      const resolved = moveWithWallSweep(player.x, player.z, targetX, targetZ, 0.9, map.walls, solvedGates, revealedSecrets);
       pushVfx(room, { kind: 'charge', x: player.x, z: player.z, tx: resolved.x, tz: resolved.z, radius: skillDef.radius, color: '#d99e26', casterId: player.id });
       player.x = resolved.x;
       player.z = resolved.z;
@@ -2998,7 +3074,7 @@ function handleSkillCast(
       }
       const backX = player.x - dirX * 5.2;
       const backZ = player.z - dirZ * 5.2;
-      const resolved = resolveWallCollisions(backX, backZ, 0.9, map.walls, solvedGates, revealedSecrets);
+      const resolved = moveWithWallSweep(player.x, player.z, backX, backZ, 0.9, map.walls, solvedGates, revealedSecrets);
       player.x = resolved.x;
       player.z = resolved.z;
       player.invulnUntil = now + 320;
@@ -3409,7 +3485,9 @@ io.on('connection', (socket: Socket) => {
       const dt = 0.05;
       const nx = p.x + ndx * speed * dt;
       const nz = p.z + ndz * speed * dt;
-      const resolved = resolveWallCollisions(
+      const resolved = moveWithWallSweep(
+        p.x,
+        p.z,
         nx,
         nz,
         0.85,
@@ -3479,7 +3557,9 @@ io.on('connection', (socket: Socket) => {
     const len = Math.hypot(payload.dirX, payload.dirZ) || 1;
     const nx = p.x + (payload.dirX / len) * 5.8;
     const nz = p.z + (payload.dirZ / len) * 5.8;
-    const resolved = resolveWallCollisions(
+    const resolved = moveWithWallSweep(
+      p.x,
+      p.z,
       nx,
       nz,
       0.85,

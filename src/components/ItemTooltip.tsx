@@ -1,14 +1,19 @@
 import React from 'react';
+import { CLASSES } from '../../shared/classes';
 import {
+  canClassEquipItem,
   getEffectiveItemBaseStats,
+  getPlus13ClassBonus,
   getSalvageShardYield,
+  MAX_UPGRADE_LEVEL,
   RARITY_META,
   SLOT_LABELS,
 } from '../../shared/items';
-import type { EquipmentItem } from '../../shared/types';
+import type { ClassId, EquipmentItem } from '../../shared/types';
 
 interface ItemTooltipProps {
   item: EquipmentItem;
+  viewerClassId?: ClassId;
   compact?: boolean;
 }
 
@@ -36,7 +41,7 @@ const PCT_KEYS = new Set([
   'dodge',
 ]);
 
-export const ItemTooltip: React.FC<ItemTooltipProps> = ({ item, compact }) => {
+export const ItemTooltip: React.FC<ItemTooltipProps> = ({ item, viewerClassId, compact }) => {
   const meta = RARITY_META[item.rarity];
   const slotInfo = SLOT_LABELS[item.slot];
   const base = getEffectiveItemBaseStats(item);
@@ -44,13 +49,22 @@ export const ItemTooltip: React.FC<ItemTooltipProps> = ({ item, compact }) => {
     ([, v]) => typeof v === 'number' && v > 0
   );
 
+  const itemClassId = item.classAffinity;
+  const itemClassDef = itemClassId ? CLASSES[itemClassId] : null;
+  const canEquip = viewerClassId ? canClassEquipItem(item, viewerClassId) : true;
+  const p13Bonus = itemClassId
+    ? getPlus13ClassBonus(itemClassId)
+    : viewerClassId
+      ? getPlus13ClassBonus(viewerClassId)
+      : null;
+
   return (
     <div
       className={`comic-panel-sm p-3 text-left ${item.rarity === 'boski' ? 'boski-shimmer' : ''}`}
       style={{
         borderColor: meta.color,
-        minWidth: compact ? 200 : 240,
-        maxWidth: 290,
+        minWidth: compact ? 200 : 250,
+        maxWidth: 310,
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
@@ -61,7 +75,7 @@ export const ItemTooltip: React.FC<ItemTooltipProps> = ({ item, compact }) => {
               <span style={{ color: '#fde047', marginLeft: 5 }}>+{item.upgradeLevel}</span>
             )}
           </div>
-          <div style={{ fontSize: 11, color: '#cbd5e1', marginTop: 2 }}>
+          <div style={{ fontSize: 11, color: '#cbd5e1', marginTop: 3, display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
             <span
               style={{
                 background: meta.badgeBg,
@@ -69,13 +83,27 @@ export const ItemTooltip: React.FC<ItemTooltipProps> = ({ item, compact }) => {
                 borderRadius: 6,
                 fontWeight: 800,
                 color: '#fff',
-                marginRight: 6,
               }}
             >
               {meta.name}
             </span>
-            {slotInfo.name} • Poz. {item.itemLevel}
+            <span>
+              {slotInfo.name} • Poz. {item.itemLevel}
+            </span>
           </div>
+          {itemClassDef && (
+            <div
+              style={{
+                marginTop: 4,
+                fontSize: 11,
+                fontWeight: 900,
+                color: canEquip ? itemClassDef.primaryColor : '#f87171',
+              }}
+            >
+              {canEquip ? '✓' : '🔒'} Klasa: {itemClassDef.name}
+              {!canEquip && ' (Inna klasa — użyj Handlu lub Rozbierz)'}
+            </div>
+          )}
         </div>
       </div>
 
@@ -118,6 +146,38 @@ export const ItemTooltip: React.FC<ItemTooltipProps> = ({ item, compact }) => {
       {item.upgradeLevel >= 7 && (
         <div style={{ marginTop: 6, fontSize: 11, color: '#38bdf8', fontWeight: 800 }}>
           ✨ Aktywna Poświata Kowalska (+{item.upgradeLevel})
+        </div>
+      )}
+
+      {p13Bonus && item.upgradeLevel >= MAX_UPGRADE_LEVEL && (
+        <div
+          style={{
+            marginTop: 7,
+            padding: '6px 8px',
+            borderRadius: 8,
+            background: 'linear-gradient(135deg, rgba(244,63,94,0.25), rgba(168,85,247,0.25))',
+            border: '1.5px solid #fb7185',
+            fontSize: 11,
+          }}
+        >
+          <div style={{ fontWeight: 900, color: '#fde047' }}>
+            🌟 {p13Bonus.icon} {p13Bonus.title}
+          </div>
+          <div style={{ color: '#fff', fontWeight: 800, marginTop: 2 }}>{p13Bonus.summary}</div>
+        </div>
+      )}
+
+      {p13Bonus && item.upgradeLevel < MAX_UPGRADE_LEVEL && !compact && (
+        <div
+          style={{
+            marginTop: 6,
+            fontSize: 10,
+            color: '#a5b4fc',
+            borderTop: '1px dashed rgba(255,255,255,0.12)',
+            paddingTop: 5,
+          }}
+        >
+          👑 Bonus na +13 ({p13Bonus.title}): {p13Bonus.summary}
         </div>
       )}
 

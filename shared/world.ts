@@ -65,14 +65,14 @@ export const ACT_THEMES: Record<ActNumber, ActTheme> = {
     act: 3,
     name: 'Akt 3: Przeklęty Las i Bagna',
     subtitle: 'Bioluminescencyjne rośliny, toksyczne moczary i ruiny elfów',
-    skyColor: '#16302c',
-    fogColor: '#1a3d36',
-    floorColor: '#386b58',
-    floorAccentColor: '#285245',
-    wallColor: '#2e5946',
-    wallTopColor: '#1a362c',
-    ambientLightColor: '#8bf0cf',
-    sunLightColor: '#e4c7ff',
+    skyColor: '#254f46',
+    fogColor: '#2c6154',
+    floorColor: '#569c7e',
+    floorAccentColor: '#3f7d64',
+    wallColor: '#4a8569',
+    wallTopColor: '#2e5c48',
+    ambientLightColor: '#bbf7e3',
+    sunLightColor: '#f3e5ff',
     accentGlowColor: '#c084fc',
     propKinds: ['glow_mushroom', 'gnarled_tree', 'elf_arch', 'swamp_pool'],
   },
@@ -80,14 +80,14 @@ export const ACT_THEMES: Record<ActNumber, ActTheme> = {
     act: 4,
     name: 'Akt 4: Obsydianowa Cytadela',
     subtitle: 'Rzeki lawy, lewitujące wyspy i Wymiar Chaosu',
-    skyColor: '#24101d',
-    fogColor: '#361426',
-    floorColor: '#3d364d',
-    floorAccentColor: '#592338',
-    wallColor: '#2d263b',
-    wallTopColor: '#c92e4b',
-    ambientLightColor: '#c084fc',
-    sunLightColor: '#fb7185',
+    skyColor: '#422036',
+    fogColor: '#572540',
+    floorColor: '#665b7d',
+    floorAccentColor: '#873d5c',
+    wallColor: '#52476b',
+    wallTopColor: '#e04864',
+    ambientLightColor: '#e9ccff',
+    sunLightColor: '#ffd4dc',
     accentGlowColor: '#f43f5e',
     propKinds: ['obsidian_crystal', 'lava_brazier', 'chaos_monolith', 'lava_fissure'],
   },
@@ -841,4 +841,44 @@ export function resolveWallCollisions(
   }
 
   return { x: nx, z: nz };
+}
+
+/**
+ * Swept movement against all active walls/gates/secret walls in tiny sub-steps (0.4 units)
+ * so Spacebar Dash, Warrior Charge, Elf Backflip, or any teleport/leap skill can NEVER
+ * clip or tunnel through solid walls!
+ */
+export function moveWithWallSweep(
+  startX: number,
+  startZ: number,
+  targetX: number,
+  targetZ: number,
+  radius: number,
+  walls: MapWall[],
+  solvedGateIds: Set<string>,
+  revealedSecretIds: Set<string>
+): { x: number; z: number } {
+  const dx = targetX - startX;
+  const dz = targetZ - startZ;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 0.001) {
+    return resolveWallCollisions(startX, startZ, radius, walls, solvedGateIds, revealedSecretIds);
+  }
+  const stepSize = 0.4;
+  const steps = Math.max(1, Math.ceil(dist / stepSize));
+  let cx = startX;
+  let cz = startZ;
+  for (let i = 1; i <= steps; i++) {
+    const nextX = cx + dx / steps;
+    const nextZ = cz + dz / steps;
+    const res = resolveWallCollisions(nextX, nextZ, radius, walls, solvedGateIds, revealedSecretIds);
+    cx = res.x;
+    cz = res.z;
+    // If pushed back hard against a wall along the intended axis, stop advancing through it
+    const pushed = Math.hypot(res.x - nextX, res.z - nextZ);
+    if (pushed > stepSize * 0.65) {
+      break;
+    }
+  }
+  return { x: cx, z: cz };
 }

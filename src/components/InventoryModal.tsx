@@ -1,14 +1,19 @@
 import React, { useState } from 'react';
+import { CLASSES } from '../../shared/classes';
 import {
+  ALL_CLASS_IDS,
+  canClassEquipItem,
   EQUIP_SLOTS,
   getFullSetBonus,
+  getPlus13ClassBonus,
   getSalvageShardYield,
+  MAX_UPGRADE_LEVEL,
   RARITY_META,
   RARITY_ORDER,
   SLOT_LABELS,
 } from '../../shared/items';
 import { computePlayerStats } from '../../shared/stats';
-import type { EquipmentItem, EquipSlot, PlayerProfile, Rarity } from '../../shared/types';
+import type { ClassId, EquipmentItem, EquipSlot, PlayerProfile, Rarity } from '../../shared/types';
 import { ItemTooltip } from './ItemTooltip';
 
 interface InventoryModalProps {
@@ -20,6 +25,16 @@ interface InventoryModalProps {
   onClose: () => void;
 }
 
+const CLASS_ICONS: Record<ClassId, string> = {
+  wojownik: '⚔️',
+  czarnoksieznik: '🔮',
+  elf: '🏹',
+  krasnolud: '🔨',
+  wrozka: '✨',
+};
+
+type ClassFilter = 'mine' | 'all' | ClassId;
+
 export const InventoryModal: React.FC<InventoryModalProps> = ({
   profile,
   onEquip,
@@ -29,6 +44,8 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
   onClose,
 }) => {
   const [selectedItem, setSelectedItem] = useState<EquipmentItem | null>(null);
+  const [classFilter, setClassFilter] = useState<ClassFilter>('all');
+
   const stats = computePlayerStats(
     profile.classId,
     profile.level,
@@ -37,10 +54,69 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
     profile.runes
   );
 
-  // Highlight best set progress
   const bestSetRarity = RARITY_ORDER.reduce((best, r) =>
     stats.setCounts[r] >= stats.setCounts[best] ? r : best
   );
+
+  const equippedPlus13Count = EQUIP_SLOTS.filter((s) => {
+    const it = profile.equipped[s];
+    return it && it.upgradeLevel >= MAX_UPGRADE_LEVEL && canClassEquipItem(it, profile.classId);
+  }).length;
+  const p13Def = getPlus13ClassBonus(profile.classId);
+
+  const myClassItemsCount = profile.inventory.filter((it) =>
+    canClassEquipItem(it, profile.classId)
+  ).length;
+
+  const groupedByClass: Array<{ classId: ClassId | 'universal'; label: string; color: string; items: EquipmentItem[] }> = [];
+  if (classFilter === 'all') {
+    const orderedClasses: ClassId[] = [
+      profile.classId,
+      ...ALL_CLASS_IDS.filter((c) => c !== profile.classId),
+    ];
+    for (const cid of orderedClasses) {
+      const items = profile.inventory.filter((it) => it.classAffinity === cid);
+      if (items.length > 0) {
+        groupedByClass.push({
+          classId: cid,
+          label: `${CLASS_ICONS[cid]} ${CLASSES[cid].name}${cid === profile.classId ? ' (Twoja klasa)' : ' (Inna klasa — Handel / Rozebranie)'}`,
+          color: cid === profile.classId ? CLASSES[cid].primaryColor : '#94a3b8',
+          items,
+        });
+      }
+    }
+    const universal = profile.inventory.filter((it) => !it.classAffinity);
+    if (universal.length > 0) {
+      groupedByClass.push({
+        classId: 'universal',
+        label: '🎒 Uniwersalne (Starsze przedmioty)',
+        color: '#cbd5e1',
+        items: universal,
+      });
+    }
+  } else if (classFilter === 'mine') {
+    const items = profile.inventory.filter((it) => canClassEquipItem(it, profile.classId));
+    if (items.length > 0) {
+      groupedByClass.push({
+        classId: profile.classId,
+        label: `${CLASS_ICONS[profile.classId]} ${CLASSES[profile.classId].name} (Twoja klasa)`,
+        color: CLASSES[profile.classId].primaryColor,
+        items,
+      });
+    }
+  } else {
+    const items = profile.inventory.filter((it) => it.classAffinity === classFilter);
+    if (items.length > 0) {
+      groupedByClass.push({
+        classId: classFilter,
+        label: `${CLASS_ICONS[classFilter]} ${CLASSES[classFilter].name}`,
+        color: CLASSES[classFilter].primaryColor,
+        items,
+      });
+    }
+  }
+
+  const selectedCanEquip = selectedItem ? canClassEquipItem(selectedItem, profile.classId) : false;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -48,23 +124,32 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
         className="comic-panel"
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 'min(1040px, 95vw)',
+          width: 'min(1060px, 95vw)',
           maxHeight: '90vh',
           overflowY: 'auto',
           padding: 20,
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-          <h2 className="comic-title" style={{ margin: 0, fontSize: 32, color: '#fde047' }}>
-            🎒 EKWIPUNEK I ZESTAWY
-          </h2>
+          <div>
+            <h2 className="comic-title" style={{ margin: 0, fontSize: 32, color: '#fde047' }}>
+              🎒 EKWIPUNEK KLASOWY I ZESTAWY
+            </h2>
+            <div style={{ fontSize: 12, color: '#cbd5e1' }}>
+              Twoja klasa:{' '}
+              <strong style={{ color: CLASSES[profile.classId].primaryColor }}>
+                {CLASS_ICONS[profile.classId]} {CLASSES[profile.classId].name}
+              </strong>{' '}
+              • Sprzęt innych klas możesz wymienić przez <strong>Handel</strong> lub rozebrać na Odłamki!
+            </div>
+          </div>
           <button className="comic-btn comic-btn-red" onClick={onClose} style={{ padding: '6px 14px' }}>
             ✕ Zamknij [I]
           </button>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16 }}>
-          {/* LEFT: Equipped 6 Slots + Set Bonus + Hero Stats */}
+          {/* LEFT: Equipped 6 Slots + Set Bonus + +13 Mastery + Hero Stats */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div className="comic-panel-sm" style={{ padding: 12 }}>
               <div style={{ fontSize: 12, fontWeight: 900, color: '#38bdf8', marginBottom: 8 }}>
@@ -109,7 +194,13 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                             {item.name}
                           </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
-                            <span style={{ fontSize: 10, color: '#fde047', fontWeight: 900 }}>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                color: item.upgradeLevel >= 13 ? '#fb7185' : '#fde047',
+                                fontWeight: 900,
+                              }}
+                            >
                               +{item.upgradeLevel} (P.{item.itemLevel})
                             </span>
                             <button
@@ -173,6 +264,29 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
               )}
             </div>
 
+            {/* +13 Class Mastery Bonus Tracker */}
+            <div
+              className="comic-panel-sm"
+              style={{
+                padding: 10,
+                borderColor: equippedPlus13Count > 0 ? '#fb7185' : '#334155',
+                background:
+                  equippedPlus13Count > 0
+                    ? 'linear-gradient(135deg, rgba(159,18,57,0.28), rgba(19,22,39,0.95))'
+                    : undefined,
+              }}
+            >
+              <div style={{ fontSize: 11, fontWeight: 900, color: '#fb7185' }}>
+                👑 MISTRZOSTWO +13 ({equippedPlus13Count}/6 ZAŁOŻONYCH)
+              </div>
+              <div style={{ fontSize: 11, color: '#fde047', fontWeight: 800, marginTop: 2 }}>
+                {p13Def.icon} {p13Def.title}: {p13Def.summary}
+              </div>
+              <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 2 }}>
+                Każdy założony przedmiot +13 kumuluje ten bonus dla Twojej klasy!
+              </div>
+            </div>
+
             {/* Computed Total Stats */}
             <div className="comic-panel-sm" style={{ padding: 12, fontSize: 12 }}>
               <div style={{ fontSize: 12, fontWeight: 900, color: '#4ade80', marginBottom: 6 }}>
@@ -205,7 +319,7 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
             </div>
           </div>
 
-          {/* RIGHT: Shards + Backpack + Salvage */}
+          {/* RIGHT: Shards + Class Tabs + Grouped Backpack + Salvage */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {/* Shard Bag Bar */}
             <div className="comic-panel-sm" style={{ padding: 10 }}>
@@ -274,19 +388,23 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                   background: '#14172b',
                 }}
               >
-                <ItemTooltip item={selectedItem} />
+                <ItemTooltip item={selectedItem} viewerClassId={profile.classId} />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {profile.inventory.some((i) => i.id === selectedItem.id) && (
                     <>
                       <button
-                        className="comic-btn comic-btn-green"
+                        className={selectedCanEquip ? 'comic-btn comic-btn-green' : 'comic-btn comic-btn-dark'}
+                        disabled={!selectedCanEquip}
                         onClick={() => {
+                          if (!selectedCanEquip) return;
                           onEquip(selectedItem);
                           setSelectedItem(null);
                         }}
                         style={{ padding: '8px 16px', fontSize: 13 }}
                       >
-                        ⚔️ Załóż Przedmiot
+                        {selectedCanEquip
+                          ? '⚔️ Załóż Przedmiot'
+                          : `🔒 Tylko: ${selectedItem.classAffinity ? CLASSES[selectedItem.classAffinity].name : 'Inna klasa'}`}
                       </button>
                       <button
                         className="comic-btn comic-btn-red"
@@ -305,68 +423,134 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
               </div>
             )}
 
-            {/* Backpack Grid */}
+            {/* Class Filter Tabs & Grouped Backpack */}
             <div className="comic-panel-sm" style={{ padding: 12 }}>
-              <div style={{ fontSize: 12, fontWeight: 900, color: '#cbd5e1', marginBottom: 8 }}>
-                PLECAK ({profile.inventory.length} / 60) — Kliknij, by obejrzeć • Podwójny klik, by założyć
-              </div>
-              {profile.inventory.length === 0 ? (
-                <div style={{ padding: 24, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
-                  Plecak jest pusty — pokonuj wrogów i otwieraj skrzynie z łupem!
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 6 }}>
+                <div style={{ fontSize: 12, fontWeight: 900, color: '#cbd5e1' }}>
+                  PLECAK POGRUPOWANY KLASAMI ({profile.inventory.length} / 60)
                 </div>
-              ) : (
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fill, minmax(112px, 1fr))',
-                    gap: 8,
-                    maxHeight: 300,
-                    overflowY: 'auto',
-                  }}
-                >
-                  {profile.inventory.map((item) => {
-                    const m = RARITY_META[item.rarity];
-                    const isSel = selectedItem?.id === item.id;
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  <button
+                    className={`comic-btn ${classFilter === 'all' ? 'comic-btn-gold' : 'comic-btn-dark'}`}
+                    onClick={() => setClassFilter('all')}
+                    style={{ padding: '3px 8px', fontSize: 10 }}
+                  >
+                    Wszystkie ({profile.inventory.length})
+                  </button>
+                  <button
+                    className={`comic-btn ${classFilter === 'mine' ? 'comic-btn-green' : 'comic-btn-dark'}`}
+                    onClick={() => setClassFilter('mine')}
+                    style={{ padding: '3px 8px', fontSize: 10 }}
+                  >
+                    ⭐ Moja ({myClassItemsCount})
+                  </button>
+                  {ALL_CLASS_IDS.map((cid) => {
+                    const cnt = profile.inventory.filter((it) => it.classAffinity === cid).length;
                     return (
-                      <div
-                        key={item.id}
-                        onClick={() => setSelectedItem(item)}
-                        onDoubleClick={() => {
-                          onEquip(item);
-                          setSelectedItem(null);
-                        }}
-                        className={item.rarity === 'boski' ? 'boski-shimmer' : ''}
+                      <button
+                        key={cid}
+                        className={`comic-btn ${classFilter === cid ? 'comic-btn-gold' : 'comic-btn-dark'}`}
+                        onClick={() => setClassFilter(cid)}
                         style={{
-                          background: isSel ? '#2b3155' : '#131627',
-                          border: `2.5px solid ${m.color}`,
-                          borderRadius: 9,
-                          padding: 7,
-                          cursor: 'pointer',
+                          padding: '3px 7px',
+                          fontSize: 10,
+                          opacity: cnt === 0 ? 0.5 : 1,
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                          <span>{SLOT_LABELS[item.slot].icon}</span>
-                          <span style={{ color: '#fde047', fontWeight: 900 }}>
-                            {item.upgradeLevel > 0 ? `+${item.upgradeLevel}` : `P.${item.itemLevel}`}
-                          </span>
-                        </div>
-                        <div
-                          style={{
-                            fontSize: 11,
-                            fontWeight: 800,
-                            color: m.color,
-                            marginTop: 3,
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                          }}
-                        >
-                          {item.name}
-                        </div>
-                        <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 2 }}>{m.name}</div>
-                      </div>
+                        {CLASS_ICONS[cid]} {cnt}
+                      </button>
                     );
                   })}
+                </div>
+              </div>
+
+              {groupedByClass.length === 0 ? (
+                <div style={{ padding: 24, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
+                  Brak przedmiotów w wybranej kategorii.
+                </div>
+              ) : (
+                <div style={{ maxHeight: 330, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {groupedByClass.map((group) => (
+                    <div key={group.classId}>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 900,
+                          color: group.color,
+                          marginBottom: 6,
+                          paddingBottom: 3,
+                          borderBottom: `1px solid ${group.color}44`,
+                        }}
+                      >
+                        {group.label} ({group.items.length})
+                      </div>
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fill, minmax(118px, 1fr))',
+                          gap: 8,
+                        }}
+                      >
+                        {group.items.map((item) => {
+                          const m = RARITY_META[item.rarity];
+                          const isSel = selectedItem?.id === item.id;
+                          const usable = canClassEquipItem(item, profile.classId);
+                          const cId = item.classAffinity;
+                          return (
+                            <div
+                              key={item.id}
+                              onClick={() => setSelectedItem(item)}
+                              onDoubleClick={() => {
+                                if (!usable) return;
+                                onEquip(item);
+                                setSelectedItem(null);
+                              }}
+                              className={item.rarity === 'boski' ? 'boski-shimmer' : ''}
+                              style={{
+                                background: isSel ? '#2b3155' : usable ? '#131627' : '#0f101c',
+                                border: `2.5px solid ${usable ? m.color : '#3b415e'}`,
+                                borderRadius: 9,
+                                padding: 7,
+                                cursor: 'pointer',
+                                opacity: usable ? 1 : 0.72,
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                                <span>
+                                  {SLOT_LABELS[item.slot].icon}
+                                  {!usable ? '🔒' : ''}
+                                </span>
+                                <span
+                                  style={{
+                                    color: item.upgradeLevel >= 13 ? '#fb7185' : '#fde047',
+                                    fontWeight: 900,
+                                  }}
+                                >
+                                  {item.upgradeLevel > 0 ? `+${item.upgradeLevel}` : `P.${item.itemLevel}`}
+                                </span>
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  fontWeight: 800,
+                                  color: m.color,
+                                  marginTop: 3,
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                }}
+                              >
+                                {item.name}
+                              </div>
+                              <div style={{ fontSize: 9, color: usable ? '#94a3b8' : '#f87171', marginTop: 2, fontWeight: 700 }}>
+                                {cId ? `${CLASS_ICONS[cId]} ${CLASSES[cId].name}` : m.name}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

@@ -97,16 +97,16 @@ export class GameEngine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.02;
+    this.renderer.toneMappingExposure = 1.08;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
 
-    // Warm plush 3-point storybook cartoon lighting: Soft Hemisphere + Golden Sun + Pastel Rim
-    this.hemiLight = new THREE.HemisphereLight('#d6e2ff', '#3a2d4f', 0.74);
+    // Warm plush 3-point storybook cartoon lighting: Bright Hemisphere + Golden Sun + Pastel Rim
+    this.hemiLight = new THREE.HemisphereLight('#e2ebff', '#4b3b63', 0.9);
     this.scene.add(this.hemiLight);
 
-    this.sunLight = new THREE.DirectionalLight('#fff2db', 1.12);
+    this.sunLight = new THREE.DirectionalLight('#fff4df', 1.2);
     this.sunLight.position.set(22, 42, 24);
     this.sunLight.castShadow = true;
     this.sunLight.shadow.mapSize.set(2048, 2048);
@@ -230,24 +230,26 @@ export class GameEngine {
 
     const theme = ACT_THEMES[mapData.location.act];
     this.scene.background = new THREE.Color(theme.skyColor);
-    this.scene.fog = new THREE.Fog(theme.fogColor, 60, 134);
+    this.scene.fog = new THREE.Fog(theme.fogColor, 72, 158);
 
-    // Warm storybook cartoon lighting palette per Act
+    // Bright, clear storybook cartoon lighting palette per Act (especially brighter in Acts 3 & 4!)
     const actLighting: Record<
       ActNumber,
-      { sky: string; ground: string; sun: string; sunInt: number; rim: string; mote: string }
+      { sky: string; ground: string; hemiInt: number; sun: string; sunInt: number; rim: string; mote: string; exposure: number }
     > = {
-      1: { sky: '#c4d2fa', ground: '#372e4f', sun: '#ffecd1', sunInt: 1.12, rim: '#93c5fd', mote: '#fbd38d' },
-      2: { sky: '#fff0d1', ground: '#634028', sun: '#fff5e0', sunInt: 1.04, rim: '#7dd3fc', mote: '#fde68a' },
-      3: { sky: '#a7f0d6', ground: '#243d36', sun: '#efe0ff', sunInt: 1.08, rim: '#c4b5fd', mote: '#86efac' },
-      4: { sky: '#d4a3f5', ground: '#401a28', sun: '#ffd4d4', sunInt: 1.08, rim: '#fb7185', mote: '#fca5a5' },
+      1: { sky: '#cfdcff', ground: '#42385e', hemiInt: 0.85, sun: '#ffeed6', sunInt: 1.16, rim: '#93c5fd', mote: '#fbd38d', exposure: 1.06 },
+      2: { sky: '#fff2d6', ground: '#6b472d', hemiInt: 0.85, sun: '#fff7e3', sunInt: 1.08, rim: '#7dd3fc', mote: '#fde68a', exposure: 1.04 },
+      3: { sky: '#c8ffea', ground: '#3e6e5c', hemiInt: 1.08, sun: '#fff5ff', sunInt: 1.28, rim: '#d8b4fe', mote: '#86efac', exposure: 1.16 },
+      4: { sky: '#ebd0ff', ground: '#6e3652', hemiInt: 1.08, sun: '#ffe8ec', sunInt: 1.28, rim: '#fda4af', mote: '#fca5a5', exposure: 1.16 },
     };
     const al = actLighting[mapData.location.act];
     this.hemiLight.color.set(al.sky);
     this.hemiLight.groundColor.set(al.ground);
+    this.hemiLight.intensity = al.hemiInt;
     this.sunLight.color.set(al.sun);
     this.sunLight.intensity = al.sunInt;
     this.rimLight.color.set(al.rim);
+    this.renderer.toneMappingExposure = al.exposure;
     (this.ambientMotes.material as THREE.PointsMaterial).color.set(al.mote);
 
     this.mapHandles = buildWorldMap(mapData);
