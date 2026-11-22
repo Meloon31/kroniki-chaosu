@@ -3,9 +3,11 @@ services:
     name: kroniki-chaosu
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
+      - key: ELECTRON_SKIP_BINARY_DOWNLOAD
+        value: "1"
