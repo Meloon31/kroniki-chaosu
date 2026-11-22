@@ -8,6 +8,7 @@ import type {
   WorldSnapshot,
 } from '../../shared/types';
 import { buildCharacterRig, CharacterRig, updateCharacterRig } from './CharacterBuilder';
+import { createSoftGlowSpriteTexture } from './ComicMaterials';
 import { buildEnemyRig, EnemyRig, updateEnemyRig } from './EnemyBuilder';
 import { EffectsManager } from './EffectsManager';
 import { BuiltMapHandles, buildWorldMap, syncWorldMapVisuals } from './MapBuilder';
@@ -146,9 +147,12 @@ export class GameEngine {
     moteGeo.setAttribute('position', new THREE.BufferAttribute(motePos, 3));
     const moteMat = new THREE.PointsMaterial({
       color: '#f5cfa0',
-      size: 0.24,
+      map: createSoftGlowSpriteTexture(),
+      size: 0.46,
       transparent: true,
-      opacity: 0.3,
+      opacity: 0.46,
+      alphaTest: 0.01,
+      blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
     this.ambientMotes = new THREE.Points(moteGeo, moteMat);

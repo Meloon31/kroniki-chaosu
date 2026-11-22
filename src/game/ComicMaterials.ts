@@ -11,8 +11,8 @@ let contactShadowTexture: THREE.CanvasTexture | null = null;
 export function getToonGradientMap(): THREE.DataTexture {
   if (softToonGradient) return softToonGradient;
 
-  // Crisp yet velvety comic cel-shading ramp: warm shadow -> rich midtone -> bright comic highlight!
-  const samples = [104, 108, 114, 178, 186, 194, 232, 240, 248, 255];
+  // Plush, eye-friendly comic cel-shading ramp: luminous warm shadow -> vibrant midtone -> creamy highlight!
+  const samples = [122, 130, 142, 186, 198, 210, 238, 245, 251, 255];
   const data = new Uint8Array(samples.length * 4);
   for (let i = 0; i < samples.length; i++) {
     const v = samples[i];
@@ -34,7 +34,7 @@ export function getToonGradientMap(): THREE.DataTexture {
 
 const outlineMaterialCache = new Map<string, THREE.ShaderMaterial>();
 
-export function getOutlineMaterial(thickness = 0.032, colorHex = '#231836'): THREE.ShaderMaterial {
+export function getOutlineMaterial(thickness = 0.032, colorHex = '#25193d'): THREE.ShaderMaterial {
   const key = `${thickness.toFixed(3)}_${colorHex}`;
   const cached = outlineMaterialCache.get(key);
   if (cached) return cached;
@@ -747,8 +747,8 @@ export function createToonMaterial(
     rimStrength?: number;
   }
 ): THREE.MeshToonMaterial {
-  const clampedEmissive = Math.min(0.45, options?.emissiveIntensity ?? 0);
-  const rimStrength = options?.rimStrength ?? 0.28;
+  const clampedEmissive = Math.min(0.48, options?.emissiveIntensity ?? 0);
+  const rimStrength = options?.rimStrength ?? 0.34;
 
   const mat = new THREE.MeshToonMaterial({
     color: options?.map ? 0xffffff : color,
@@ -772,12 +772,12 @@ export function createToonMaterial(
         )
         .replace(
           '#include <dithering_fragment>',
-          `float softRim = pow(1.0 - max(dot(normalize(vNormal), normalize(vViewPosition)), 0.0), 2.3);
-           gl_FragColor.rgb += mix(diffuseColor.rgb, vec3(1.0, 0.98, 0.93), 0.58) * softRim * uRimStrength;
+          `float softRim = pow(1.0 - max(dot(normalize(vNormal), normalize(vViewPosition)), 0.0), 2.1);
+           gl_FragColor.rgb += mix(diffuseColor.rgb, vec3(1.0, 0.97, 0.90), 0.62) * softRim * uRimStrength;
            #include <dithering_fragment>`
         );
     };
-    mat.customProgramCacheKey = () => `soft_toon_rim_${rimStrength.toFixed(2)}`;
+    mat.customProgramCacheKey = () => `soft_toon_rim_v2_${rimStrength.toFixed(2)}`;
   }
 
   return mat;
@@ -817,7 +817,7 @@ export function createComicMesh(
   if (outlineThickness > 0) {
     const outline = new THREE.Mesh(
       geometry,
-      getOutlineMaterial(outlineThickness, options?.outlineColor ?? '#1f1433')
+      getOutlineMaterial(outlineThickness, options?.outlineColor ?? '#25193d')
     );
     outline.castShadow = false;
     outline.receiveShadow = false;
@@ -897,18 +897,281 @@ export function getUpgradeGlowColor(upgradeLevel: number): THREE.Color | null {
   if (upgradeLevel <= 9) return new THREE.Color('#38bdf8');
   if (upgradeLevel <= 11) return new THREE.Color('#f59e0b');
   if (upgradeLevel === 12) return new THREE.Color('#a855f7');
-  return new THREE.Color('#f43f5e');
+  if (upgradeLevel === 13) return new THREE.Color('#f43f5e');
+  return new THREE.Color('#00f5d4');
 }
 
+let softGlowSpriteTexture: THREE.CanvasTexture | null = null;
+
 /**
- * Hand-painted, organic storybook ground texture per Act (ZERO square grid lines!).
- * Uses soft rounded cobblestones, sweeping desert dunes, flower-speckled mossy turf, or smooth basalt islands.
+ * Circular soft glowing orb texture for ambient motes & magical sparkles (ZERO square pixel dots!).
+ */
+export function createSoftGlowSpriteTexture(): THREE.CanvasTexture {
+  if (softGlowSpriteTexture) return softGlowSpriteTexture;
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 1, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+  grad.addColorStop(0.32, 'rgba(255, 255, 255, 0.82)');
+  grad.addColorStop(0.68, 'rgba(255, 255, 255, 0.24)');
+  grad.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  softGlowSpriteTexture = tex;
+  return tex;
+}
+
+const runicCircleCache = new Map<string, THREE.CanvasTexture>();
+
+/**
+ * Hand-painted stylized MMO comic runic circle texture for Skills, Boss Arenas & Hero Pedestal!
+ */
+export function createRunicCircleTexture(colorHex: string): THREE.CanvasTexture {
+  const cached = runicCircleCache.get(colorHex);
+  if (cached) return cached;
+
+  const size = 512;
+  const cx = size / 2;
+  const cy = size / 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+
+  // Soft radiant center halo
+  const bgGrad = ctx.createRadialGradient(cx, cy, 18, cx, cy, 240);
+  bgGrad.addColorStop(0, `${colorHex}44`);
+  bgGrad.addColorStop(0.55, `${colorHex}18`);
+  bgGrad.addColorStop(0.88, `${colorHex}33`);
+  bgGrad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, size, size);
+
+  // Outer comic dark ink outline + bright glowing runic ring
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(20, 14, 38, 0.65)';
+  ctx.lineWidth = 18;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 224, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.strokeStyle = colorHex;
+  ctx.lineWidth = 10;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 224, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Inner dashed arcane ring
+  ctx.strokeStyle = '#ffffff';
+  ctx.globalAlpha = 0.72;
+  ctx.lineWidth = 4;
+  ctx.setLineDash([18, 14]);
+  ctx.beginPath();
+  ctx.arc(cx, cy, 186, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+
+  // Inner solid ring
+  ctx.strokeStyle = colorHex;
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 146, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // 8 stylized rounded comic star-glyphs around the circle
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const rx = cx + Math.cos(a) * 204;
+    const ry = cy + Math.sin(a) * 204;
+    ctx.save();
+    ctx.translate(rx, ry);
+    ctx.rotate(a + Math.PI / 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = colorHex;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, -14);
+    ctx.quadraticCurveTo(5, -4, 12, 0);
+    ctx.quadraticCurveTo(5, 4, 0, 14);
+    ctx.quadraticCurveTo(-5, 4, -12, 0);
+    ctx.quadraticCurveTo(-5, -4, 0, -14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Stylized 8-point soft star in center
+  ctx.strokeStyle = `${colorHex}aa`;
+  ctx.lineWidth = 5;
+  for (let k = 0; k < 2; k++) {
+    const offset = k * (Math.PI / 4);
+    ctx.beginPath();
+    for (let i = 0; i < 4; i++) {
+      const a = offset + (i / 4) * Math.PI * 2;
+      const px = cx + Math.cos(a) * 140;
+      const py = cy + Math.sin(a) * 140;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.LinearFilter;
+  runicCircleCache.set(colorHex, tex);
+  return tex;
+}
+
+const wallTextureCache = new Map<string, THREE.CanvasTexture>();
+
+/**
+ * Hand-painted rounded storybook comic wall texture per Act (replaces flat solid-color walls!).
+ */
+export function createComicWallTexture(
+  baseHex: string,
+  accentHex: string,
+  act: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 = 1
+): THREE.CanvasTexture {
+  const key = `${baseHex}_${accentHex}_${act}`;
+  const cached = wallTextureCache.get(key);
+  if (cached) return cached;
+
+  const size = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = baseHex;
+  ctx.fillRect(0, 0, size, size);
+
+  // Soft vertical painterly gradient for warmth & readability
+  const vGrad = ctx.createLinearGradient(0, 0, 0, size);
+  vGrad.addColorStop(0, 'rgba(255, 250, 240, 0.16)');
+  vGrad.addColorStop(0.55, 'rgba(255, 255, 255, 0)');
+  vGrad.addColorStop(1, 'rgba(24, 16, 44, 0.24)');
+  ctx.fillStyle = vGrad;
+  ctx.fillRect(0, 0, size, size);
+
+  // Hand-painted rounded comic masonry courses
+  const rows = 5;
+  const rowH = size / rows;
+  for (let r = 0; r < rows; r++) {
+    const cols = r % 2 === 0 ? 4 : 5;
+    const brickW = size / cols;
+    const offset = r % 2 === 0 ? 0 : -brickW * 0.45;
+    for (let c = 0; c <= cols; c++) {
+      const bx = offset + c * brickW + 7;
+      const by = r * rowH + 7;
+      const bw = brickW - 14;
+      const bh = rowH - 14;
+      const seed = (r * 17 + c * 31) % 7;
+
+      ctx.fillStyle =
+        seed === 0
+          ? 'rgba(255, 252, 245, 0.11)'
+          : seed === 1
+            ? 'rgba(22, 14, 42, 0.14)'
+            : seed === 2
+              ? `${accentHex}38`
+              : 'rgba(255, 255, 255, 0.04)';
+      ctx.strokeStyle = 'rgba(26, 18, 46, 0.34)';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.roundRect(bx, by, bw, bh, 22);
+      ctx.fill();
+      ctx.stroke();
+
+      // Painted upper rim highlight on every rounded stone!
+      ctx.strokeStyle = 'rgba(255, 252, 244, 0.18)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(bx + 18, by + 8);
+      ctx.lineTo(bx + bw - 22, by + 8);
+      ctx.stroke();
+    }
+  }
+
+  // Thematic storybook trim stripe along upper wall frieze!
+  if (act === 2 || act === 6 || act === 8) {
+    // Golden carved comic frieze band
+    ctx.fillStyle = `${accentHex}55`;
+    ctx.fillRect(0, 26, size, 28);
+    ctx.strokeStyle = 'rgba(26, 18, 46, 0.38)';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(0, 26, size, 28);
+    for (let x = 24; x < size; x += 64) {
+      ctx.fillStyle = '#fef08a';
+      ctx.beginPath();
+      ctx.arc(x, 40, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (act === 3 || act === 9) {
+    // Lush creeping cartoon moss & emerald vines draping from the top!
+    for (let v = 0; v < 9; v++) {
+      const vx = v * 62 + 18;
+      const vh = 64 + ((v * 37) % 80);
+      ctx.fillStyle = act === 9 ? 'rgba(52, 211, 153, 0.44)' : 'rgba(74, 222, 128, 0.36)';
+      ctx.beginPath();
+      ctx.ellipse(vx, vh * 0.45, 26, vh * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (act === 5 || act === 7) {
+    // Shimmering crystal/starlight speckles on Frost & Eternity stonework
+    for (let s = 0; s < 14; s++) {
+      const sx = (s * 97 + 28) % size;
+      const sy = (s * 143 + 32) % size;
+      ctx.fillStyle = act === 5 ? 'rgba(224, 242, 254, 0.48)' : 'rgba(0, 245, 212, 0.44)';
+      ctx.beginPath();
+      ctx.arc(sx, sy, 6 + (s % 4) * 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (act === 4) {
+    // Glowing rose-magma rune seams on Obsidian Citadel walls
+    ctx.strokeStyle = 'rgba(251, 113, 133, 0.42)';
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 4; i++) {
+      const lx = i * 128 + 44;
+      ctx.beginPath();
+      ctx.moveTo(lx, 12);
+      ctx.quadraticCurveTo(lx + 22, size * 0.5, lx - 14, size - 12);
+      ctx.stroke();
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.LinearFilter;
+  wallTextureCache.set(key, tex);
+  return tex;
+}
+
+const floorTextureCache = new Map<string, THREE.CanvasTexture>();
+
+/**
+ * Hand-painted, organic storybook ground texture per Act (all 9 Acts bespoke, ZERO square grid lines!).
  */
 export function createComicFloorTexture(
   baseHex: string,
   accentHex: string,
   act: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 = 1
 ): THREE.CanvasTexture {
+  const key = `${baseHex}_${accentHex}_${act}`;
+  const cached = floorTextureCache.get(key);
+  if (cached) return cached;
+
   const size = 512;
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -919,12 +1182,12 @@ export function createComicFloorTexture(
   ctx.fillRect(0, 0, size, size);
 
   // Soft watercolor background blotches for storybook warmth
-  for (let i = 0; i < 28; i++) {
+  for (let i = 0; i < 30; i++) {
     const bx = (i * 137) % size;
     const by = (i * 211) % size;
-    const br = 42 + (i % 5) * 20;
+    const br = 46 + (i % 5) * 22;
     const grad = ctx.createRadialGradient(bx, by, 4, bx, by, br);
-    grad.addColorStop(0, i % 2 === 0 ? accentHex : 'rgba(255,250,240,0.075)');
+    grad.addColorStop(0, i % 2 === 0 ? accentHex : 'rgba(255,250,240,0.11)');
     grad.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = grad;
     ctx.beginPath();
@@ -933,8 +1196,8 @@ export function createComicFloorTexture(
   }
 
   if (act === 1) {
-    // Storybook plump organic river-rounded flagstones (oval & pill pebbles, ZERO grid!)
-    for (let i = 0; i < 28; i++) {
+    // Act 1: Plump organic river-rounded flagstones + tiny mossy tufts
+    for (let i = 0; i < 30; i++) {
       const cx = ((i * 97 + 42) % (size - 40)) + 20;
       const cy = ((i * 149 + 34) % (size - 40)) + 20;
       const rx = 28 + (i % 4) * 11;
@@ -943,23 +1206,22 @@ export function createComicFloorTexture(
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(rot);
-      ctx.fillStyle = i % 3 === 0 ? accentHex : 'rgba(255, 250, 245, 0.065)';
-      ctx.strokeStyle = 'rgba(26, 20, 44, 0.26)';
+      ctx.fillStyle = i % 3 === 0 ? accentHex : 'rgba(255, 250, 245, 0.09)';
+      ctx.strokeStyle = 'rgba(26, 20, 44, 0.24)';
       ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
 
-      // Soft painted upper crescent highlight
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.09)';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
       ctx.beginPath();
       ctx.ellipse(-rx * 0.14, -ry * 0.25, rx * 0.56, ry * 0.28, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }
   } else if (act === 2) {
-    // Sweeping plush desert sand dunes & smooth sandstone pebbles
+    // Act 2: Sweeping plush golden desert sand dunes + turquoise oasis pebbles
     ctx.strokeStyle = accentHex;
     ctx.lineWidth = 12;
     ctx.lineCap = 'round';
@@ -975,34 +1237,38 @@ export function createComicFloorTexture(
     for (let p = 0; p < 30; p++) {
       const px = (p * 97) % size;
       const py = (p * 173) % size;
-      ctx.fillStyle = p % 2 === 0 ? 'rgba(150, 88, 28, 0.24)' : 'rgba(255, 248, 220, 0.24)';
+      ctx.fillStyle =
+        p % 5 === 0
+          ? 'rgba(56, 189, 248, 0.24)'
+          : p % 2 === 0
+            ? 'rgba(150, 88, 28, 0.22)'
+            : 'rgba(255, 248, 220, 0.26)';
       ctx.beginPath();
-      ctx.ellipse(px, py, 10 + (p % 7), 7 + (p % 4), p * 0.5, 0, Math.PI * 2);
+      ctx.ellipse(px, py, 11 + (p % 7), 8 + (p % 4), p * 0.5, 0, Math.PI * 2);
       ctx.fill();
     }
   } else if (act === 3) {
-    // Fairy-tale mossy forest earth with soft clover circles & tiny pastel blossoms
+    // Act 3: Fairy-tale mossy forest earth with stepping stones & glowing pastel blossoms
     for (let p = 0; p < 38; p++) {
       const px = (p * 89) % size;
       const py = (p * 151) % size;
-      ctx.fillStyle = p % 3 === 0 ? 'rgba(134, 239, 172, 0.13)' : accentHex;
+      ctx.fillStyle = p % 3 === 0 ? 'rgba(134, 239, 172, 0.18)' : accentHex;
       ctx.beginPath();
       ctx.arc(px, py, 16 + (p % 15), 0, Math.PI * 2);
       ctx.fill();
     }
-    // Cute tiny fairytale flower speckles
     const flowerCols = ['#f9a8d4', '#fde047', '#c4b5fd', '#7dd3fc'];
-    for (let f = 0; f < 16; f++) {
+    for (let f = 0; f < 22; f++) {
       const fx = (f * 131 + 22) % size;
       const fy = (f * 187 + 44) % size;
       ctx.fillStyle = flowerCols[f % flowerCols.length];
       ctx.beginPath();
-      ctx.arc(fx, fy, 4.5, 0, Math.PI * 2);
+      ctx.arc(fx, fy, 5, 0, Math.PI * 2);
       ctx.fill();
     }
-  } else {
-    // Act 4: Smooth round volcanic basalt stones with gentle glowing magma curves
-    ctx.strokeStyle = 'rgba(244, 63, 94, 0.28)';
+  } else if (act === 4) {
+    // Act 4: Smooth round volcanic basalt stones with glowing rose-amber magma curves
+    ctx.strokeStyle = 'rgba(251, 113, 133, 0.34)';
     ctx.lineWidth = 6;
     ctx.lineCap = 'round';
     for (let v = 0; v < 8; v++) {
@@ -1012,16 +1278,127 @@ export function createComicFloorTexture(
       ctx.bezierCurveTo(vx + 65, size * 0.35, vx - 65, size * 0.65, vx, size);
       ctx.stroke();
     }
-    for (let s = 0; s < 22; s++) {
+    for (let s = 0; s < 24; s++) {
       const sx = (s * 117 + 30) % size;
       const sy = (s * 163 + 25) % size;
       ctx.fillStyle = accentHex;
-      ctx.strokeStyle = 'rgba(16, 10, 26, 0.4)';
+      ctx.strokeStyle = 'rgba(20, 12, 34, 0.36)';
       ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.ellipse(sx, sy, 34 + (s % 4) * 6, 26 + (s % 3) * 5, s * 0.4, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
+    }
+  } else if (act === 5) {
+    // Act 5 (HARDCORE Frost): Luminous frosted snowdrifts & crystal ice medallions!
+    ctx.strokeStyle = 'rgba(224, 242, 254, 0.42)';
+    ctx.lineWidth = 8;
+    ctx.lineCap = 'round';
+    for (let row = 36; row < size; row += 76) {
+      ctx.beginPath();
+      for (let x = 0; x <= size; x += 28) {
+        const y = row + Math.cos((x / size) * Math.PI * 2 + row * 0.03) * 18;
+        if (x === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    for (let i = 0; i < 24; i++) {
+      const ix = ((i * 109 + 28) % (size - 40)) + 20;
+      const iy = ((i * 167 + 22) % (size - 40)) + 20;
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(224, 242, 254, 0.25)' : 'rgba(56, 189, 248, 0.24)';
+      ctx.strokeStyle = 'rgba(14, 116, 144, 0.24)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(ix, iy, 28 + (i % 4) * 8, 20 + (i % 3) * 7, i * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  } else if (act === 6) {
+    // Act 6 (HARDCORE Forge): Warm bronze forge flagstones with glowing golden molten veins!
+    ctx.strokeStyle = 'rgba(251, 191, 36, 0.38)';
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'round';
+    for (let v = 0; v < 6; v++) {
+      const vx = v * 92 + 24;
+      ctx.beginPath();
+      ctx.moveTo(vx, 0);
+      ctx.bezierCurveTo(vx + 50, size * 0.33, vx - 50, size * 0.66, vx, size);
+      ctx.stroke();
+    }
+    for (let s = 0; s < 26; s++) {
+      const sx = ((s * 103 + 26) % (size - 48)) + 24;
+      const sy = ((s * 157 + 26) % (size - 48)) + 24;
+      ctx.fillStyle = s % 2 === 0 ? 'rgba(124, 65, 28, 0.42)' : 'rgba(253, 224, 71, 0.14)';
+      ctx.strokeStyle = 'rgba(42, 20, 10, 0.36)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.roundRect(sx - 28, sy - 20, 56, 40, 16);
+      ctx.fill();
+      ctx.stroke();
+    }
+  } else if (act === 7) {
+    // Act 7 (HARDCORE Eternity): Celestial lavender-marble stones + golden-teal starlight rings!
+    for (let c = 0; c < 18; c++) {
+      const cx = ((c * 131 + 36) % (size - 40)) + 20;
+      const cy = ((c * 193 + 32) % (size - 40)) + 20;
+      ctx.fillStyle = c % 2 === 0 ? 'rgba(255, 255, 255, 0.14)' : 'rgba(92, 75, 143, 0.34)';
+      ctx.strokeStyle = c % 3 === 0 ? 'rgba(0, 245, 212, 0.34)' : 'rgba(253, 224, 71, 0.28)';
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 24 + (c % 4) * 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    for (let st = 0; st < 28; st++) {
+      const sx = (st * 83 + 19) % size;
+      const sy = (st * 149 + 37) % size;
+      ctx.fillStyle = st % 2 === 0 ? '#00f5d4' : '#fde047';
+      ctx.beginPath();
+      ctx.arc(sx, sy, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (act === 8) {
+    // Act 8 (GUILD I Royal): Bright palace marble rounded flagstones + warm gilded inlays!
+    for (let i = 0; i < 28; i++) {
+      const cx = ((i * 97 + 34) % (size - 44)) + 22;
+      const cy = ((i * 151 + 30) % (size - 44)) + 22;
+      ctx.fillStyle = i % 3 === 0 ? 'rgba(251, 191, 36, 0.18)' : 'rgba(255, 255, 255, 0.22)';
+      ctx.strokeStyle = 'rgba(30, 58, 138, 0.24)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 32 + (i % 3) * 9, 24 + (i % 3) * 6, (i % 5 - 2) * 0.1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    for (let g = 0; g < 16; g++) {
+      const gx = (g * 127 + 20) % size;
+      const gy = (g * 179 + 30) % size;
+      ctx.fillStyle = 'rgba(251, 191, 36, 0.45)';
+      ctx.beginPath();
+      ctx.arc(gx, gy, 5.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else {
+    // Act 9 (GUILD II Emerald Dragon): Carved jade temple flagstones + golden-amber gems & blossoms!
+    for (let i = 0; i < 28; i++) {
+      const cx = ((i * 101 + 30) % (size - 44)) + 22;
+      const cy = ((i * 157 + 28) % (size - 44)) + 22;
+      ctx.fillStyle = i % 3 === 0 ? accentHex : 'rgba(167, 243, 208, 0.22)';
+      ctx.strokeStyle = 'rgba(6, 78, 59, 0.28)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 30 + (i % 4) * 8, 22 + (i % 3) * 6, (i % 4) * 0.25, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    for (let g = 0; g < 18; g++) {
+      const gx = (g * 113 + 25) % size;
+      const gy = (g * 173 + 40) % size;
+      ctx.fillStyle = g % 2 === 0 ? '#fde047' : '#34d399';
+      ctx.beginPath();
+      ctx.arc(gx, gy, 5, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 
@@ -1030,5 +1407,6 @@ export function createComicFloorTexture(
   tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.magFilter = THREE.LinearFilter;
+  floorTextureCache.set(key, tex);
   return tex;
 }

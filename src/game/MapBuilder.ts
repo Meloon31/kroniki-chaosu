@@ -11,8 +11,11 @@ import type {
 import {
   createComicFloorTexture,
   createComicMesh,
+  createComicWallTexture,
   createContactShadow,
+  createPlushLathe,
   createRoundedBoxGeometry,
+  createRunicCircleTexture,
   createToonMaterial,
 } from './ComicMaterials';
 
@@ -103,34 +106,38 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
   floorMesh.receiveShadow = true;
   root.add(floorMesh);
 
-  // Soft circular floor medallion inlays for special rooms (rounded, NOT diamond squares!)
+  // Hand-painted glowing comic runic floor medallions for special rooms!
   for (const room of map.rooms) {
-    if (room.kind === 'boss' || room.kind === 'secret' || room.kind === 'puzzle') {
+    if (room.kind === 'boss' || room.kind === 'secret' || room.kind === 'puzzle' || room.kind === 'spawn') {
       const col =
         room.kind === 'boss'
-          ? '#be123c'
+          ? theme.accentGlowColor
           : room.kind === 'secret'
-            ? '#d97706'
-            : '#0284c7';
-      const border = new THREE.Mesh(
-        new THREE.RingGeometry(10.8, 11.4, 36),
+            ? '#fbbf24'
+            : room.kind === 'spawn'
+              ? '#38bdf8'
+              : '#a855f7';
+      const medSize = room.kind === 'boss' ? 21 : room.kind === 'spawn' ? 11 : 15;
+      const runicPlane = new THREE.Mesh(
+        new THREE.PlaneGeometry(medSize, medSize),
         new THREE.MeshBasicMaterial({
-          color: col,
-          side: THREE.DoubleSide,
+          map: createRunicCircleTexture(col),
           transparent: true,
-          opacity: 0.16,
+          opacity: room.kind === 'boss' ? 0.36 : 0.28,
           depthWrite: false,
         })
       );
-      border.rotation.x = -Math.PI / 2;
-      border.position.set(room.cx, 0.03, room.cz);
-      root.add(border);
+      runicPlane.rotation.x = -Math.PI / 2;
+      runicPlane.position.set(room.cx, 0.035, room.cz);
+      root.add(runicPlane);
     }
   }
 
-  // Plush, pillowy cartoon walls with rounded end-pillars / organic boulders (ZERO boxy corners!)
-  const wallMat = createToonMaterial(theme.wallColor, { rimStrength: 0.16 });
-  const wallCapMat = createToonMaterial(theme.wallTopColor, { rimStrength: 0.22 });
+  // Hand-painted plush comic walls with rounded stonework texture & warm turret-pillar lanterns!
+  const wallTex = createComicWallTexture(theme.wallColor, theme.accentGlowColor, map.location.act);
+  wallTex.repeat.set(0.24, 0.24);
+  const wallMat = createToonMaterial(theme.wallColor, { map: wallTex, rimStrength: 0.24 });
+  const wallCapMat = createToonMaterial(theme.wallTopColor, { rimStrength: 0.32 });
   const wallGeoCache = new Map<string, THREE.BufferGeometry>();
   const capGeoCache = new Map<string, THREE.BufferGeometry>();
 
@@ -138,7 +145,7 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     const key = `${w.toFixed(1)}_${h.toFixed(1)}_${d.toFixed(1)}`;
     let g = wallGeoCache.get(key);
     if (!g) {
-      g = createRoundedBoxGeometry(w, h, d, 0.72, 6);
+      g = createRoundedBoxGeometry(w, h, d, 0.78, 7);
       wallGeoCache.set(key, g);
     }
     return g;
@@ -148,26 +155,34 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     const key = `${w.toFixed(1)}_${d.toFixed(1)}`;
     let g = capGeoCache.get(key);
     if (!g) {
-      g = createRoundedBoxGeometry(w + 0.44, 0.62, d + 0.44, 0.3, 5);
+      g = createRoundedBoxGeometry(w + 0.48, 0.66, d + 0.48, 0.34, 6);
       capGeoCache.set(key, g);
     }
     return g;
   };
 
-  // Shared rounded pillar & decorative shrub/rock geometries for breaking up straight wall lines!
-  const endPillarGeo = new THREE.CapsuleGeometry(0.88, 2.5, 10, 16);
-  const endCapGeo = new THREE.SphereGeometry(1.02, 16, 12);
-  const shrubGeo = new THREE.SphereGeometry(0.68, 14, 10);
-  const shrubMat = createToonMaterial(
-    map.location.act === 3
-      ? '#2ea35c'
-      : map.location.act === 2
-        ? '#d9a148'
-        : map.location.act === 4
-          ? '#4a2138'
-          : '#566482',
-    { rimStrength: 0.22 }
-  );
+  // Shared rounded pillar, glowing lantern orb & decorative shrub/rock geometries per Act!
+  const endPillarGeo = new THREE.CapsuleGeometry(0.92, 2.55, 12, 18);
+  const endCapGeo = new THREE.SphereGeometry(1.06, 18, 14);
+  const lanternGeo = new THREE.SphereGeometry(0.34, 14, 12);
+  const lanternMat = createToonMaterial(theme.accentGlowColor, {
+    emissive: theme.accentGlowColor,
+    emissiveIntensity: 0.45,
+    rimStrength: 0.35,
+  });
+  const shrubGeo = new THREE.SphereGeometry(0.72, 16, 12);
+  const shrubColorByAct: Record<number, string> = {
+    1: '#527060',
+    2: '#dfa64d',
+    3: '#2eb868',
+    4: '#5b2848',
+    5: '#7dd3fc',
+    6: '#b8682c',
+    7: '#7c5cc4',
+    8: '#3b82f6',
+    9: '#10b981',
+  };
+  const shrubMat = createToonMaterial(shrubColorByAct[map.location.act] || '#566482', { rimStrength: 0.28 });
 
   for (const w of map.walls) {
     if (w.gateId) {
@@ -255,9 +270,17 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
 
         // Soft decorative boulder / mossy puff nestled at pillar base
         const puff = new THREE.Mesh(shrubGeo, shrubMat);
-        puff.scale.set(1.1, 0.72, 1.1);
+        puff.scale.set(1.12, 0.74, 1.12);
         puff.position.set(px + (isHoriz ? 0 : endSign * 0.45), 0.38, pz + (isHoriz ? endSign * 0.45 : 0));
         root.add(pillar, cap, puff);
+
+        // Warm comic glowing crystal/lantern finial atop alternating major pillars!
+        if (endSign === 1 && len >= 9) {
+          const finial = new THREE.Mesh(lanternGeo, lanternMat);
+          finial.scale.set(0.95, 1.28, 0.95);
+          finial.position.set(px, w.h + 0.72, pz);
+          root.add(finial);
+        }
       }
     }
   }
@@ -347,10 +370,24 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
         torso.position.y = 0.95;
         const head = createComicMesh(new THREE.SphereGeometry(0.42, 14, 12), '#9aa4b5', 0.028);
         head.position.y = 1.85;
-        const arrow = createComicMesh(new THREE.ConeGeometry(0.28, 0.95, 12), '#d99e26', 0.024, {
-          emissive: '#b45309',
-          emissiveIntensity: 0.22,
-        });
+        const arrow = createComicMesh(
+          createPlushLathe(
+            [
+              [0.01, -0.45],
+              [0.32, -0.35],
+              [0.22, 0.15],
+              [0.06, 0.48],
+              [0.01, 0.52],
+            ],
+            18
+          ),
+          '#f0b429',
+          0.024,
+          {
+            emissive: '#b45309',
+            emissiveIntensity: 0.24,
+          }
+        );
         arrow.rotation.x = Math.PI / 2;
         arrow.position.set(0, 1.15, 0.98);
         statueBody.add(torso, head, arrow);
@@ -406,7 +443,7 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
 
     const baseColor = ch.isSecret ? '#cf8d1b' : '#854519';
     const trimColor = ch.isSecret ? '#f0ca56' : '#d6a442';
-    const body = createComicMesh(createRoundedBoxGeometry(1.55, 0.85, 1.1, 0.16, 3), baseColor, 0.028);
+    const body = createComicMesh(createRoundedBoxGeometry(1.55, 0.85, 1.1, 0.22, 6), baseColor, 0.028);
     body.position.y = 0.44;
 
     // Domed barrel lid!
@@ -669,13 +706,49 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
       }
       case 'obsidian_crystal':
       case 'chaos_monolith': {
-        pGroup.add(createContactShadow(1.1, 0.44));
-        const cry = createComicMesh(new THREE.CapsuleGeometry(0.68, 2.2, 8, 12), '#211e2b', 0.032, {
-          emissive: '#9f1239',
-          emissiveIntensity: 0.25,
+        pGroup.add(createContactShadow(1.15, 0.42));
+        const cryBaseCol =
+          map.location.act === 5
+            ? '#7dd3fc'
+            : map.location.act === 7
+              ? '#c084fc'
+              : map.location.act === 9
+                ? '#10b981'
+                : '#2b253d';
+        const cryEmissive =
+          map.location.act === 5
+            ? '#38bdf8'
+            : map.location.act === 7
+              ? '#00f5d4'
+              : map.location.act === 9
+                ? '#34d399'
+                : '#e11d48';
+        const cry = createComicMesh(
+          createPlushLathe(
+            [
+              [0.01, -1.2],
+              [0.64, -0.75],
+              [0.74, 0.15],
+              [0.44, 0.95],
+              [0.01, 1.38],
+            ],
+            18
+          ),
+          cryBaseCol,
+          0.032,
+          {
+            emissive: cryEmissive,
+            emissiveIntensity: 0.32,
+          }
+        );
+        cry.position.y = 1.95;
+        const sideGem = createComicMesh(new THREE.CapsuleGeometry(0.28, 0.85, 8, 14), cryEmissive, 0.022, {
+          emissive: cryEmissive,
+          emissiveIntensity: 0.34,
         });
-        cry.position.y = 1.9;
-        pGroup.add(cry);
+        sideGem.position.set(0.62, 0.85, 0.25);
+        sideGem.rotation.z = -0.32;
+        pGroup.add(cry, sideGem);
         animatedProps.push(cry);
         break;
       }

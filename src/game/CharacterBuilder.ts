@@ -7,6 +7,7 @@ import {
   createHeroFaceTexture,
   createPlushLathe,
   createRoundedBoxGeometry,
+  createRunicCircleTexture,
   createSoftBladeGeometry,
   createSoftStarGeometry,
   createSoftWingGeometry,
@@ -60,10 +61,10 @@ export function buildCharacterRig(
   ring.position.y = 0.04;
   root.add(ring);
 
-  const auraGeo = new THREE.RingGeometry(0.94, 1.16, 36);
+  const auraGeo = new THREE.PlaneGeometry(2.55, 2.55);
   const auraMat = new THREE.MeshBasicMaterial({
     color: '#38bdf8',
-    side: THREE.DoubleSide,
+    map: createRunicCircleTexture('#ffffff'),
     transparent: true,
     opacity: 0,
     depthWrite: false,
@@ -1150,9 +1151,10 @@ export function updateCharacterRig(
   if (wGlow >= 7) {
     const glowCol = getUpgradeGlowColor(wGlow);
     if (glowCol) {
-      if (wGlow === 13) wMat.color.setHSL((elapsedSec * 0.4) % 1, 0.82, 0.58);
+      if (wGlow >= 14) wMat.color.setHSL(0.46 + Math.sin(elapsedSec * 3.0) * 0.08, 0.92, 0.62);
+      else if (wGlow === 13) wMat.color.setHSL((elapsedSec * 0.4) % 1, 0.85, 0.58);
       else wMat.color.copy(glowCol);
-      wMat.opacity = 0.18 + ((wGlow - 6) / 7) * 0.14 + Math.sin(elapsedSec * 7) * 0.04;
+      wMat.opacity = Math.min(0.48, 0.2 + ((Math.min(20, wGlow) - 6) / 14) * 0.22 + Math.sin(elapsedSec * 7) * 0.05);
     }
   } else {
     wMat.opacity = 0;
@@ -1163,9 +1165,11 @@ export function updateCharacterRig(
   if (aGlow >= 7) {
     const glowCol = getUpgradeGlowColor(aGlow);
     if (glowCol) {
-      if (aGlow === 13) aMat.color.setHSL((elapsedSec * 0.4 + 0.5) % 1, 0.82, 0.58);
+      if (aGlow >= 14) aMat.color.setHSL(0.46 + Math.sin(elapsedSec * 2.5) * 0.09, 0.92, 0.64);
+      else if (aGlow === 13) aMat.color.setHSL((elapsedSec * 0.4 + 0.5) % 1, 0.85, 0.6);
       else aMat.color.copy(glowCol);
-      aMat.opacity = 0.28 + Math.sin(elapsedSec * 5) * 0.08;
+      aMat.opacity = (aGlow >= 14 ? 0.52 : 0.36) + Math.sin(elapsedSec * 4.5) * 0.1;
+      rig.armorGlowRing.rotation.z = elapsedSec * (aGlow >= 14 ? 1.15 : 0.65);
     }
   } else {
     aMat.opacity = 0;

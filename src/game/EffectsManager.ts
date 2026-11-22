@@ -5,7 +5,9 @@ import type { GroundLoot, Rarity, SkillVfxEvent, TelegraphZone } from '../../sha
 import {
   createComicMesh,
   createContactShadow,
+  createPlushLathe,
   createRoundedBoxGeometry,
+  createRunicCircleTexture,
   createSoftBeamMaterial,
   createSoftStarGeometry,
   createToonMaterial,
@@ -16,6 +18,7 @@ interface TransientEffect {
   createdAt: number;
   durationMs: number;
   onUpdate: (t: number, dt: number) => void;
+  onDone?: () => void;
 }
 
 interface ComicParticle {
@@ -42,10 +45,11 @@ interface LootVisual {
   rarity?: Rarity;
 }
 
-const SHARED_SMOKE_GEO = new THREE.SphereGeometry(0.32, 12, 10);
-const SHARED_SHARD_GEO = new THREE.SphereGeometry(0.22, 10, 8);
-const SHARED_LEAF_GEO = new THREE.CircleGeometry(0.2, 10);
-const SHARED_SPARK_GEO = new THREE.CapsuleGeometry(0.06, 0.32, 6, 8);
+const SHARED_SMOKE_GEO = new THREE.SphereGeometry(0.32, 14, 12);
+const SHARED_SHARD_GEO = new THREE.SphereGeometry(0.22, 12, 10);
+const SHARED_LEAF_GEO = new THREE.CircleGeometry(0.2, 12);
+const SHARED_SPARK_GEO = new THREE.CapsuleGeometry(0.06, 0.34, 8, 10);
+const SHARED_STAR_GEO = createSoftStarGeometry(0.22, 0.1, 4, 0.045);
 
 export class EffectsManager {
   private scene: THREE.Scene;
@@ -53,6 +57,7 @@ export class EffectsManager {
   private particles: ComicParticle[] = [];
   private telegraphMeshes = new Map<string, { group: THREE.Group; fill: THREE.Mesh }>();
   private lootVisuals = new Map<string, LootVisual>();
+  private activeFlashLights = 0;
   private lastUpdateMs = performance.now();
 
   constructor(scene: THREE.Scene) {
@@ -62,6 +67,7 @@ export class EffectsManager {
   public clearAll() {
     for (const ef of this.transientEffects) this.scene.remove(ef.mesh);
     this.transientEffects = [];
+    this.activeFlashLights = 0;
 
     for (const p of this.particles) this.scene.remove(p.mesh);
     this.particles = [];
@@ -74,7 +80,7 @@ export class EffectsManager {
   }
 
   public spawnParticles(options: {
-    kind: 'smoke' | 'shard' | 'leaf' | 'spark';
+    kind: 'smoke' | 'shard' | 'leaf' | 'spark' | 'star';
     x: number;
     y: number;
     z: number;
@@ -91,7 +97,7 @@ export class EffectsManager {
     opacity?: number;
   }) {
     // Cap particle pool cleanly for silky 60 FPS
-    if (this.particles.length > 180) return;
+    if (this.particles.length > 280) return;
 
     const now = performance.now();
     const geo =
@@ -101,9 +107,11 @@ export class EffectsManager {
           ? SHARED_SHARD_GEO
           : options.kind === 'leaf'
             ? SHARED_LEAF_GEO
-            : SHARED_SPARK_GEO;
+            : options.kind === 'star'
+              ? SHARED_STAR_GEO
+              : SHARED_SPARK_GEO;
 
-    const startOpacity = options.opacity ?? (options.kind === 'smoke' ? 0.65 : 0.78);
+    const startOpacity = options.opacity ?? (options.kind === 'smoke' ? 0.65 : 0.85);
 
     for (let i = 0; i < options.count; i++) {
       const mat =
@@ -184,7 +192,7 @@ export class EffectsManager {
     maxRadius: number,
     color: THREE.ColorRepresentation,
     durationMs: number,
-    maxOpacity = 0.46,
+    maxOpacity = 0.56,
     thickness = 0.22
   ) {
     const now = performance.now();
@@ -196,7 +204,7 @@ export class EffectsManager {
       depthWrite: false,
     });
     const ring = new THREE.Mesh(
-      new THREE.RingGeometry(Math.max(0.1, 1 - thickness), 1.0, 28),
+      new THREE.RingGeometry(Math.max(0.1, 1 - thickness), 1.0, 36),
       ringMat
     );
     ring.rotation.x = -Math.PI / 2;
@@ -208,10 +216,74 @@ export class EffectsManager {
       createdAt: now,
       durationMs,
       onUpdate: (t) => {
-        const eased = 1 - Math.pow(1 - t, 2.2);
+        const eased = 1 - Math.pow(1 - t, 2.3);
         const s = 0.35 + eased * maxRadius;
         ring.scale.set(s, s, 1);
         ringMat.opacity = (1 - t) * maxOpacity;
+      },
+    });
+  }
+
+  private addRunicBurst(
+    x: number,
+    z: number,
+    maxRadius: number,
+    colorHex: string,
+    durationMs: number,
+    maxOpacity = 0.68,
+    spinSpeed = 1.8
+  ) {
+    const now = performance.now();
+    const mat = new THREE.MeshBasicMaterial({
+      map: createRunicCircleTexture(colorHex),
+      transparent: true,
+      opacity: maxOpacity,
+      depthWrite: false,
+    });
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+    plane.rotation.x = -Math.PI / 2;
+    plane.position.set(x, 0.12, z);
+    this.scene.add(plane);
+
+    this.transientEffects.push({
+      mesh: plane,
+      createdAt: now,
+      durationMs,
+      onUpdate: (t) => {
+        const pop = t < 0.18 ? 0.35 + (t / 0.18) * 0.65 : 1 + (t - 0.18) * 0.16;
+        const s = maxRadius * pop;
+        plane.scale.set(s, s, 1);
+        plane.rotation.z = t * spinSpeed;
+        mat.opacity = t < 0.15 ? (t / 0.15) * maxOpacity : (1 - (t - 0.15) / 0.85) * maxOpacity;
+      },
+    });
+  }
+
+  private addFlashLight(
+    x: number,
+    y: number,
+    z: number,
+    color: THREE.ColorRepresentation,
+    intensity = 3.2,
+    distance = 12,
+    durationMs = 260
+  ) {
+    if (this.activeFlashLights >= 3) return;
+    this.activeFlashLights++;
+    const now = performance.now();
+    const light = new THREE.PointLight(color, intensity, distance, 1.8);
+    light.position.set(x, y, z);
+    this.scene.add(light);
+
+    this.transientEffects.push({
+      mesh: light,
+      createdAt: now,
+      durationMs,
+      onUpdate: (t) => {
+        light.intensity = intensity * Math.pow(1 - t, 1.8);
+      },
+      onDone: () => {
+        this.activeFlashLights = Math.max(0, this.activeFlashLights - 1);
       },
     });
   }
@@ -226,156 +298,246 @@ export class EffectsManager {
     switch (ev.kind) {
       case 'slash':
       case 'boss_rift_slash': {
-        // Crisp curved comic sword crescent (muted rich color, dark outer contrast, zero glare)
+        // Triple-layered sweeping comic sword crescent: dark ink rim + fiery core + bright white-gold razor edge!
         const isRift = ev.kind === 'boss_rift_slash';
         const arcGroup = new THREE.Group();
-        arcGroup.position.set(ev.x, 1.1, ev.z);
-        arcGroup.rotation.y = yaw - Math.PI * 0.42;
+        arcGroup.position.set(ev.x, 1.15, ev.z);
+        arcGroup.rotation.y = yaw - Math.PI * 0.48;
 
         const outerMat = new THREE.MeshBasicMaterial({
-          color: isRift ? '#4c0519' : '#261414',
+          color: isRift ? '#4c0519' : '#2a1222',
           side: THREE.DoubleSide,
           transparent: true,
-          opacity: 0.62,
+          opacity: 0.72,
           depthWrite: false,
         });
         const outerArc = new THREE.Mesh(
-          new THREE.RingGeometry(radius * 0.56, radius * 1.04, 18, 1, 0, Math.PI * 0.85),
+          new THREE.RingGeometry(radius * 0.48, radius * 1.08, 32, 1, 0, Math.PI * 0.96),
           outerMat
         );
         outerArc.rotation.x = -Math.PI / 2;
 
-        const innerMat = new THREE.MeshBasicMaterial({
-          color: isRift ? '#be123c' : '#d9534f',
+        const midMat = new THREE.MeshBasicMaterial({
+          color: isRift ? '#f43f5e' : '#f97316',
           side: THREE.DoubleSide,
           transparent: true,
-          opacity: 0.58,
+          opacity: 0.82,
           depthWrite: false,
         });
-        const innerArc = new THREE.Mesh(
-          new THREE.RingGeometry(radius * 0.64, radius * 0.96, 18, 1, 0.05, Math.PI * 0.75),
-          innerMat
+        const midArc = new THREE.Mesh(
+          new THREE.RingGeometry(radius * 0.56, radius * 1.0, 32, 1, 0.04, Math.PI * 0.88),
+          midMat
         );
-        innerArc.rotation.x = -Math.PI / 2;
-        innerArc.position.y = 0.03;
+        midArc.rotation.x = -Math.PI / 2;
+        midArc.position.y = 0.03;
 
-        arcGroup.add(outerArc, innerArc);
+        const edgeMat = new THREE.MeshBasicMaterial({
+          color: isRift ? '#fda4af' : '#fef08a',
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.92,
+          depthWrite: false,
+        });
+        const edgeArc = new THREE.Mesh(
+          new THREE.RingGeometry(radius * 0.84, radius * 0.99, 32, 1, 0.08, Math.PI * 0.78),
+          edgeMat
+        );
+        edgeArc.rotation.x = -Math.PI / 2;
+        edgeArc.position.y = 0.06;
+
+        arcGroup.add(outerArc, midArc, edgeArc);
         this.scene.add(arcGroup);
 
         this.transientEffects.push({
           mesh: arcGroup,
           createdAt: now,
-          durationMs: 260,
+          durationMs: 280,
           onUpdate: (t) => {
-            arcGroup.rotation.y = yaw - Math.PI * 0.55 + t * 1.3;
-            outerMat.opacity = (1 - t) * 0.6;
-            innerMat.opacity = (1 - t) * 0.58;
+            arcGroup.rotation.y = yaw - Math.PI * 0.62 + t * 1.55;
+            const sc = 0.88 + t * 0.24;
+            arcGroup.scale.set(sc, 1, sc);
+            outerMat.opacity = (1 - t) * 0.7;
+            midMat.opacity = (1 - t) * 0.82;
+            edgeMat.opacity = (1 - t) * 0.92;
           },
         });
 
         this.spawnParticles({
           kind: 'spark',
-          x: ev.x,
-          y: 1.0,
-          z: ev.z,
-          count: 5,
-          color: isRift ? '#f43f5e' : '#eab308',
-          speedMin: 2.5,
-          speedMax: 5.5,
-          upMin: 0.8,
-          upMax: 2.8,
-          durationMs: 280,
-          opacity: 0.72,
+          x: ev.x + Math.sin(yaw) * (radius * 0.6),
+          y: 1.05,
+          z: ev.z + Math.cos(yaw) * (radius * 0.6),
+          count: 9,
+          color: isRift ? '#fb7185' : '#fde047',
+          speedMin: 3.0,
+          speedMax: 7.2,
+          upMin: 1.0,
+          upMax: 3.4,
+          durationMs: 320,
+          opacity: 0.88,
+        });
+        this.spawnParticles({
+          kind: 'star',
+          x: ev.x + Math.sin(yaw) * (radius * 0.7),
+          y: 1.15,
+          z: ev.z + Math.cos(yaw) * (radius * 0.7),
+          count: 4,
+          color: isRift ? '#fda4af' : '#fef08a',
+          speedMin: 1.8,
+          speedMax: 4.5,
+          upMin: 1.4,
+          upMax: 3.2,
+          scale: 0.85,
+          durationMs: 340,
+          opacity: 0.9,
         });
         break;
       }
 
       case 'whirlwind': {
-        // Dual angled thin spinning blade ribbons + dust clouds (keeps hero fully visible!)
+        // Multi-tiered blazing comic blade vortex + glowing runic ground swirl + flying sparks!
         const group = new THREE.Group();
-        group.position.set(ev.x, 1.0, ev.z);
+        group.position.set(ev.x, 0.95, ev.z);
         const bladeMat = new THREE.MeshBasicMaterial({
-          color: '#d97706',
+          color: '#f97316',
           side: THREE.DoubleSide,
           transparent: true,
-          opacity: 0.44,
+          opacity: 0.68,
           depthWrite: false,
         });
-        for (let i = 0; i < 2; i++) {
+        const highlightMat = new THREE.MeshBasicMaterial({
+          color: '#fef08a',
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.78,
+          depthWrite: false,
+        });
+        for (let i = 0; i < 3; i++) {
           const arc = new THREE.Mesh(
-            new THREE.RingGeometry(radius * 0.68, radius * 0.98, 20, 1, i * Math.PI, Math.PI * 0.68),
+            new THREE.RingGeometry(radius * 0.58, radius * 1.02, 28, 1, (i * Math.PI * 2) / 3, Math.PI * 0.56),
             bladeMat
           );
           arc.rotation.x = -Math.PI / 2;
-          arc.position.y = i * 0.25;
+          arc.position.y = i * 0.24;
           group.add(arc);
+
+          const rim = new THREE.Mesh(
+            new THREE.RingGeometry(radius * 0.88, radius * 1.03, 28, 1, (i * Math.PI * 2) / 3 + 0.05, Math.PI * 0.46),
+            highlightMat
+          );
+          rim.rotation.x = -Math.PI / 2;
+          rim.position.y = i * 0.24 + 0.03;
+          group.add(rim);
         }
         this.scene.add(group);
         const dur = ev.duration ?? 2100;
+        this.addRunicBurst(ev.x, ev.z, radius * 1.05, '#f97316', Math.min(dur, 1200), 0.52, 4.2);
         this.transientEffects.push({
           mesh: group,
           createdAt: now,
           durationMs: dur,
           onUpdate: (t) => {
-            group.rotation.y = t * 24;
-            bladeMat.opacity = t > 0.82 ? ((1 - t) / 0.18) * 0.44 : 0.44;
+            group.rotation.y = t * 28;
+            const fade = t > 0.82 ? (1 - t) / 0.18 : 1;
+            bladeMat.opacity = fade * 0.68;
+            highlightMat.opacity = fade * 0.78;
           },
+        });
+        this.spawnParticles({
+          kind: 'spark',
+          x: ev.x,
+          y: 0.9,
+          z: ev.z,
+          count: 14,
+          color: '#fbbf24',
+          spreadRadius: radius * 0.8,
+          speedMin: 2.5,
+          speedMax: 6.2,
+          upMin: 1.2,
+          upMax: 3.8,
+          durationMs: 560,
+          opacity: 0.85,
         });
         this.spawnParticles({
           kind: 'smoke',
           x: ev.x,
           y: 0.3,
           z: ev.z,
-          count: 8,
-          color: '#78716c',
-          spreadRadius: radius * 0.7,
-          speedMin: 1.0,
-          speedMax: 2.5,
+          count: 10,
+          color: '#a89f91',
+          spreadRadius: radius * 0.75,
+          speedMin: 1.2,
+          speedMax: 2.8,
           upMin: 0.5,
           upMax: 1.8,
           durationMs: 650,
-          opacity: 0.42,
+          opacity: 0.46,
         });
         break;
       }
 
       case 'charge': {
-        this.spawnFootstepDust(ev.x, ev.z, '#8c8376', true);
+        this.spawnFootstepDust(ev.x, ev.z, '#c7b8a1', true);
         if (ev.tx !== undefined && ev.tz !== undefined) {
-          this.addExpandingRing(ev.tx, ev.tz, radius, '#d99e26', 360, 0.45, 0.22);
+          this.addRunicBurst(ev.tx, ev.tz, radius * 1.05, '#fbbf24', 440, 0.62, 2.4);
+          this.addExpandingRing(ev.tx, ev.tz, radius * 1.15, '#fef08a', 380, 0.66, 0.2);
+          this.addFlashLight(ev.tx, 1.4, ev.tz, '#fbbf24', 2.8, 10, 240);
           this.spawnParticles({
             kind: 'shard',
             x: ev.tx,
             y: 0.4,
             z: ev.tz,
+            count: 10,
+            color: '#c7b8a1',
+            speedMin: 2.8,
+            speedMax: 6.2,
+            upMin: 3.0,
+            upMax: 6.0,
+            durationMs: 520,
+          });
+          this.spawnParticles({
+            kind: 'star',
+            x: ev.tx,
+            y: 1.0,
+            z: ev.tz,
             count: 7,
-            color: '#a89f91',
-            speedMin: 2.5,
-            speedMax: 5.2,
-            upMin: 2.8,
-            upMax: 5.5,
-            durationMs: 480,
+            color: '#fde047',
+            speedMin: 2.0,
+            speedMax: 5.0,
+            upMin: 1.5,
+            upMax: 4.0,
+            durationMs: 420,
           });
         }
         break;
       }
 
       case 'shadow_orb': {
-        // Dark-void core sphere wrapped in muted purple contour — zero neon glare!
+        // High-smooth void orb w/ dual orbiting arcane rings + runic explosion & purple impact light!
         const orbGroup = new THREE.Group();
-        const core = createComicMesh(new THREE.SphereGeometry(0.42, 10, 8), '#2e1065', 0.032, {
-          emissive: '#6d28d9',
-          emissiveIntensity: 0.28,
+        const core = createComicMesh(new THREE.SphereGeometry(0.46, 22, 18), '#3b0764', 0.03, {
+          emissive: '#9333ea',
+          emissiveIntensity: 0.44,
         });
+        const ringA = new THREE.Mesh(
+          new THREE.TorusGeometry(0.68, 0.065, 10, 26),
+          new THREE.MeshBasicMaterial({ color: '#e879f9', transparent: true, opacity: 0.85 })
+        );
+        ringA.rotation.x = Math.PI / 3;
+        const ringB = new THREE.Mesh(
+          new THREE.TorusGeometry(0.58, 0.055, 10, 24),
+          new THREE.MeshBasicMaterial({ color: '#c084fc', transparent: true, opacity: 0.78 })
+        );
+        ringB.rotation.y = Math.PI / 3;
         const haloMat = new THREE.MeshBasicMaterial({
-          color: '#9333ea',
+          color: '#a855f7',
           transparent: true,
-          opacity: 0.34,
+          opacity: 0.36,
           depthWrite: false,
         });
-        const halo = new THREE.Mesh(new THREE.SphereGeometry(0.62, 10, 8), haloMat);
-        orbGroup.add(core, halo);
-        orbGroup.position.set(ev.x, 1.3, ev.z);
+        const halo = new THREE.Mesh(new THREE.SphereGeometry(0.76, 18, 14), haloMat);
+        orbGroup.add(core, ringA, ringB, halo);
+        orbGroup.position.set(ev.x, 1.35, ev.z);
         this.scene.add(orbGroup);
 
         const tx = ev.tx ?? ev.x;
@@ -387,26 +549,43 @@ export class EffectsManager {
           onUpdate: (t) => {
             orbGroup.position.x = THREE.MathUtils.lerp(ev.x, tx, t);
             orbGroup.position.z = THREE.MathUtils.lerp(ev.z, tz, t);
-            orbGroup.rotation.y = t * 10;
-            const sc = t > 0.8 ? 1 + (t - 0.8) * 3.5 : 1;
+            orbGroup.rotation.y = t * 14;
+            orbGroup.rotation.x = t * 9;
+            const sc = t > 0.78 ? 1 + (t - 0.78) * 4.2 : 1;
             orbGroup.scale.setScalar(sc);
-            haloMat.opacity = (1 - t) * 0.36;
+            haloMat.opacity = (1 - t) * 0.4;
           },
         });
 
-        this.addExpandingRing(tx, tz, Math.min(radius, 3.2), '#7e22ce', 340, 0.4, 0.22);
+        this.addRunicBurst(tx, tz, Math.min(radius * 1.15, 3.8), '#c084fc', 460, 0.68, -2.5);
+        this.addExpandingRing(tx, tz, Math.min(radius, 3.4), '#e879f9', 360, 0.62, 0.2);
+        this.addFlashLight(tx, 1.6, tz, '#c084fc', 3.0, 11, 260);
+        this.spawnParticles({
+          kind: 'star',
+          x: tx,
+          y: 1.0,
+          z: tz,
+          count: 9,
+          color: '#f0abfc',
+          speedMin: 2.2,
+          speedMax: 5.4,
+          upMin: 1.4,
+          upMax: 3.8,
+          scale: 0.9,
+          durationMs: 480,
+        });
         this.spawnParticles({
           kind: 'smoke',
           x: tx,
           y: 0.7,
           z: tz,
-          count: 7,
-          color: '#4c1d95',
+          count: 8,
+          color: '#581c87',
           speedMin: 1.2,
           speedMax: 3.4,
           upMin: 0.6,
           upMax: 2.2,
-          scale: 0.9,
+          scale: 0.95,
           durationMs: 520,
           opacity: 0.56,
         });
@@ -415,70 +594,108 @@ export class EffectsManager {
 
       case 'meteor':
       case 'boss_obsidian_rain': {
-        // Cel-shaded jagged basalt meteors with dark smoky trails & crater ring!
+        // Blazing comic comet-tailed magma meteors + runic ground crater + fiery impact light!
         const isObsidian = ev.kind === 'boss_obsidian_rain';
         const rockCount = isObsidian ? 1 : 3;
         for (let m = 0; m < rockCount; m++) {
           const ox = m === 0 ? 0 : (Math.random() - 0.5) * radius * 0.9;
           const oz = m === 0 ? 0 : (Math.random() - 0.5) * radius * 0.9;
+          const meteorGroup = new THREE.Group();
           const rock = createComicMesh(
-            new THREE.SphereGeometry(radius * (isObsidian ? 0.36 : 0.26), 14, 12),
-            '#332b36',
-            0.04,
-            { emissive: '#b91c1c', emissiveIntensity: 0.32 }
+            new THREE.SphereGeometry(radius * (isObsidian ? 0.36 : 0.28), 18, 14),
+            '#3a2433',
+            0.036,
+            { emissive: '#ef4444', emissiveIntensity: 0.46 }
           );
-          const startX = ev.x + ox - 3.5;
-          const startZ = ev.z + oz - 2.0;
-          rock.position.set(startX, 11 + m * 2.5, startZ);
-          this.scene.add(rock);
+          const tail = new THREE.Mesh(
+            createPlushLathe(
+              [
+                [0.01, 0],
+                [radius * 0.24, 0.35],
+                [radius * 0.16, 1.45],
+                [0.04, 2.55],
+                [0.01, 2.85],
+              ],
+              14
+            ),
+            new THREE.MeshBasicMaterial({
+              color: '#fb923c',
+              transparent: true,
+              opacity: 0.76,
+              depthWrite: false,
+            })
+          );
+          tail.rotation.z = 0.28;
+          tail.rotation.x = -0.18;
+          meteorGroup.add(rock, tail);
+
+          const startX = ev.x + ox - 3.8;
+          const startZ = ev.z + oz - 2.2;
+          meteorGroup.position.set(startX, 12 + m * 2.5, startZ);
+          this.scene.add(meteorGroup);
 
           this.transientEffects.push({
-            mesh: rock,
+            mesh: meteorGroup,
             createdAt: now + m * 95,
             durationMs: 360,
             onUpdate: (t) => {
               const ct = Math.max(0, t);
-              rock.position.x = THREE.MathUtils.lerp(startX, ev.x + ox, ct);
-              rock.position.z = THREE.MathUtils.lerp(startZ, ev.z + oz, ct);
-              rock.position.y = Math.max(0.25, (11 + m * 2.5) * (1 - ct * ct));
-              rock.rotation.x = ct * 7;
-              rock.rotation.z = ct * 5;
-              if (ct > 0.85) rock.scale.setScalar(1 - (ct - 0.85) * 5);
+              meteorGroup.position.x = THREE.MathUtils.lerp(startX, ev.x + ox, ct);
+              meteorGroup.position.z = THREE.MathUtils.lerp(startZ, ev.z + oz, ct);
+              meteorGroup.position.y = Math.max(0.3, (12 + m * 2.5) * (1 - ct * ct));
+              rock.rotation.x = ct * 8;
+              rock.rotation.z = ct * 6;
+              if (ct > 0.84) meteorGroup.scale.setScalar(Math.max(0.05, 1 - (ct - 0.84) * 5.5));
             },
           });
         }
 
-        // Scorched crater decal + charcoal smoke puffs + subtle embers
-        this.addExpandingRing(ev.x, ev.z, radius, '#b91c1c', 480, 0.44, 0.26);
+        this.addRunicBurst(ev.x, ev.z, radius * 1.12, '#f97316', 580, 0.72, 2.2);
+        this.addExpandingRing(ev.x, ev.z, radius * 1.15, '#ef4444', 480, 0.68, 0.24);
+        this.addExpandingRing(ev.x, ev.z, radius * 0.75, '#fde047', 380, 0.72, 0.16);
+        this.addFlashLight(ev.x, 2.0, ev.z, '#f97316', 4.2, 16, 340);
         this.spawnParticles({
           kind: 'smoke',
           x: ev.x,
           y: 0.35,
           z: ev.z,
-          count: 10,
-          color: '#3f3a36',
+          count: 12,
+          color: '#453b3a',
           spreadRadius: radius * 0.55,
           speedMin: 1.5,
-          speedMax: 3.8,
-          upMin: 1.2,
-          upMax: 3.2,
-          scale: 1.15,
-          durationMs: 680,
+          speedMax: 4.2,
+          upMin: 1.4,
+          upMax: 3.6,
+          scale: 1.2,
+          durationMs: 700,
           opacity: 0.58,
         });
         this.spawnParticles({
           kind: 'spark',
           x: ev.x,
-          y: 0.5,
+          y: 0.6,
+          z: ev.z,
+          count: 16,
+          color: '#fb923c',
+          speedMin: 3.4,
+          speedMax: 7.8,
+          upMin: 2.6,
+          upMax: 6.4,
+          durationMs: 460,
+          opacity: 0.88,
+        });
+        this.spawnParticles({
+          kind: 'star',
+          x: ev.x,
+          y: 0.8,
           z: ev.z,
           count: 8,
-          color: '#ea580c',
-          speedMin: 3.0,
-          speedMax: 6.5,
-          upMin: 2.2,
-          upMax: 5.5,
-          durationMs: 420,
-          opacity: 0.72,
+          color: '#fef08a',
+          speedMin: 2.4,
+          speedMax: 6.0,
+          upMin: 2.0,
+          upMax: 5.0,
+          durationMs: 440,
         });
         break;
       }
@@ -486,22 +703,25 @@ export class EffectsManager {
       case 'soul_drain': {
         const tx = ev.tx ?? ev.x;
         const tz = ev.tz ?? ev.z;
-        this.addExpandingRing(tx, tz, radius, '#9333ea', 450, 0.38, 0.22);
+        this.addRunicBurst(tx, tz, radius * 1.05, '#a855f7', 540, 0.66, -2.6);
+        this.addExpandingRing(tx, tz, radius, '#e879f9', 460, 0.56, 0.2);
+        this.addFlashLight(tx, 1.5, tz, '#a855f7', 2.6, 11, 280);
         this.spawnParticles({
-          kind: 'smoke',
+          kind: 'star',
           x: tx,
           y: 0.8,
           z: tz,
-          count: 9,
-          color: '#701a75',
-          spreadRadius: radius * 0.6,
+          count: 12,
+          color: '#e879f9',
+          spreadRadius: radius * 0.65,
           speedMin: 0.8,
-          speedMax: 2.2,
-          upMin: 1.2,
-          upMax: 2.8,
+          speedMax: 2.4,
+          upMin: 2.0,
+          upMax: 4.2,
+          gravity: -0.9,
           scale: 0.85,
-          durationMs: 580,
-          opacity: 0.52,
+          durationMs: 620,
+          opacity: 0.86,
         });
         break;
       }
@@ -511,6 +731,16 @@ export class EffectsManager {
         const tx = ev.tx ?? ev.x;
         const tz = ev.tz ?? ev.z;
         const arrows = ev.kind === 'volley_backflip' ? 5 : 1;
+        const tipGeo = createPlushLathe(
+          [
+            [0.01, -0.18],
+            [0.14, -0.12],
+            [0.11, 0.08],
+            [0.03, 0.24],
+            [0.01, 0.28],
+          ],
+          14
+        );
         for (let a = 0; a < arrows; a++) {
           const spread = arrows === 1 ? 0 : (a - 2) * 0.2;
           const dist = Math.max(2, Math.hypot(dx, dz));
@@ -519,39 +749,72 @@ export class EffectsManager {
           const endZ = ev.z + Math.cos(ang) * dist;
 
           const arrowGroup = new THREE.Group();
-          const shaft = createComicMesh(new THREE.CylinderGeometry(0.04, 0.04, 1.35, 6), '#15803d', 0.015);
+          const shaft = createComicMesh(new THREE.CapsuleGeometry(0.048, 1.35, 8, 12), '#10b981', 0.016, {
+            emissive: '#059669',
+            emissiveIntensity: 0.34,
+          });
           shaft.rotation.x = Math.PI / 2;
-          const head = createComicMesh(new THREE.ConeGeometry(0.11, 0.34, 5), '#34d399', 0.018);
+          const head = createComicMesh(tipGeo, '#6ee7b7', 0.018, {
+            emissive: '#34d399',
+            emissiveIntensity: 0.45,
+          });
           head.rotation.x = Math.PI / 2;
-          head.position.z = 0.75;
-          arrowGroup.add(shaft, head);
-          arrowGroup.position.set(ev.x, 1.3, ev.z);
+          head.position.z = 0.78;
+          const streak = new THREE.Mesh(
+            new THREE.PlaneGeometry(0.32, 2.2),
+            new THREE.MeshBasicMaterial({
+              color: '#a7f3d0',
+              side: THREE.DoubleSide,
+              transparent: true,
+              opacity: 0.56,
+              depthWrite: false,
+            })
+          );
+          streak.rotation.x = -Math.PI / 2;
+          streak.position.z = -0.65;
+          arrowGroup.add(shaft, head, streak);
+          arrowGroup.position.set(ev.x, 1.32, ev.z);
           arrowGroup.rotation.y = ang;
           this.scene.add(arrowGroup);
 
           this.transientEffects.push({
             mesh: arrowGroup,
             createdAt: now,
-            durationMs: 210,
+            durationMs: 215,
             onUpdate: (t) => {
               arrowGroup.position.x = THREE.MathUtils.lerp(ev.x, endX, t);
               arrowGroup.position.z = THREE.MathUtils.lerp(ev.z, endZ, t);
             },
           });
         }
+        this.addExpandingRing(tx, tz, arrows > 1 ? 2.4 : 1.4, '#34d399', 260, 0.54, 0.22);
         this.spawnParticles({
           kind: 'leaf',
           x: tx,
           y: 1.0,
           z: tz,
-          count: 6,
+          count: arrows > 1 ? 12 : 7,
           color: '#34d399',
-          speedMin: 1.2,
-          speedMax: 3.4,
-          upMin: 0.8,
-          upMax: 2.6,
+          speedMin: 1.4,
+          speedMax: 3.8,
+          upMin: 1.0,
+          upMax: 2.8,
           durationMs: 560,
-          opacity: 0.72,
+          opacity: 0.82,
+        });
+        this.spawnParticles({
+          kind: 'star',
+          x: tx,
+          y: 1.1,
+          z: tz,
+          count: arrows > 1 ? 8 : 4,
+          color: '#a7f3d0',
+          speedMin: 1.6,
+          speedMax: 4.2,
+          upMin: 1.2,
+          upMax: 3.2,
+          scale: 0.75,
+          durationMs: 360,
         });
         break;
       }
@@ -559,31 +822,51 @@ export class EffectsManager {
       case 'wind_blade': {
         const tx = ev.tx ?? ev.x;
         const tz = ev.tz ?? ev.z;
-        const crescentMat = new THREE.MeshBasicMaterial({
-          color: '#22a8b8',
+        const windGroup = new THREE.Group();
+        windGroup.position.set(ev.x, 1.18, ev.z);
+
+        const outerMat = new THREE.MeshBasicMaterial({
+          color: '#0e7490',
           side: THREE.DoubleSide,
           transparent: true,
-          opacity: 0.5,
+          opacity: 0.65,
           depthWrite: false,
         });
-        const crescent = new THREE.Mesh(
-          new THREE.RingGeometry(1.1, 2.2, 16, 1, -Math.PI * 0.38, Math.PI * 0.76),
-          crescentMat
+        const outer = new THREE.Mesh(
+          new THREE.RingGeometry(0.95, 2.35, 28, 1, -Math.PI * 0.42, Math.PI * 0.84),
+          outerMat
         );
-        crescent.rotation.x = -Math.PI / 2;
-        crescent.rotation.z = -yaw + Math.PI / 2;
-        crescent.position.set(ev.x, 1.15, ev.z);
-        this.scene.add(crescent);
+        outer.rotation.x = -Math.PI / 2;
+        outer.rotation.z = -yaw + Math.PI / 2;
+
+        const coreMat = new THREE.MeshBasicMaterial({
+          color: '#5eead4',
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.82,
+          depthWrite: false,
+        });
+        const core = new THREE.Mesh(
+          new THREE.RingGeometry(1.45, 2.25, 28, 1, -Math.PI * 0.36, Math.PI * 0.72),
+          coreMat
+        );
+        core.rotation.x = -Math.PI / 2;
+        core.rotation.z = -yaw + Math.PI / 2;
+        core.position.y = 0.04;
+
+        windGroup.add(outer, core);
+        this.scene.add(windGroup);
 
         this.transientEffects.push({
-          mesh: crescent,
+          mesh: windGroup,
           createdAt: now,
           durationMs: 320,
           onUpdate: (t) => {
-            crescent.position.x = THREE.MathUtils.lerp(ev.x, tx, t);
-            crescent.position.z = THREE.MathUtils.lerp(ev.z, tz, t);
-            crescent.scale.setScalar(1 + t * 0.45);
-            crescentMat.opacity = (1 - t) * 0.5;
+            windGroup.position.x = THREE.MathUtils.lerp(ev.x, tx, t);
+            windGroup.position.z = THREE.MathUtils.lerp(ev.z, tz, t);
+            windGroup.scale.setScalar(1 + t * 0.55);
+            outerMat.opacity = (1 - t) * 0.65;
+            coreMat.opacity = (1 - t) * 0.82;
           },
         });
 
@@ -592,13 +875,24 @@ export class EffectsManager {
           x: (ev.x + tx) / 2,
           y: 1.0,
           z: (ev.z + tz) / 2,
-          count: 8,
+          count: 12,
           color: '#5eead4',
-          spreadRadius: 1.8,
-          speedMin: 1.0,
-          speedMax: 3.2,
-          durationMs: 620,
-          opacity: 0.68,
+          spreadRadius: 2.0,
+          speedMin: 1.2,
+          speedMax: 3.6,
+          durationMs: 640,
+          opacity: 0.8,
+        });
+        this.spawnParticles({
+          kind: 'star',
+          x: tx,
+          y: 1.1,
+          z: tz,
+          count: 6,
+          color: '#ccfbf1',
+          speedMin: 1.5,
+          speedMax: 4.0,
+          durationMs: 380,
         });
         break;
       }
@@ -607,41 +901,94 @@ export class EffectsManager {
       case 'earthquake':
       case 'boss_leap_slam':
       case 'boss_burrow': {
-        // Cel-shaded erupting stone shards + dusty crater ring!
-        const rockColor = ev.kind === 'boss_burrow' ? '#c99443' : '#6b6560';
-        const ringColor = ev.kind === 'boss_leap_slam' ? '#22a355' : '#b45309';
-        this.addExpandingRing(ev.x, ev.z, radius, ringColor, 460, 0.46, 0.22);
+        // Dramatic runic seismic impact + erupting cel-shaded rock spires + warm flash light!
+        const rockColor = ev.kind === 'boss_burrow' ? '#d49a45' : '#78716c';
+        const ringColor = ev.kind === 'boss_leap_slam' ? '#34d399' : '#f59e0b';
+        this.addRunicBurst(ev.x, ev.z, radius * 1.12, ringColor, 560, 0.72, 1.5);
+        this.addExpandingRing(ev.x, ev.z, radius * 1.18, ringColor, 480, 0.66, 0.22);
+        this.addExpandingRing(ev.x, ev.z, radius * 0.78, '#fef08a', 380, 0.65, 0.14);
+        this.addFlashLight(ev.x, 1.8, ev.z, ringColor, 3.6, 14, 300);
+
+        // Ring of 6 plush comic stone pillars erupting & sinking cleanly
+        const spireGroup = new THREE.Group();
+        spireGroup.position.set(ev.x, 0, ev.z);
+        const rockSpireGeo = createPlushLathe(
+          [
+            [0.01, 0],
+            [0.44, 0.12],
+            [0.36, 0.95],
+            [0.14, 1.55],
+            [0.01, 1.72],
+          ],
+          14
+        );
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2 + 0.3;
+          const sp = createComicMesh(rockSpireGeo, rockColor, 0.028, {
+            emissive: ringColor,
+            emissiveIntensity: 0.18,
+          });
+          sp.position.set(Math.cos(a) * radius * 0.62, 0, Math.sin(a) * radius * 0.62);
+          sp.rotation.z = -Math.cos(a) * 0.25;
+          sp.rotation.x = Math.sin(a) * 0.25;
+          spireGroup.add(sp);
+        }
+        this.scene.add(spireGroup);
+        this.transientEffects.push({
+          mesh: spireGroup,
+          createdAt: now,
+          durationMs: 480,
+          onUpdate: (t) => {
+            const lift = t < 0.2 ? t / 0.2 : t > 0.65 ? (1 - t) / 0.35 : 1;
+            spireGroup.scale.set(1, Math.max(0.04, lift), 1);
+          },
+        });
+
         this.spawnParticles({
           kind: 'shard',
           x: ev.x,
           y: 0.35,
           z: ev.z,
-          count: 10,
+          count: 14,
           color: rockColor,
-          spreadRadius: radius * 0.45,
-          speedMin: 2.2,
-          speedMax: 5.5,
-          upMin: 3.5,
-          upMax: 6.8,
+          spreadRadius: radius * 0.5,
+          speedMin: 2.4,
+          speedMax: 6.2,
+          upMin: 3.8,
+          upMax: 7.4,
           scale: 1.15,
-          durationMs: 560,
-          opacity: 0.88,
+          durationMs: 580,
+          opacity: 0.9,
+        });
+        this.spawnParticles({
+          kind: 'spark',
+          x: ev.x,
+          y: 0.5,
+          z: ev.z,
+          count: 10,
+          color: '#fde047',
+          spreadRadius: radius * 0.45,
+          speedMin: 2.8,
+          speedMax: 6.5,
+          upMin: 2.2,
+          upMax: 5.5,
+          durationMs: 420,
         });
         this.spawnParticles({
           kind: 'smoke',
           x: ev.x,
           y: 0.3,
           z: ev.z,
-          count: 9,
-          color: '#8c8376',
-          spreadRadius: radius * 0.6,
-          speedMin: 1.4,
-          speedMax: 3.4,
-          upMin: 0.6,
-          upMax: 2.0,
-          scale: 1.1,
-          durationMs: 620,
-          opacity: 0.5,
+          count: 10,
+          color: '#9c9284',
+          spreadRadius: radius * 0.65,
+          speedMin: 1.5,
+          speedMax: 3.8,
+          upMin: 0.7,
+          upMax: 2.2,
+          scale: 1.15,
+          durationMs: 640,
+          opacity: 0.52,
         });
         break;
       }
@@ -649,101 +996,187 @@ export class EffectsManager {
       case 'radiant_bolt': {
         const tx = ev.tx ?? ev.x;
         const tz = ev.tz ?? ev.z;
-        const star = createComicMesh(createSoftStarGeometry(0.32, 0.16, 5, 0.1), '#fde047', 0.02, {
+        const boltGroup = new THREE.Group();
+        const star = createComicMesh(createSoftStarGeometry(0.36, 0.18, 5, 0.11), '#fde047', 0.02, {
           emissive: '#f59e0b',
-          emissiveIntensity: 0.32,
+          emissiveIntensity: 0.44,
         });
-        star.position.set(ev.x, 1.35, ev.z);
-        this.scene.add(star);
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(0.46, 0.045, 10, 22),
+          new THREE.MeshBasicMaterial({ color: '#fef08a', transparent: true, opacity: 0.8 })
+        );
+        ring.rotation.x = Math.PI / 2;
+        boltGroup.add(star, ring);
+        boltGroup.position.set(ev.x, 1.38, ev.z);
+        this.scene.add(boltGroup);
         this.transientEffects.push({
-          mesh: star,
+          mesh: boltGroup,
           createdAt: now,
           durationMs: 230,
           onUpdate: (t) => {
-            star.position.x = THREE.MathUtils.lerp(ev.x, tx, t);
-            star.position.z = THREE.MathUtils.lerp(ev.z, tz, t);
-            star.rotation.y = t * 12;
+            boltGroup.position.x = THREE.MathUtils.lerp(ev.x, tx, t);
+            boltGroup.position.z = THREE.MathUtils.lerp(ev.z, tz, t);
+            boltGroup.rotation.y = t * 16;
           },
         });
-        this.addExpandingRing(tx, tz, Math.min(radius, 2.5), '#d9a826', 300, 0.36, 0.2);
+        this.addRunicBurst(tx, tz, Math.min(radius, 2.8), '#fde047', 380, 0.62, 2.8);
+        this.addFlashLight(tx, 1.5, tz, '#fde047', 2.4, 9, 220);
         this.spawnParticles({
-          kind: 'spark',
+          kind: 'star',
           x: tx,
-          y: 1.1,
+          y: 1.15,
           z: tz,
-          count: 5,
-          color: '#eab308',
-          speedMin: 1.5,
-          speedMax: 3.8,
-          durationMs: 360,
-          opacity: 0.65,
+          count: 9,
+          color: '#fef08a',
+          speedMin: 1.8,
+          speedMax: 4.5,
+          upMin: 1.2,
+          upMax: 3.4,
+          durationMs: 420,
+          opacity: 0.9,
         });
         break;
       }
 
       case 'heal_wave': {
-        // Gentle non-glaring sage-emerald wave + rising petal motes (NO blinding dome!)
-        this.addExpandingRing(ev.x, ev.z, Math.min(radius, 10), '#22a355', 560, 0.38, 0.16);
+        // Lush fairy emerald-gold runic sanctuary + soft rising blessing pillar + fluttering petals & stars!
+        const rad = Math.min(radius, 10);
+        this.addRunicBurst(ev.x, ev.z, rad, '#34d399', 760, 0.68, 1.4);
+        this.addExpandingRing(ev.x, ev.z, rad * 1.05, '#86efac', 580, 0.56, 0.14);
+        this.addFlashLight(ev.x, 2.0, ev.z, '#4ade80', 3.0, 14, 380);
+
+        const beamMat = createSoftBeamMaterial('#4ade80', 0.32);
+        const pillar = new THREE.Mesh(new THREE.CylinderGeometry(rad * 0.45, rad * 0.58, 5.5, 24, 1, true), beamMat);
+        pillar.position.set(ev.x, 2.75, ev.z);
+        this.scene.add(pillar);
+        this.transientEffects.push({
+          mesh: pillar,
+          createdAt: now,
+          durationMs: 640,
+          onUpdate: (t) => {
+            pillar.rotation.y = t * 2.2;
+            (beamMat.uniforms.uOpacity as { value: number }).value = (1 - t) * 0.34;
+          },
+        });
+
         this.spawnParticles({
           kind: 'leaf',
           x: ev.x,
           y: 0.5,
           z: ev.z,
-          count: 14,
+          count: 18,
           color: '#4ade80',
-          spreadRadius: 4.5,
+          spreadRadius: 4.8,
           speedMin: 0.6,
-          speedMax: 2.0,
-          upMin: 1.6,
-          upMax: 3.4,
-          gravity: -0.6,
-          durationMs: 780,
-          opacity: 0.68,
+          speedMax: 2.2,
+          upMin: 1.8,
+          upMax: 3.8,
+          gravity: -0.7,
+          durationMs: 820,
+          opacity: 0.78,
+        });
+        this.spawnParticles({
+          kind: 'star',
+          x: ev.x,
+          y: 0.7,
+          z: ev.z,
+          count: 12,
+          color: '#fef08a',
+          spreadRadius: 4.0,
+          speedMin: 0.5,
+          speedMax: 1.8,
+          upMin: 2.0,
+          upMax: 4.2,
+          gravity: -0.8,
+          scale: 0.9,
+          durationMs: 760,
+          opacity: 0.88,
         });
         break;
       }
 
       case 'light_barrier': {
-        // Subtle sky-blue ripple + delicate floating crystal motes
-        this.addExpandingRing(ev.x, ev.z, Math.min(radius, 10), '#38bdf8', 540, 0.34, 0.15);
+        // Shimmering celestial azure-gold sanctuary seal + orbiting crystal shield petals + stars!
+        const rad = Math.min(radius, 10);
+        this.addRunicBurst(ev.x, ev.z, rad, '#38bdf8', 740, 0.66, -1.6);
+        this.addExpandingRing(ev.x, ev.z, rad * 1.05, '#bae6fd', 560, 0.58, 0.14);
+        this.addFlashLight(ev.x, 2.0, ev.z, '#38bdf8', 3.0, 14, 360);
+
+        const shieldCrown = new THREE.Group();
+        shieldCrown.position.set(ev.x, 1.35, ev.z);
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          const petal = createComicMesh(createSoftStarGeometry(0.28, 0.14, 4, 0.08), '#7dd3fc', 0.016, {
+            emissive: '#38bdf8',
+            emissiveIntensity: 0.42,
+          });
+          petal.position.set(Math.cos(a) * 2.2, 0, Math.sin(a) * 2.2);
+          shieldCrown.add(petal);
+        }
+        this.scene.add(shieldCrown);
+        this.transientEffects.push({
+          mesh: shieldCrown,
+          createdAt: now,
+          durationMs: 680,
+          onUpdate: (t) => {
+            shieldCrown.rotation.y = t * 4.5;
+            shieldCrown.position.y = 1.1 + t * 1.4;
+            const sc = 0.6 + t * 1.15;
+            shieldCrown.scale.setScalar(sc * (1 - Math.max(0, t - 0.65) * 2.2));
+          },
+        });
+
         this.spawnParticles({
-          kind: 'shard',
+          kind: 'star',
           x: ev.x,
           y: 0.7,
           z: ev.z,
-          count: 10,
-          color: '#7dd3fc',
-          spreadRadius: 4.0,
+          count: 14,
+          color: '#bae6fd',
+          spreadRadius: 4.2,
           speedMin: 0.8,
-          speedMax: 2.2,
-          upMin: 1.5,
-          upMax: 3.0,
-          gravity: -0.4,
-          scale: 0.65,
-          durationMs: 660,
-          opacity: 0.58,
+          speedMax: 2.4,
+          upMin: 1.6,
+          upMax: 3.4,
+          gravity: -0.5,
+          scale: 0.8,
+          durationMs: 700,
+          opacity: 0.82,
         });
         break;
       }
 
       case 'boss_bone_wave': {
-        // Erupting cel-shaded bone spikes along line!
+        // Smooth plush ivory bone-spears erupting along line (ZERO low-poly 5-sided cones!)
         const group = new THREE.Group();
         const dist = Math.max(4, Math.min(16, Math.hypot(dx, dz)));
         const dirX = dx / (Math.hypot(dx, dz) || 1);
         const dirZ = dz / (Math.hypot(dx, dz) || 1);
+        const boneSpireGeo = createPlushLathe(
+          [
+            [0.01, 0],
+            [0.46, 0.2],
+            [0.36, 1.25],
+            [0.14, 2.05],
+            [0.01, 2.3],
+          ],
+          16
+        );
         for (let i = 1; i <= 7; i++) {
-          const sp = createComicMesh(new THREE.ConeGeometry(0.42, 2.2, 5), '#d4d9e3', 0.036);
-          sp.position.set(ev.x + dirX * (i * (dist / 7)), 0.9, ev.z + dirZ * (i * (dist / 7)));
+          const sp = createComicMesh(boneSpireGeo, '#eef2f7', 0.032, {
+            emissive: '#34d399',
+            emissiveIntensity: 0.16,
+          });
+          sp.position.set(ev.x + dirX * (i * (dist / 7)), 0, ev.z + dirZ * (i * (dist / 7)));
           group.add(sp);
         }
         this.scene.add(group);
         this.transientEffects.push({
           mesh: group,
           createdAt: now,
-          durationMs: 520,
+          durationMs: 540,
           onUpdate: (t) => {
-            const lift = t < 0.25 ? t / 0.25 : t > 0.7 ? (1 - t) / 0.3 : 1;
+            const lift = t < 0.22 ? t / 0.22 : t > 0.68 ? (1 - t) / 0.32 : 1;
             group.scale.set(1, Math.max(0.05, lift), 1);
           },
         });
@@ -754,9 +1187,22 @@ export class EffectsManager {
         const group = new THREE.Group();
         group.position.set(ev.x, 1.1, ev.z);
         const darts: THREE.Mesh[] = [];
+        const thornGeo = createPlushLathe(
+          [
+            [0.01, -0.45],
+            [0.24, -0.2],
+            [0.16, 0.25],
+            [0.04, 0.58],
+            [0.01, 0.65],
+          ],
+          14
+        );
         for (let i = 0; i < 12; i++) {
           const a = (i / 12) * Math.PI * 2;
-          const sp = createComicMesh(new THREE.ConeGeometry(0.22, 1.0, 5), '#7e22ce', 0.025);
+          const sp = createComicMesh(thornGeo, '#a855f7', 0.024, {
+            emissive: '#7c3aed',
+            emissiveIntensity: 0.32,
+          });
           sp.rotation.z = -Math.PI / 2;
           sp.rotation.y = -a;
           sp.userData = { dx: Math.cos(a), dz: Math.sin(a) };
@@ -764,6 +1210,7 @@ export class EffectsManager {
           darts.push(sp);
         }
         this.scene.add(group);
+        this.addRunicBurst(ev.x, ev.z, Math.min(radius, 8), '#a855f7', 540, 0.56, 2.0);
         this.transientEffects.push({
           mesh: group,
           createdAt: now,
@@ -779,7 +1226,24 @@ export class EffectsManager {
       }
 
       case 'boss_chaos_burst': {
-        this.addExpandingRing(ev.x, ev.z, radius, '#be123c', 650, 0.48, 0.16);
+        this.addRunicBurst(ev.x, ev.z, Math.min(radius, 18), '#f43f5e', 760, 0.72, 1.8);
+        this.addExpandingRing(ev.x, ev.z, radius, '#fb7185', 650, 0.66, 0.16);
+        this.addExpandingRing(ev.x, ev.z, radius * 0.7, '#fde047', 500, 0.62, 0.12);
+        this.addFlashLight(ev.x, 3.0, ev.z, '#f43f5e', 4.6, 24, 420);
+        this.spawnParticles({
+          kind: 'spark',
+          x: ev.x,
+          y: 1.0,
+          z: ev.z,
+          count: 18,
+          color: '#fb7185',
+          spreadRadius: 6,
+          speedMin: 4.0,
+          speedMax: 10.0,
+          upMin: 2.0,
+          upMax: 5.5,
+          durationMs: 600,
+        });
         this.spawnParticles({
           kind: 'smoke',
           x: ev.x,
@@ -1029,20 +1493,22 @@ export class EffectsManager {
 
       default: {
         // Chest open, secret break, puzzle solve, stone skin, summon, level up
-        this.addExpandingRing(ev.x, ev.z, radius, ev.color || '#d9a826', 440, 0.4, 0.2);
+        const col = ev.color || '#fbbf24';
+        this.addRunicBurst(ev.x, ev.z, Math.max(2.4, radius), col, 520, 0.62, 2.0);
+        this.addExpandingRing(ev.x, ev.z, radius, col, 440, 0.54, 0.2);
         this.spawnParticles({
-          kind: ev.kind === 'secret_break' ? 'shard' : 'spark',
+          kind: ev.kind === 'secret_break' ? 'shard' : 'star',
           x: ev.x,
           y: 0.9,
           z: ev.z,
-          count: 10,
-          color: ev.color || '#d9a826',
+          count: 12,
+          color: col,
           speedMin: 2.0,
-          speedMax: 5.0,
-          upMin: 2.0,
-          upMax: 5.2,
-          durationMs: 560,
-          opacity: 0.72,
+          speedMax: 5.4,
+          upMin: 2.2,
+          upMax: 5.4,
+          durationMs: 580,
+          opacity: 0.86,
         });
         break;
       }
@@ -1304,6 +1770,7 @@ export class EffectsManager {
       const t = (now - ef.createdAt) / ef.durationMs;
       if (t >= 1) {
         this.scene.remove(ef.mesh);
+        ef.onDone?.();
         this.transientEffects.splice(i, 1);
       } else {
         ef.onUpdate(t, dt);

@@ -1023,10 +1023,24 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       0.045,
       { map: iceTex, emissive: '#0284c7', emissiveIntensity: 0.25 }
     );
-    const frostHeart = createComicMesh(new THREE.OctahedronGeometry(0.75, 1), '#a5f3fc', 0.03, {
-      emissive: '#38bdf8',
-      emissiveIntensity: 0.5,
-    });
+    const frostHeart = createComicMesh(
+      createPlushLathe(
+        [
+          [0.01, -0.78],
+          [0.54, -0.35],
+          [0.68, 0.05],
+          [0.44, 0.55],
+          [0.01, 0.85],
+        ],
+        20
+      ),
+      '#a5f3fc',
+      0.03,
+      {
+        emissive: '#38bdf8',
+        emissiveIntensity: 0.46,
+      }
+    );
     frostHeart.position.set(0, 3.5, 0.95);
 
     const kFaceTex = createMonsterFaceTexture({
@@ -1041,16 +1055,33 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     head.rotation.y = -Math.PI / 2;
     head.position.y = 5.4;
 
-    // Crystal Ice Crown
+    // Plush Rounded Crystal Ice Crown (ZERO angular cones!)
+    const iceBand = createComicMesh(new THREE.TorusGeometry(0.66, 0.14, 12, 24), '#38bdf8', 0.026, {
+      emissive: '#0284c7',
+      emissiveIntensity: 0.28,
+    });
+    iceBand.rotation.x = Math.PI / 2;
+    iceBand.position.y = 5.95;
+    body.add(iceBand);
+    const frostSpireGeo = createPlushLathe(
+      [
+        [0.01, 0],
+        [0.19, 0.12],
+        [0.16, 0.52],
+        [0.05, 0.85],
+        [0.01, 0.94],
+      ],
+      16
+    );
     for (let s = 0; s < 5; s++) {
       const a = (s / 5) * Math.PI * 2;
-      const spike = createComicMesh(new THREE.ConeGeometry(0.18, 0.92, 8), '#7dd3fc', 0.024, {
+      const spike = createComicMesh(frostSpireGeo, '#a5f3fc', 0.022, {
         emissive: '#38bdf8',
-        emissiveIntensity: 0.35,
+        emissiveIntensity: 0.36,
       });
-      spike.position.set(Math.cos(a) * 0.62, 6.18, Math.sin(a) * 0.62);
-      spike.rotation.z = -Math.cos(a) * 0.25;
-      spike.rotation.x = Math.sin(a) * 0.25;
+      spike.position.set(Math.cos(a) * 0.62, 5.95, Math.sin(a) * 0.62);
+      spike.rotation.z = -Math.cos(a) * 0.22;
+      spike.rotation.x = Math.sin(a) * 0.22;
       body.add(spike);
     }
 
@@ -1087,14 +1118,24 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     spearHead.rotation.x = 0.55;
     rightArm.add(armK, pole, spearHead);
 
-    // Orbiting Aurora Shards + Ice Shield Ring
+    // Orbiting Plush Aurora Drop-Crystals + Ice Shield Ring
     orbitGroup = new THREE.Group();
     orbitGroup.position.y = 3.2;
+    const auroraDropGeo = createPlushLathe(
+      [
+        [0.01, -0.38],
+        [0.24, -0.1],
+        [0.26, 0.14],
+        [0.12, 0.36],
+        [0.01, 0.44],
+      ],
+      16
+    );
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2;
-      const crystal = createComicMesh(new THREE.OctahedronGeometry(0.34, 0), '#a5f3fc', 0.022, {
+      const crystal = createComicMesh(auroraDropGeo, '#a5f3fc', 0.022, {
         emissive: '#38bdf8',
-        emissiveIntensity: 0.45,
+        emissiveIntensity: 0.42,
       });
       crystal.position.set(Math.cos(a) * 2.8, Math.sin(i * 1.4) * 0.8, Math.sin(a) * 2.8);
       orbitGroup.add(crystal);
@@ -1359,19 +1400,24 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     head.rotation.y = -Math.PI / 2;
     head.position.y = 4.85;
 
-    // Royal Crown
+    // Royal Plush Golden Crown w/ Sapphire Pearls (ZERO angular cones!)
     const crownBand = createComicMesh(new THREE.TorusGeometry(0.74, 0.16, 12, 24), '#fbbf24', 0.03);
     crownBand.rotation.x = Math.PI / 2;
     crownBand.position.y = 5.45;
     body.add(crownBand);
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2;
-      const spire = createComicMesh(new THREE.ConeGeometry(0.15, 0.65, 8), '#fde047', 0.02, {
+      const spire = createComicMesh(new THREE.CapsuleGeometry(0.11, 0.36, 8, 12), '#fde047', 0.02, {
         emissive: '#f59e0b',
-        emissiveIntensity: 0.35,
+        emissiveIntensity: 0.32,
       });
-      spire.position.set(Math.cos(a) * 0.72, 5.82, Math.sin(a) * 0.72);
-      body.add(spire);
+      spire.position.set(Math.cos(a) * 0.72, 5.75, Math.sin(a) * 0.72);
+      const pearl = createComicMesh(new THREE.SphereGeometry(0.11, 12, 10), '#38bdf8', 0.016, {
+        emissive: '#0284c7',
+        emissiveIntensity: 0.38,
+      });
+      pearl.position.set(Math.cos(a) * 0.72, 6.04, Math.sin(a) * 0.72);
+      body.add(spire, pearl);
     }
 
     // Left Arm: Huge Golden Guild Shield
@@ -1503,10 +1549,24 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       12
     );
     const tail = createComicMesh(tailGeo, '#047857', 0.038, { map: dragonTex });
-    const tailGem = createComicMesh(new THREE.OctahedronGeometry(0.52, 0), '#fde047', 0.028, {
-      emissive: '#f59e0b',
-      emissiveIntensity: 0.45,
-    });
+    const tailGem = createComicMesh(
+      createPlushLathe(
+        [
+          [0.01, -0.45],
+          [0.36, -0.15],
+          [0.44, 0.14],
+          [0.2, 0.42],
+          [0.01, 0.55],
+        ],
+        18
+      ),
+      '#fde047',
+      0.028,
+      {
+        emissive: '#f59e0b',
+        emissiveIntensity: 0.44,
+      }
+    );
     tailGem.position.set(0, 2.95, -5.15);
 
     // Massive Emerald-Gold Dragon Wings!
@@ -1603,12 +1663,20 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       rightLeg = createComicMesh(new THREE.CapsuleGeometry(0.18, 0.28, 8, 12), '#334155', 0.022);
       rightLeg.position.set(0.3, 0.28, 0.02);
       body.add(belly, head, leftArm, rightArm, leftLeg, rightLeg);
-    } else if (arch.includes('dzinn') || arch.includes('nekro') || arch.includes('szczelina')) {
-      // Swirly floating cartoon spirit / necromancer / void wisp with painted robe & face!
+    } else if (
+      arch.includes('dzinn') ||
+      arch.includes('nekro') ||
+      arch.includes('szczelina') ||
+      arch.includes('zorza') ||
+      arch.includes('czas') ||
+      arch.includes('kleryk') ||
+      arch.includes('szaman')
+    ) {
+      // Swirly floating cartoon spirit / mage / shaman with painted robe, face & floating halo!
       const robeTex = createComicSurfaceTexture(col, '#fde047', 'robe');
       const spiritFaceTex = createMonsterFaceTexture({
         skin: col,
-        eyeColor: '#fde047',
+        eyeColor: enemy.act === 5 ? '#a5f3fc' : enemy.act === 7 ? '#00f5d4' : '#fde047',
         accent: '#f0abfc',
         style: 'dryad',
       });
@@ -1634,7 +1702,11 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       head.rotation.y = -Math.PI / 2;
       head.position.y = 1.88;
       // Cute floating mystic hood/halo trim!
-      const hoodRing = createComicMesh(new THREE.TorusGeometry(0.42, 0.08, 10, 20), '#1e1b2e', 0.02);
+      const hoodRing = createComicMesh(
+        new THREE.TorusGeometry(0.42, 0.08, 10, 20),
+        enemy.act >= 7 ? '#fde047' : enemy.act === 5 ? '#bae6fd' : '#1e1b2e',
+        0.02
+      );
       hoodRing.rotation.x = Math.PI / 2 + 0.35;
       hoodRing.position.set(0, 1.72, -0.05);
       leftArm = createComicMesh(new THREE.CapsuleGeometry(0.11, 0.38, 8, 12), col, 0.022);
@@ -1643,23 +1715,56 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       rightArm.position.set(0.56, 1.25, 0.12);
       body.add(robe, head, hoodRing, leftArm, rightArm);
     } else {
-      // Plump comic fantasy minion (Skeleton / Mummy / Forest Shroomling / Imp) with painted face + animated feet!
+      // Plump comic fantasy minion tailored uniquely to every Act (1–9) with painted face + headgear!
       const texPattern =
-        enemy.act === 1 ? 'bone' : enemy.act === 2 ? 'scales' : enemy.act === 3 ? 'bark' : 'magma';
-      const texAccent =
-        enemy.act === 1 ? '#94a3b8' : enemy.act === 2 ? '#f5c249' : enemy.act === 3 ? '#86efac' : '#fb7185';
+        enemy.act === 1
+          ? 'bone'
+          : enemy.act === 2 || enemy.act === 9
+            ? 'scales'
+            : enemy.act === 3
+              ? 'bark'
+              : enemy.act === 5 || enemy.act === 6 || enemy.act === 8
+                ? 'armor'
+                : enemy.act === 7
+                  ? 'robe'
+                  : 'magma';
+      const texAccentByAct: Record<number, string> = {
+        1: '#94a3b8',
+        2: '#f5c249',
+        3: '#86efac',
+        4: '#fb7185',
+        5: '#e0f2fe',
+        6: '#fbbf24',
+        7: '#00f5d4',
+        8: '#fbbf24',
+        9: '#fde047',
+      };
+      const texAccent = texAccentByAct[enemy.act] || '#fb7185';
       const minionTex = createComicSurfaceTexture(col, texAccent, texPattern);
       const faceStyle =
         enemy.act === 1
           ? 'skull'
-          : enemy.act === 2
+          : enemy.act === 2 || enemy.act === 5 || enemy.act === 7 || enemy.act === 8
             ? 'pharaoh'
             : enemy.act === 3
               ? 'dryad'
-              : 'imp';
+              : enemy.act === 6
+                ? 'golem'
+                : 'imp';
+      const eyeByAct: Record<number, string> = {
+        1: '#fb7185',
+        2: '#38bdf8',
+        3: '#fde047',
+        4: '#fb7185',
+        5: '#e0f2fe',
+        6: '#fef08a',
+        7: '#00f5d4',
+        8: '#38bdf8',
+        9: '#fde047',
+      };
       const minionFaceTex = createMonsterFaceTexture({
         skin: col,
-        eyeColor: enemy.act === 3 ? '#fde047' : enemy.act === 2 ? '#38bdf8' : '#fb7185',
+        eyeColor: eyeByAct[enemy.act] || '#fb7185',
         accent: texAccent,
         style: faceStyle,
       });
@@ -1686,7 +1791,7 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       head.scale.set(1.03, 0.96, 1.0);
       head.position.y = 1.7;
 
-      // Cute thematic headgear per Act!
+      // Cute thematic comic headgear per Act (Acts 1–9)!
       if (enemy.act === 3) {
         // Adorable spotted forest mushroom cap on Act 3 minions!
         const cap = createComicMesh(
@@ -1720,6 +1825,88 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
           );
           body.add(horn);
         }
+      } else if (enemy.act === 5) {
+        // Frosted icy crystal tiara halo on Act 5 Frost minions!
+        const iceRing = createComicMesh(new THREE.TorusGeometry(0.42, 0.075, 10, 20), '#bae6fd', 0.018, {
+          emissive: '#38bdf8',
+          emissiveIntensity: 0.32,
+        });
+        iceRing.rotation.x = Math.PI / 2;
+        iceRing.position.y = 2.12;
+        const gem = createComicMesh(new THREE.SphereGeometry(0.14, 12, 10), '#e0f2fe', 0.014, {
+          emissive: '#22d3ee',
+          emissiveIntensity: 0.38,
+        });
+        gem.scale.set(0.85, 1.4, 0.85);
+        gem.position.set(0, 2.28, 0.28);
+        body.add(iceRing, gem);
+      } else if (enemy.act === 6) {
+        // Plump riveted bronze forge helmet with glowing amber crest on Act 6 minions!
+        const helm = createComicMesh(
+          new THREE.SphereGeometry(0.5, 22, 14, 0, Math.PI * 2, 0, Math.PI * 0.55),
+          '#92400e',
+          0.024
+        );
+        helm.position.y = 1.76;
+        const crest = createComicMesh(new THREE.CapsuleGeometry(0.09, 0.34, 8, 12), '#fbbf24', 0.018, {
+          emissive: '#f97316',
+          emissiveIntensity: 0.32,
+        });
+        crest.rotation.x = Math.PI / 2;
+        crest.position.set(0, 2.26, -0.04);
+        body.add(helm, crest);
+      } else if (enemy.act === 7) {
+        // Luminous golden-teal eclipse halo behind head on Act 7 Eternity minions!
+        const halo = createComicMesh(new THREE.TorusGeometry(0.52, 0.065, 10, 24), '#fde047', 0.016, {
+          emissive: '#00f5d4',
+          emissiveIntensity: 0.36,
+        });
+        halo.position.set(0, 1.95, -0.22);
+        body.add(halo);
+      } else if (enemy.act === 8) {
+        // Royal knight dome helmet + flowing sapphire plume on Act 8 Guild minions!
+        const helm = createComicMesh(
+          new THREE.SphereGeometry(0.5, 22, 14, 0, Math.PI * 2, 0, Math.PI * 0.56),
+          '#1e40af',
+          0.024
+        );
+        helm.position.y = 1.76;
+        const plume = createComicMesh(
+          createTaperedCurveGeometry(
+            [
+              [0, 2.22, 0.12],
+              [0, 2.48, -0.18],
+              [0, 2.26, -0.52],
+            ],
+            0.14,
+            0.035,
+            12,
+            10
+          ),
+          '#fbbf24',
+          0.02
+        );
+        body.add(helm, plume);
+      } else if (enemy.act === 9) {
+        // Cute curved golden baby-dragon horns on Act 9 Guild Dragon minions!
+        for (const s of [-1, 1]) {
+          const dHorn = createComicMesh(
+            createTaperedCurveGeometry(
+              [
+                [s * 0.24, 2.04, -0.02],
+                [s * 0.44, 2.28, -0.14],
+                [s * 0.54, 2.48, -0.3],
+              ],
+              0.09,
+              0.025,
+              12,
+              10
+            ),
+            '#fbbf24',
+            0.018
+          );
+          body.add(dHorn);
+        }
       } else if (arch.includes('mumia')) {
         // Soft bandage rings around Mummy!
         for (let b = 0; b < 3; b++) {
@@ -1731,7 +1918,18 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       }
 
       // Cute articulated cartoon boots/feet!
-      const bootCol = enemy.act === 1 ? '#475569' : enemy.act === 2 ? '#92400e' : enemy.act === 3 ? '#3f2e26' : '#311b3b';
+      const bootColByAct: Record<number, string> = {
+        1: '#475569',
+        2: '#92400e',
+        3: '#3f2e26',
+        4: '#311b3b',
+        5: '#1e3a8a',
+        6: '#572814',
+        7: '#312e81',
+        8: '#1e3a8a',
+        9: '#065f46',
+      };
+      const bootCol = bootColByAct[enemy.act] || '#311b3b';
       leftLeg = createComicMesh(new THREE.CapsuleGeometry(0.13, 0.22, 8, 12), bootCol, 0.02);
       leftLeg.position.set(-0.22, 0.24, 0.04);
       rightLeg = createComicMesh(new THREE.CapsuleGeometry(0.13, 0.22, 8, 12), bootCol, 0.02);
@@ -1986,9 +2184,10 @@ function buildUniqueMiniBossBody(
       );
       const cowl = createComicMesh(new THREE.SphereGeometry(0.68, 20, 16), '#291445', 0.038);
       cowl.position.y = 3.35;
-      const skull = createComicMesh(new THREE.SphereGeometry(0.48, 20, 16), '#eef2f7', 0.032);
+      const skullFace = createMonsterFaceTexture({ skin: '#eef2f7', eyeColor: '#c084fc', accent: '#eab308', style: 'skull' });
+      const skull = createComicMesh(new THREE.SphereGeometry(0.48, 24, 18), '#eef2f7', 0.032, { map: skullFace });
+      skull.rotation.y = -Math.PI / 2;
       skull.position.set(0, 3.3, 0.25);
-      addMonsterEyes(body, 3.36, 0.68, 0.17, 0.1, '#c084fc');
 
       const halo = new THREE.Group();
       halo.position.set(0, 3.2, -0.75);
@@ -2051,9 +2250,10 @@ function buildUniqueMiniBossBody(
           body.add(leg, paw);
         }
       }
-      const head = createComicMesh(new THREE.SphereGeometry(0.7, 22, 18), '#f2c357', 0.04);
+      const sphinxFace = createMonsterFaceTexture({ skin: '#f2c357', eyeColor: '#38bdf8', accent: '#1b82b8', style: 'pharaoh' });
+      const head = createComicMesh(new THREE.SphereGeometry(0.7, 26, 20), '#f2c357', 0.04, { map: sphinxFace });
+      head.rotation.y = -Math.PI / 2;
       head.position.set(0, 2.45, 1.42);
-      addMonsterEyes(body, 2.52, 2.06, 0.24, 0.13, '#38bdf8', '#146d9c');
 
       // Cute cat ears + fluffy royal-blue mane puffs (ZERO BoxGeometry!)
       for (const s of [-1, 1]) {
@@ -2289,9 +2489,10 @@ function buildUniqueMiniBossBody(
         0.036
       );
       witchTorso.position.set(0, 1.5, 0.68);
-      const head = createComicMesh(new THREE.SphereGeometry(0.48, 20, 16), '#d8b4fe', 0.034);
+      const witchFace = createMonsterFaceTexture({ skin: '#d8b4fe', eyeColor: '#a3e635', accent: '#6d28d9', style: 'dryad' });
+      const head = createComicMesh(new THREE.SphereGeometry(0.48, 24, 18), '#d8b4fe', 0.034, { map: witchFace });
+      head.rotation.y = -Math.PI / 2;
       head.position.set(0, 3.1, 0.68);
-      addMonsterEyes(body, 3.14, 1.12, 0.17, 0.1, '#a3e635', '#2e1065');
 
       const hatBrim = createComicMesh(new THREE.CylinderGeometry(0.82, 0.86, 0.1, 24), '#271440', 0.03);
       hatBrim.position.set(0, 3.45, 0.68);
@@ -2379,8 +2580,598 @@ function buildUniqueMiniBossBody(
       return;
     }
 
+    case 'mb_hc_mroz_rycerz': {
+      // Voryn, Rycerz Zorzy (Act 5 HC): Frosted Crystal Paladin w/ Aurora Cape, Visor Helm, Frost Shield & Ice Lance!
+      const frostArmorTex = createComicSurfaceTexture('#1d4ed8', '#bae6fd', 'armor');
+      const torso = createComicMesh(
+        createPlushLathe(
+          [
+            [0.01, 0.12],
+            [0.75, 0.3],
+            [0.98, 1.2],
+            [1.12, 2.2],
+            [0.86, 2.95],
+            [0.01, 3.1],
+          ],
+          24
+        ),
+        '#1e40af',
+        0.04,
+        { map: frostArmorTex }
+      );
+      const cape = createComicMesh(
+        new THREE.CylinderGeometry(0.76, 1.24, 2.4, 20, 2, true, Math.PI * 0.62, Math.PI * 0.76),
+        '#38bdf8',
+        0.026,
+        { side: THREE.DoubleSide, emissive: '#0284c7', emissiveIntensity: 0.24 }
+      );
+      cape.position.set(0, 1.75, -0.35);
+      cape.rotation.x = 0.2;
+      const headTex = createMonsterFaceTexture({ skin: '#e0f2fe', eyeColor: '#22d3ee', accent: '#38bdf8', style: 'pharaoh' });
+      const head = createComicMesh(new THREE.SphereGeometry(0.6, 26, 20), '#e0f2fe', 0.036, { map: headTex });
+      head.rotation.y = -Math.PI / 2;
+      head.position.y = 3.55;
+      const crest = createComicMesh(
+        createTaperedCurveGeometry(
+          [
+            [0, 4.05, 0.2],
+            [0, 4.48, -0.15],
+            [0, 4.18, -0.68],
+          ],
+          0.22,
+          0.04,
+          14,
+          12
+        ),
+        '#7dd3fc',
+        0.024,
+        { emissive: '#38bdf8', emissiveIntensity: 0.32 }
+      );
+      const leftArm = new THREE.Group();
+      leftArm.position.set(-1.18, 2.35, 0.2);
+      const fShield = createComicMesh(new THREE.SphereGeometry(0.95, 20, 16), '#7dd3fc', 0.032, {
+        emissive: '#0284c7',
+        emissiveIntensity: 0.28,
+      });
+      fShield.scale.set(0.32, 1.25, 0.98);
+      fShield.position.set(-0.15, -0.35, 0.35);
+      leftArm.add(fShield);
+      const rightArm = new THREE.Group();
+      rightArm.position.set(1.18, 2.35, 0.2);
+      const lanceShaft = createComicMesh(new THREE.CapsuleGeometry(0.09, 3.6, 8, 14), '#e0f2fe', 0.024);
+      lanceShaft.position.set(0.1, 0.2, 0.7);
+      lanceShaft.rotation.x = 0.55;
+      const lanceTip = createComicMesh(createSoftBladeGeometry(0.55, 1.55, 0.14, 'sword'), '#38bdf8', 0.028, {
+        emissive: '#22d3ee',
+        emissiveIntensity: 0.42,
+      });
+      lanceTip.position.set(0.1, 1.45, 1.65);
+      lanceTip.rotation.x = 0.55;
+      rightArm.add(lanceShaft, lanceTip);
+      body.add(torso, cape, head, crest, leftArm, rightArm);
+      setRefs({ leftArm, rightArm });
+      return;
+    }
+
+    case 'mb_hc_mroz_wiedma': {
+      // Glacia, Wyrocznia Lodu (Act 5 HC): Floating Glacial Oracle w/ Ice-Pearl Crown & Orbiting Snow Ring!
+      const frostRobeTex = createComicSurfaceTexture('#0284c7', '#e0f2fe', 'robe');
+      const robe = createComicMesh(
+        createPlushLathe(
+          [
+            [0.01, 0.25],
+            [1.18, 0.45],
+            [0.86, 1.6],
+            [0.66, 2.8],
+            [0.01, 3.05],
+          ],
+          24
+        ),
+        '#0369a1',
+        0.038,
+        { map: frostRobeTex, emissive: '#0284c7', emissiveIntensity: 0.22 }
+      );
+      const faceTex = createMonsterFaceTexture({ skin: '#e0f2fe', eyeColor: '#22d3ee', accent: '#7dd3fc', style: 'dryad' });
+      const head = createComicMesh(new THREE.SphereGeometry(0.58, 26, 20), '#e0f2fe', 0.036, { map: faceTex });
+      head.rotation.y = -Math.PI / 2;
+      head.position.y = 3.5;
+      const halo = new THREE.Group();
+      halo.position.set(0, 2.8, 0);
+      const ring = createComicMesh(new THREE.TorusGeometry(1.75, 0.1, 10, 28), '#7dd3fc', 0.022, {
+        emissive: '#38bdf8',
+        emissiveIntensity: 0.38,
+      });
+      ring.rotation.x = Math.PI / 2 + 0.25;
+      halo.add(ring);
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        const orb = createComicMesh(new THREE.SphereGeometry(0.2, 14, 12), '#e0f2fe', 0.018, {
+          emissive: '#38bdf8',
+          emissiveIntensity: 0.4,
+        });
+        orb.scale.set(0.85, 1.45, 0.85);
+        orb.position.set(Math.cos(a) * 1.75, Math.sin(i) * 0.35, Math.sin(a) * 1.75);
+        halo.add(orb);
+      }
+      const rightArm = new THREE.Group();
+      rightArm.position.set(0.92, 2.45, 0.3);
+      const staff = createComicMesh(new THREE.CapsuleGeometry(0.08, 2.8, 8, 12), '#bae6fd', 0.022);
+      const crystal = createComicMesh(new THREE.SphereGeometry(0.36, 16, 14), '#22d3ee', 0.024, {
+        emissive: '#06b6d4',
+        emissiveIntensity: 0.45,
+      });
+      crystal.scale.set(0.82, 1.45, 0.82);
+      crystal.position.y = 1.72;
+      rightArm.add(staff, crystal);
+      body.add(robe, head, halo, rightArm);
+      setRefs({ orbitGroup: halo, rightArm });
+      return;
+    }
+
+    case 'mb_hc_kuznia_straznik': {
+      // Brimstone, Kowal Zagłady (Act 6 HC): Bronze Titan Blacksmith w/ Molten Forge Core & Twin Anvil-Hammers!
+      const bronzeTex = createComicSurfaceTexture('#9a5b24', '#fbbf24', 'armor');
+      const torso = createComicMesh(new THREE.SphereGeometry(1.32, 24, 18), '#854d1e', 0.042, { map: bronzeTex });
+      torso.scale.set(1.12, 1.02, 0.92);
+      torso.position.y = 2.05;
+      const core = createComicMesh(new THREE.SphereGeometry(0.68, 18, 14), '#fbbf24', 0.026, {
+        emissive: '#f97316',
+        emissiveIntensity: 0.46,
+      });
+      core.scale.set(1, 0.95, 0.55);
+      core.position.set(0, 2.05, 1.02);
+      const faceTex = createMonsterFaceTexture({ skin: '#6b3e1a', eyeColor: '#fef08a', accent: '#f97316', style: 'golem' });
+      const head = createComicMesh(new THREE.SphereGeometry(0.64, 24, 18), '#6b3e1a', 0.038, { map: faceTex });
+      head.rotation.y = -Math.PI / 2;
+      head.position.y = 3.42;
+      const makeAnvilArm = (side: -1 | 1) => {
+        const g = new THREE.Group();
+        g.position.set(side * 1.55, 2.35, 0.25);
+        const arm = createComicMesh(new THREE.CapsuleGeometry(0.28, 0.9, 10, 14), '#92400e', 0.03);
+        arm.position.y = -0.45;
+        const hammer = createComicMesh(new THREE.CapsuleGeometry(0.45, 0.85, 12, 18), '#f59e0b', 0.032, {
+          emissive: '#ea580c',
+          emissiveIntensity: 0.36,
+        });
+        hammer.rotation.x = Math.PI / 2;
+        hammer.position.set(0, -0.95, 0.55);
+        g.add(arm, hammer);
+        return g;
+      };
+      const leftArm = makeAnvilArm(-1);
+      const rightArm = makeAnvilArm(1);
+      body.add(torso, core, head, leftArm, rightArm);
+      setRefs({ leftArm, rightArm, flameMesh: core });
+      return;
+    }
+
+    case 'mb_hc_kuznia_automat': {
+      // Solarius, Złoty Automat (Act 6 HC): Sleek Golden Clockwork Construct w/ Solar Reactor & Spinning Gear-Halo!
+      const goldTex = createComicSurfaceTexture('#d97706', '#fef08a', 'armor');
+      const torso = createComicMesh(
+        createPlushLathe(
+          [
+            [0.01, 0.35],
+            [0.62, 0.65],
+            [1.08, 1.85],
+            [1.18, 2.65],
+            [0.72, 3.1],
+            [0.01, 3.2],
+          ],
+          24
+        ),
+        '#eab308',
+        0.04,
+        { map: goldTex }
+      );
+      const reactor = createComicMesh(new THREE.SphereGeometry(0.56, 18, 14), '#fef08a', 0.024, {
+        emissive: '#f59e0b',
+        emissiveIntensity: 0.48,
+      });
+      reactor.position.set(0, 2.2, 0.92);
+      const faceTex = createMonsterFaceTexture({ skin: '#fde047', eyeColor: '#38bdf8', accent: '#b45309', style: 'pharaoh' });
+      const head = createComicMesh(new THREE.SphereGeometry(0.56, 24, 18), '#fde047', 0.036, { map: faceTex });
+      head.rotation.y = -Math.PI / 2;
+      head.position.y = 3.65;
+      const gearHalo = new THREE.Group();
+      gearHalo.position.set(0, 2.6, -0.82);
+      const gRing = createComicMesh(new THREE.TorusGeometry(1.45, 0.16, 10, 28), '#fbbf24', 0.028, {
+        emissive: '#d97706',
+        emissiveIntensity: 0.32,
+      });
+      gearHalo.add(gRing);
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const tooth = createComicMesh(new THREE.SphereGeometry(0.2, 12, 10), '#fef08a', 0.018);
+        tooth.position.set(Math.cos(a) * 1.62, Math.sin(a) * 1.62, 0);
+        gearHalo.add(tooth);
+      }
+      const makeCannonArm = (side: -1 | 1) => {
+        const g = new THREE.Group();
+        g.position.set(side * 1.32, 2.45, 0.18);
+        const pod = createComicMesh(new THREE.CapsuleGeometry(0.32, 0.95, 10, 16), '#b45309', 0.03);
+        pod.rotation.x = Math.PI / 2 - 0.35;
+        pod.position.set(0, -0.25, 0.4);
+        const muzzle = createComicMesh(new THREE.SphereGeometry(0.26, 14, 12), '#38bdf8', 0.02, {
+          emissive: '#0284c7',
+          emissiveIntensity: 0.44,
+        });
+        muzzle.position.set(0, -0.42, 0.95);
+        g.add(pod, muzzle);
+        return g;
+      };
+      const leftArm = makeCannonArm(-1);
+      const rightArm = makeCannonArm(1);
+      body.add(torso, reactor, head, gearHalo, leftArm, rightArm);
+      setRefs({ orbitGroup: gearHalo, leftArm, rightArm, flameMesh: reactor });
+      return;
+    }
+
+    case 'mb_hc_tron_herold': {
+      // Chronos, Herold Zaćmienia (Act 7 HC): Winged Cosmic Time-Keeper w/ Starlight Wings & Crescent Scythe!
+      const voidTex = createComicSurfaceTexture('#4c1d95', '#fde047', 'robe');
+      const robe = createComicMesh(
+        createPlushLathe(
+          [
+            [0.01, 0.3],
+            [0.95, 0.55],
+            [0.78, 1.75],
+            [0.98, 2.75],
+            [0.64, 3.2],
+            [0.01, 3.3],
+          ],
+          24
+        ),
+        '#4c1d95',
+        0.04,
+        { map: voidTex, emissive: '#6d28d9', emissiveIntensity: 0.25 }
+      );
+      const faceTex = createMonsterFaceTexture({ skin: '#f5f3ff', eyeColor: '#fde047', accent: '#a855f7', style: 'pharaoh' });
+      const head = createComicMesh(new THREE.SphereGeometry(0.58, 26, 20), '#f5f3ff', 0.036, { map: faceTex });
+      head.rotation.y = -Math.PI / 2;
+      head.position.y = 3.72;
+      const wGeo = createSoftWingGeometry(2.3, 1.55, 0.12, 'feather');
+      const wingL = new THREE.Group();
+      wingL.position.set(-0.78, 2.75, -0.45);
+      const wlm = createComicMesh(wGeo, '#c084fc', 0.028, { emissive: '#7c3aed', emissiveIntensity: 0.34 });
+      wlm.scale.x = -1;
+      wingL.add(wlm);
+      const wingR = new THREE.Group();
+      wingR.position.set(0.78, 2.75, -0.45);
+      wingR.add(createComicMesh(wGeo, '#c084fc', 0.028, { emissive: '#7c3aed', emissiveIntensity: 0.34 }));
+      const halo = new THREE.Group();
+      halo.position.y = 3.0;
+      const tRing = createComicMesh(new THREE.TorusGeometry(1.85, 0.1, 10, 28), '#fde047', 0.02, {
+        emissive: '#f59e0b',
+        emissiveIntensity: 0.4,
+      });
+      tRing.rotation.x = Math.PI / 2 - 0.3;
+      halo.add(tRing);
+      const rightArm = new THREE.Group();
+      rightArm.position.set(1.05, 2.55, 0.25);
+      const blade = createComicMesh(createSoftBladeGeometry(0.58, 2.6, 0.12, 'cleaver'), '#00f5d4', 0.028, {
+        emissive: '#06b6d4',
+        emissiveIntensity: 0.42,
+      });
+      blade.rotation.x = 0.58;
+      blade.position.set(0.1, 0.25, 0.65);
+      rightArm.add(blade);
+      body.add(robe, head, wingL, wingR, halo, rightArm);
+      setRefs({ wingL, wingR, orbitGroup: halo, rightArm });
+      return;
+    }
+
+    case 'mb_hc_tron_serafin': {
+      // Serafina, Ostrze Nieśmiertelnych (Act 7 HC): Radiant Teal-Winged Seraph Warrior w/ Twin Cosmic Swords!
+      const serTex = createComicSurfaceTexture('#f8fafc', '#00f5d4', 'armor');
+      const torso = createComicMesh(
+        createPlushLathe(
+          [
+            [0.01, 0.2],
+            [0.98, 0.4],
+            [0.64, 1.55],
+            [0.88, 2.55],
+            [0.58, 3.0],
+            [0.01, 3.1],
+          ],
+          24
+        ),
+        '#f8fafc',
+        0.036,
+        { map: serTex }
+      );
+      const faceTex = createMonsterFaceTexture({ skin: '#fff1f2', eyeColor: '#00f5d4', accent: '#fde047', style: 'dryad' });
+      const head = createComicMesh(new THREE.SphereGeometry(0.56, 26, 20), '#fff1f2', 0.034, { map: faceTex });
+      head.rotation.y = -Math.PI / 2;
+      head.position.y = 3.55;
+      const tiara = createComicMesh(new THREE.TorusGeometry(0.56, 0.08, 10, 24), '#fde047', 0.02, {
+        emissive: '#f59e0b',
+        emissiveIntensity: 0.36,
+      });
+      tiara.rotation.x = Math.PI / 2;
+      tiara.position.y = 3.92;
+      const wGeo = createSoftWingGeometry(2.55, 1.7, 0.12, 'feather');
+      const wingL = new THREE.Group();
+      wingL.position.set(-0.72, 2.65, -0.42);
+      const wlm = createComicMesh(wGeo, '#00f5d4', 0.028, { emissive: '#06b6d4', emissiveIntensity: 0.36 });
+      wlm.scale.x = -1;
+      wingL.add(wlm);
+      const wingR = new THREE.Group();
+      wingR.position.set(0.72, 2.65, -0.42);
+      wingR.add(createComicMesh(wGeo, '#00f5d4', 0.028, { emissive: '#06b6d4', emissiveIntensity: 0.36 }));
+      const makeSwordArm = (side: -1 | 1) => {
+        const g = new THREE.Group();
+        g.position.set(side * 1.02, 2.45, 0.25);
+        const sw = createComicMesh(createSoftBladeGeometry(0.42, 2.25, 0.1, 'sword'), side === 1 ? '#00f5d4' : '#c084fc', 0.024, {
+          emissive: side === 1 ? '#06b6d4' : '#a855f7',
+          emissiveIntensity: 0.42,
+        });
+        sw.rotation.x = 0.65;
+        sw.position.set(0, -0.1, 0.55);
+        g.add(sw);
+        return g;
+      };
+      const leftArm = makeSwordArm(-1);
+      const rightArm = makeSwordArm(1);
+      body.add(torso, head, tiara, wingL, wingR, leftArm, rightArm);
+      setRefs({ wingL, wingR, leftArm, rightArm });
+      return;
+    }
+
+    case 'mb_guild_kapitan': {
+      // Kapitan Valerius (Act 8 Guild I): Royal Sapphire-Gold Banner Knight w/ Plumed Helm, Tower Shield & Lance!
+      const royalTex = createComicSurfaceTexture('#1e40af', '#fbbf24', 'armor');
+      const torso = createComicMesh(
+        createPlushLathe(
+          [
+            [0.01, 0.1],
+            [0.78, 0.28],
+            [1.02, 1.3],
+            [1.14, 2.25],
+            [0.86, 2.9],
+            [0.01, 3.05],
+          ],
+          24
+        ),
+        '#1d4ed8',
+        0.04,
+        { map: royalTex }
+      );
+      const faceTex = createMonsterFaceTexture({ skin: '#fde68a', eyeColor: '#38bdf8', accent: '#fbbf24', style: 'pharaoh' });
+      const head = createComicMesh(new THREE.SphereGeometry(0.6, 26, 20), '#fde68a', 0.036, { map: faceTex });
+      head.rotation.y = -Math.PI / 2;
+      head.position.y = 3.5;
+      const plume = createComicMesh(
+        createTaperedCurveGeometry(
+          [
+            [0, 3.98, 0.15],
+            [0, 4.46, -0.22],
+            [0, 4.02, -0.78],
+          ],
+          0.22,
+          0.04,
+          14,
+          12
+        ),
+        '#fbbf24',
+        0.024
+      );
+      const leftArm = new THREE.Group();
+      leftArm.position.set(-1.18, 2.35, 0.2);
+      const shield = createComicMesh(new THREE.SphereGeometry(0.98, 20, 16), '#fbbf24', 0.034, { map: royalTex });
+      shield.scale.set(0.32, 1.32, 1.0);
+      shield.position.set(-0.15, -0.35, 0.35);
+      leftArm.add(shield);
+      const rightArm = new THREE.Group();
+      rightArm.position.set(1.18, 2.35, 0.2);
+      const lance = createComicMesh(new THREE.CapsuleGeometry(0.09, 3.5, 8, 12), '#fde047', 0.024);
+      lance.position.set(0.1, 0.25, 0.65);
+      lance.rotation.x = 0.55;
+      const tip = createComicMesh(createSoftBladeGeometry(0.52, 1.35, 0.12, 'sword'), '#38bdf8', 0.026, {
+        emissive: '#0284c7',
+        emissiveIntensity: 0.36,
+      });
+      tip.position.set(0.1, 1.4, 1.55);
+      tip.rotation.x = 0.55;
+      rightArm.add(lance, tip);
+      body.add(torso, head, plume, leftArm, rightArm);
+      setRefs({ leftArm, rightArm });
+      return;
+    }
+
+    case 'mb_guild_arcymag': {
+      // Alaric, Arcymag Sztandaru (Act 8 Guild I): Sapphire Guild Archmage w/ Curved Wizard Hat & Golden Seal Halo!
+      const robeTex = createComicSurfaceTexture('#1e3a8a', '#fbbf24', 'robe');
+      const robe = createComicMesh(
+        createPlushLathe(
+          [
+            [0.01, 0.2],
+            [1.14, 0.4],
+            [0.84, 1.55],
+            [0.66, 2.75],
+            [0.01, 2.95],
+          ],
+          24
+        ),
+        '#1d4ed8',
+        0.038,
+        { map: robeTex }
+      );
+      const faceTex = createMonsterFaceTexture({ skin: '#e0f2fe', eyeColor: '#fde047', accent: '#38bdf8', style: 'dryad' });
+      const head = createComicMesh(new THREE.SphereGeometry(0.56, 26, 20), '#e0f2fe', 0.034, { map: faceTex });
+      head.rotation.y = -Math.PI / 2;
+      head.position.y = 3.4;
+      const hatBrim = createComicMesh(new THREE.CylinderGeometry(0.95, 0.98, 0.12, 24), '#1e3a8a', 0.026);
+      hatBrim.position.y = 3.78;
+      const hatTip = createComicMesh(
+        createTaperedCurveGeometry(
+          [
+            [0, 3.8, 0],
+            [0.08, 4.42, -0.18],
+            [0.28, 4.78, -0.52],
+          ],
+          0.52,
+          0.06,
+          14,
+          12
+        ),
+        '#1e3a8a',
+        0.028
+      );
+      const orbitGroup = new THREE.Group();
+      orbitGroup.position.y = 2.85;
+      const ring = createComicMesh(new THREE.TorusGeometry(1.68, 0.11, 10, 28), '#fbbf24', 0.024, {
+        emissive: '#f59e0b',
+        emissiveIntensity: 0.36,
+      });
+      ring.rotation.x = Math.PI / 2 + 0.2;
+      orbitGroup.add(ring);
+      const rightArm = new THREE.Group();
+      rightArm.position.set(0.95, 2.35, 0.3);
+      const staff = createComicMesh(new THREE.CapsuleGeometry(0.08, 2.85, 8, 12), '#fbbf24', 0.022);
+      const orb = createComicMesh(new THREE.SphereGeometry(0.38, 16, 14), '#38bdf8', 0.024, {
+        emissive: '#0284c7',
+        emissiveIntensity: 0.44,
+      });
+      orb.position.y = 1.72;
+      rightArm.add(staff, orb);
+      body.add(robe, head, hatBrim, hatTip, orbitGroup, rightArm);
+      setRefs({ orbitGroup, rightArm });
+      return;
+    }
+
+    case 'mb_guild_jezdzca': {
+      // Drakon, Jeździec Łuski (Act 9 Guild II): Emerald Dragon Berserker w/ Curved Dragon-Horn Helm & Twin Jade Axes!
+      const jadeTex = createComicSurfaceTexture('#059669', '#fbbf24', 'scales');
+      const torso = createComicMesh(
+        createPlushLathe(
+          [
+            [0.01, 0.12],
+            [0.82, 0.32],
+            [1.12, 1.35],
+            [1.22, 2.3],
+            [0.88, 2.95],
+            [0.01, 3.1],
+          ],
+          24
+        ),
+        '#047857',
+        0.042,
+        { map: jadeTex }
+      );
+      const faceTex = createMonsterFaceTexture({ skin: '#10b981', eyeColor: '#fde047', accent: '#fbbf24', style: 'imp' });
+      const head = createComicMesh(new THREE.SphereGeometry(0.62, 26, 20), '#10b981', 0.038, { map: faceTex });
+      head.rotation.y = -Math.PI / 2;
+      head.position.y = 3.55;
+      for (const s of [-1, 1]) {
+        const horn = createComicMesh(
+          createTaperedCurveGeometry(
+            [
+              [s * 0.34, 3.88, 0],
+              [s * 0.72, 4.32, -0.18],
+              [s * 0.92, 4.72, -0.42],
+            ],
+            0.16,
+            0.035,
+            14,
+            10
+          ),
+          '#fbbf24',
+          0.024
+        );
+        body.add(horn);
+      }
+      const makeJadeAxe = (side: -1 | 1) => {
+        const g = new THREE.Group();
+        g.position.set(side * 1.28, 2.38, 0.22);
+        const shaft = createComicMesh(new THREE.CapsuleGeometry(0.09, 2.5, 8, 12), '#5c341a', 0.024);
+        shaft.rotation.x = 0.55;
+        shaft.position.set(0, -0.1, 0.55);
+        const blade = createComicMesh(createSoftBladeGeometry(0.9, 1.2, 0.14, 'axe'), '#34d399', 0.028, {
+          emissive: '#10b981',
+          emissiveIntensity: 0.35,
+        });
+        blade.rotation.y = Math.PI / 2;
+        blade.position.set(0, 0.75, 1.25);
+        g.add(shaft, blade);
+        return g;
+      };
+      const leftArm = makeJadeAxe(-1);
+      const rightArm = makeJadeAxe(1);
+      body.add(torso, head, leftArm, rightArm);
+      setRefs({ leftArm, rightArm });
+      return;
+    }
+
+    case 'mb_guild_kaplanka': {
+      // Virelia, Kapłanka Smoka (Act 9 Guild II): Jade Dragon Shamaness w/ Golden Horn Crown & Orbiting Amber Orbs!
+      const shamanTex = createComicSurfaceTexture('#047857', '#fde047', 'robe');
+      const robe = createComicMesh(
+        createPlushLathe(
+          [
+            [0.01, 0.22],
+            [1.16, 0.45],
+            [0.86, 1.6],
+            [0.64, 2.8],
+            [0.01, 3.0],
+          ],
+          24
+        ),
+        '#065f46',
+        0.038,
+        { map: shamanTex }
+      );
+      const faceTex = createMonsterFaceTexture({ skin: '#a7f3d0', eyeColor: '#f59e0b', accent: '#10b981', style: 'dryad' });
+      const head = createComicMesh(new THREE.SphereGeometry(0.56, 26, 20), '#a7f3d0', 0.036, { map: faceTex });
+      head.rotation.y = -Math.PI / 2;
+      head.position.y = 3.46;
+      for (const s of [-1, 1]) {
+        const crownHorn = createComicMesh(
+          createTaperedCurveGeometry(
+            [
+              [s * 0.28, 3.85, 0],
+              [s * 0.65, 4.35, -0.08],
+              [s * 0.48, 4.78, -0.15],
+            ],
+            0.14,
+            0.03,
+            14,
+            10
+          ),
+          '#fbbf24',
+          0.022
+        );
+        body.add(crownHorn);
+      }
+      const orbitGroup = new THREE.Group();
+      orbitGroup.position.y = 2.65;
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2;
+        const amber = createComicMesh(new THREE.SphereGeometry(0.3, 14, 12), '#fbbf24', 0.022, {
+          emissive: '#f59e0b',
+          emissiveIntensity: 0.42,
+        });
+        amber.scale.set(0.88, 1.25, 0.88);
+        amber.position.set(Math.cos(a) * 1.85, Math.sin(i * 1.5) * 0.4, Math.sin(a) * 1.85);
+        orbitGroup.add(amber);
+      }
+      const rightArm = new THREE.Group();
+      rightArm.position.set(0.94, 2.35, 0.3);
+      const staff = createComicMesh(new THREE.CapsuleGeometry(0.08, 2.85, 8, 12), '#d97706', 0.022);
+      const gem = createComicMesh(new THREE.SphereGeometry(0.38, 16, 14), '#34d399', 0.024, {
+        emissive: '#10b981',
+        emissiveIntensity: 0.45,
+      });
+      gem.position.y = 1.72;
+      rightArm.add(staff, gem);
+      body.add(robe, head, orbitGroup, rightArm);
+      setRefs({ orbitGroup, rightArm });
+      return;
+    }
+
     default: {
-      // Kaelen, Zwiastun Szczeliny: Sleek Smooth Cartoon Void Knight w/ Curved Twin Scythes!
+      // Kaelen, Zwiastun Szczeliny: Sleek Smooth Cartoon Void Knight w/ Painted Visor & Curved Twin Scythes!
+      const voidTex = createComicSurfaceTexture('#291f40', '#f43f5e', 'armor');
       const bodyMesh = createComicMesh(
         createPlushLathe(
           [
@@ -2394,12 +3185,14 @@ function buildUniqueMiniBossBody(
           24
         ),
         '#291f40',
-        0.04
+        0.04,
+        { map: voidTex }
       );
-      const helm = createComicMesh(new THREE.SphereGeometry(0.56, 22, 18), '#1c172e', 0.038);
-      helm.scale.set(0.95, 1.12, 1.0);
+      const helmFace = createMonsterFaceTexture({ skin: '#1c172e', eyeColor: '#fb7185', accent: '#f43f5e', style: 'imp' });
+      const helm = createComicMesh(new THREE.SphereGeometry(0.56, 26, 20), '#1c172e', 0.038, { map: helmFace });
+      helm.rotation.y = -Math.PI / 2;
+      helm.scale.set(1.0, 1.12, 0.95);
       helm.position.y = 3.42;
-      addMonsterEyes(body, 3.45, 0.52, 0.19, 0.11, '#fb7185');
 
       const halo = new THREE.Group();
       halo.position.set(0, 4.02, -0.15);
@@ -2473,7 +3266,12 @@ export function updateEnemyRig(
     rig.bossId === 'kaelis' ||
     rig.bossId === 'aeternus' ||
     rig.bossId === 'drakorys' ||
-    rig.archetype === 'mb_nekro_lord'
+    rig.archetype === 'mb_nekro_lord' ||
+    rig.archetype === 'mb_hc_mroz_wiedma' ||
+    rig.archetype === 'mb_hc_tron_herold' ||
+    rig.archetype === 'mb_hc_tron_serafin' ||
+    rig.archetype === 'mb_guild_arcymag' ||
+    rig.archetype === 'mb_guild_kaplanka'
   ) {
     rig.body.position.y = 0.55 + Math.sin(elapsedSec * 2.8) * 0.28;
     rig.body.scale.setScalar(baseScale);
