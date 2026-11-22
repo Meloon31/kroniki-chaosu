@@ -34,6 +34,7 @@ import type {
   WorldSnapshot,
 } from '../shared/types';
 import { soundEngine } from './audio/soundEngine';
+import { musicEngine, MusicTrackInfo } from './audio/musicEngine';
 import { BlacksmithModal } from './components/BlacksmithModal';
 import { ChestPuzzleModal } from './components/ChestPuzzleModal';
 import { ActivePanel, Hud } from './components/Hud';
@@ -164,6 +165,8 @@ export function App() {
   const [boskiFlashKey, setBoskiFlashKey] = useState(0);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [muted, setMuted] = useState(false);
+  const [musicVolume, setMusicVolume] = useState(() => musicEngine.getVolume());
+  const [currentTrack, setCurrentTrack] = useState<MusicTrackInfo>(() => musicEngine.getCurrentTrack());
   const [skillCooldowns, setSkillCooldowns] = useState({
     active1: 0,
     active2: 0,
@@ -286,6 +289,35 @@ export function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [boonOffer, handleChooseBoon]);
+
+  // Bind dynamic Act music engine & track listener
+  useEffect(() => {
+    musicEngine.bindAutoUnlock();
+    return musicEngine.subscribe((tr) => setCurrentTrack(tr));
+  }, []);
+
+  // Switch seamlessly between Main Menu Overture and the 3 dynamic tracks of each Act!
+  useEffect(() => {
+    if (!inGame || !mapData) {
+      musicEngine.playMenuTheme();
+    } else {
+      const loc = mapData.location;
+      musicEngine.playActLocation(loc.act, loc.locationInAct, loc.isMainBoss || loc.isMiniBoss);
+    }
+  }, [inGame, mapData]);
+
+  // Adapt music energy dynamically to Boss fights, Wave Obelisk, and Kill-Streak Combos!
+  useEffect(() => {
+    if (!inGame || !snapshot) {
+      musicEngine.setCombatIntensity(0.4);
+      return;
+    }
+    const bossLive = snapshot.enemies.some((e) => e.alive && (e.tier === 'boss' || e.tier === 'miniboss'));
+    const waveLive = snapshot.obelisk?.state === 'active';
+    const comboBoost = Math.min(0.45, (snapshot.comboCount || 0) * 0.04);
+    const intensity = bossLive ? 1.0 : waveLive ? 0.92 : 0.52 + comboBoost;
+    musicEngine.setCombatIntensity(intensity);
+  }, [inGame, snapshot]);
 
   // Fetch LAN sharing URLs from server
   useEffect(() => {
@@ -916,10 +948,19 @@ export function App() {
               interactHint={interactHint}
               skillCooldowns={skillCooldowns}
               muted={muted}
+              currentTrack={currentTrack}
+              musicVolume={musicVolume}
               onToggleMute={() => {
-                soundEngine.muted = !muted;
-                setMuted(!muted);
+                const next = !muted;
+                soundEngine.muted = next;
+                musicEngine.setMuted(next);
+                setMuted(next);
               }}
+              onMusicVolumeChange={(v) => {
+                setMusicVolume(v);
+                musicEngine.setVolume(v);
+              }}
+              onNextTrack={() => musicEngine.nextTrackInCurrentAct()}
               onOpenPanel={(p) => setActivePanel(p)}
               onCastSkill={(slot) => engineRef.current?.castSkillFromHud(slot)}
               onUsePotion={() => socketRef.current?.emit('player:potion')}

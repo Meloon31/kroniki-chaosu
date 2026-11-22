@@ -10,6 +10,7 @@ import type {
   WorldSnapshot,
 } from '../../shared/types';
 import type { ScreenFloatingText } from '../game/GameEngine';
+import type { MusicTrackInfo } from '../audio/musicEngine';
 
 export type ActivePanel =
   | null
@@ -30,7 +31,11 @@ interface HudProps {
   interactHint: string | null;
   skillCooldowns: { active1: number; active2: number; active3: number };
   muted: boolean;
+  currentTrack?: MusicTrackInfo;
+  musicVolume?: number;
   onToggleMute: () => void;
+  onMusicVolumeChange?: (v: number) => void;
+  onNextTrack?: () => void;
   onOpenPanel: (panel: ActivePanel) => void;
   onCastSkill: (slot: 'active1' | 'active2' | 'active3') => void;
   onUsePotion: () => void;
@@ -48,7 +53,11 @@ export const Hud: React.FC<HudProps> = ({
   interactHint,
   skillCooldowns,
   muted,
+  currentTrack,
+  musicVolume = 0.42,
   onToggleMute,
+  onMusicVolumeChange,
+  onNextTrack,
   onOpenPanel,
   onCastSkill,
   onUsePotion,
@@ -517,7 +526,7 @@ export const Hud: React.FC<HudProps> = ({
           style={{
             position: 'absolute',
             right: 16,
-            top: 235,
+            top: 305,
             padding: '8px 14px',
             borderColor:
               snapshot.comboCount >= 20
@@ -654,6 +663,62 @@ export const Hud: React.FC<HudProps> = ({
             🚪 Lobby
           </button>
         </div>
+
+        {/* Dynamic Act Music Track Strip (3 Tracks per Act + Next Track + Volume) */}
+        {currentTrack && (
+          <div
+            className="comic-panel-sm"
+            style={{
+              padding: '6px 9px',
+              width: 178,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+              borderColor: '#6366f1',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4 }}>
+              <div
+                style={{
+                  fontSize: 10,
+                  fontWeight: 900,
+                  color: '#fde047',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+                title={`${currentTrack.title} (${currentTrack.bpm} BPM)`}
+              >
+                🎵 {currentTrack.act > 0 ? `(${currentTrack.indexInAct}/3) ` : ''}
+                {currentTrack.title}
+              </div>
+              {currentTrack.act > 0 && onNextTrack && (
+                <button
+                  className="comic-btn comic-btn-dark"
+                  onClick={onNextTrack}
+                  title="Przełącz na następny utwór tego Aktu (3 utwory/Akt)"
+                  style={{ padding: '1px 6px', fontSize: 10, flexShrink: 0 }}
+                >
+                  ⏭
+                </button>
+              )}
+            </div>
+            {onMusicVolumeChange && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 9, color: '#94a3b8', fontWeight: 800 }}>Głośn.</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={muted ? 0 : musicVolume}
+                  onChange={(e) => onMusicVolumeChange(Number(e.target.value))}
+                  style={{ width: '100%', accentColor: '#fbbf24', height: 4, cursor: 'pointer' }}
+                />
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Contextual Interact Hint */}
