@@ -49,10 +49,10 @@ function saveLiveServerUrl(url) {
   return cleaned;
 }
 
-async function isServerReachable(url) {
+async function isServerReachable(url, timeoutMs = 3500) {
   if (!url) return false;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3500);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${url}/api/health`, { signal: controller.signal });
     return res.ok;
@@ -75,17 +75,39 @@ async function ensureEmbeddedServer() {
   return serverHandle;
 }
 
+function buildWakeSplashDataUrl(targetUrl) {
+  const html = `<!doctype html>
+<html lang="pl"><head><meta charset="utf-8"><style>
+  body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 35%,#1e1b4b,#0b0914 75%);color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-align:center}
+  .box{padding:36px 44px;border-radius:24px;background:rgba(15,23,42,.72);border:1px solid rgba(251,191,36,.35);box-shadow:0 24px 60px rgba(0,0,0,.55);max-width:440px}
+  h1{margin:0 0 10px;font-size:26px;letter-spacing:.08em;color:#fbbf24}
+  p{margin:8px 0;font-size:14px;color:#cbd5e1;line-height:1.5}
+  .url{font-size:12px;color:#94a3b8;font-family:monospace;margin-top:12px}
+  .spin{width:38px;height:38px;margin:0 auto 18px;border-radius:50%;border:4px solid rgba(251,191,36,.2);border-top-color:#fbbf24;animation:s 1s linear infinite}
+  @keyframes s{to{transform:rotate(360deg)}}
+</style></head><body><div class="box"><div class="spin"></div><h1>KRONIKI CHAOSU</h1><p>Łączenie z serwerem online…</p><p style="font-size:12px;color:#94a3b8">Jeśli serwer był uśpiony, wybudzanie może potrwać do 50 sekund.</p><div class="url">${targetUrl}</div></div></body></html>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
+
 async function loadGameIntoWindow(win, forceLocal = false) {
   const liveUrl = forceLocal ? '' : getSavedLiveServerUrl();
-  if (liveUrl && (await isServerReachable(liveUrl))) {
-    await win.webContents.session.clearCache().catch(() => {});
-    await win.loadURL(liveUrl);
-    return { mode: 'remote', url: liveUrl };
+  if (liveUrl) {
+    // Quick 2s check first; if server is sleeping (e.g. Render free tier), show splash and wait up to 65s
+    let reachable = await isServerReachable(liveUrl, 2500);
+    if (!reachable) {
+      await win.loadURL(buildWakeSplashDataUrl(liveUrl)).catch(() => {});
+      reachable = await isServerReachable(liveUrl, 65000);
+    }
+    if (reachable) {
+      await win.webContents.session.clearCache().catch(() => {});
+      await win.loadURL(liveUrl);
+      return { mode: 'remote', url: liveUrl };
+    }
   }
 
   // If a live local server (e.g. from ./publish.sh / npm start) is already running on :3001,
   // connect to it directly instead of booting a frozen copy from app.asar!
-  if (!forceLocal && (await isServerReachable('http://127.0.0.1:3001'))) {
+  if (!forceLocal && (await isServerReachable('http://127.0.0.1:3001', 1200))) {
     await win.webContents.session.clearCache().catch(() => {});
     await win.loadURL('http://127.0.0.1:3001');
     return { mode: 'live-local', url: 'http://127.0.0.1:3001' };
