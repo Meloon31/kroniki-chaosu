@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { getDailyBlessing } from '../../shared/bounties';
 import { CLASSES } from '../../shared/classes';
 import {
   EQUIP_SLOTS,
@@ -92,7 +93,10 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
       : null;
 
   const cost = item ? getUpgradeShardCost(item.upgradeLevel) : 0;
-  const chancePct = item ? getUpgradeSuccessChance(item.upgradeLevel) : 0;
+  const dailyBlessing = getDailyBlessing();
+  const blessingForgeBonus = dailyBlessing.upgradeChanceBonus || 0;
+  const baseChancePct = item ? getUpgradeSuccessChance(item.upgradeLevel) : 0;
+  const chancePct = item ? Math.min(95, baseChancePct + blessingForgeBonus) : 0;
   const ownedShards = item ? profile.shards[item.rarity] || 0 : 0;
   const itemClassId = item?.classAffinity ?? profile.classId;
   const p13Bonus = getPlus13ClassBonus(itemClassId);
@@ -380,6 +384,7 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
                         </span>
                         <span style={{ color: chanceColor, fontSize: 14, fontWeight: 900 }}>
                           🎲 Szansa sukcesu: {chancePct}%
+                          {blessingForgeBonus > 0 ? ` (${dailyBlessing.icon} +${blessingForgeBonus}% Dziś!)` : ''}
                         </span>
                         <span style={{ color: ownedShards >= cost ? '#4ade80' : '#f87171' }}>
                           Masz: 💎 {ownedShards}

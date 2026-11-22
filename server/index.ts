@@ -213,6 +213,7 @@ interface GameRoom {
   totalEnemies: number;
   bossDefeated: boolean;
   clearBonusAwarded: boolean;
+  fullClearEmitted: boolean;
   mutatorId: LocationMutatorId;
   comboCount: number;
   maxCombo: number;
@@ -445,6 +446,7 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
   room.pillars = [];
   room.bossDefeated = false;
   room.clearBonusAwarded = false;
+  room.fullClearEmitted = false;
   room.mutatorId = map.location.mutatorId;
   room.comboCount = 0;
   room.maxCombo = 0;
@@ -1317,6 +1319,12 @@ function handleEnemyDeath(
       room.loot.set(runeLoot.id, runeLoot);
     }
 
+    io.to(room.code).emit('boss:defeated', {
+      act: loc.act,
+      globalLocation: room.globalLocation,
+      bossName: enemy.name,
+    });
+
     io.to(room.code).emit('game:banner', {
       type: 'boss_kill',
       title: `POKONANO BOSSA: ${enemy.name}!`,
@@ -1340,6 +1348,31 @@ function handleEnemyDeath(
     spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, false, effectiveLuck, killer.classId);
   } else if (Math.random() < 0.55) {
     spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, false, effectiveLuck, killer.classId);
+  }
+
+  // Check if 100% of main location enemies are now defeated -> trigger Side Quest full-clear!
+  if (!room.fullClearEmitted) {
+    let stillAlive = 0;
+    for (const e of room.enemies.values()) {
+      if (
+        e.alive &&
+        e.tier !== 'summon' &&
+        e.tier !== 'root_trap' &&
+        e.tier !== 'barrel' &&
+        e.tier !== 'totem' &&
+        e.tier !== 'goblin' &&
+        !e.isWaveMob
+      ) {
+        stillAlive++;
+      }
+    }
+    if (stillAlive === 0) {
+      room.fullClearEmitted = true;
+      io.to(room.code).emit('location:full_clear', {
+        globalLocation: room.globalLocation,
+        locationName: loc.name,
+      });
+    }
   }
 }
 
@@ -3381,6 +3414,7 @@ io.on('connection', (socket: Socket) => {
       totalEnemies: 0,
       bossDefeated: false,
       clearBonusAwarded: false,
+      fullClearEmitted: false,
       mutatorId: 'treasure_goblin',
       comboCount: 0,
       maxCombo: 0,
@@ -3771,6 +3805,9 @@ io.on('connection', (socket: Socket) => {
         io.to(room.code).emit('location:completed', {
           globalLocation: room.globalLocation,
           locationName: loc.name,
+          act: loc.act,
+          isMainBoss: loc.isMainBoss,
+          allEnemiesCleared: remaining === 0,
           clearXp,
           enemiesSlain: room.enemiesSlain,
           maxCombo: room.maxCombo,

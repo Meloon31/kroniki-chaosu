@@ -1,3 +1,4 @@
+import { getDailyBlessing } from './bounties.js';
 import { CLASSES } from './classes.js';
 import {
   canClassEquipItem,
@@ -178,6 +179,16 @@ export function computePlayerStats(
   adPct += rVaelgor * 1.0;
   apPct += rVaelgor * 1.0;
   cdr += rVaelgor * 0.5;
+
+  // 6. Active Daily Blessing of the Day (rotates every day of the week!)
+  const blessing = getDailyBlessing();
+  if (blessing.hpPctBonus) hpPct += blessing.hpPctBonus;
+  if (blessing.adApPctBonus) {
+    adPct += blessing.adApPctBonus;
+    apPct += blessing.adApPctBonus;
+  }
+  if (blessing.critChanceBonus) critChance += blessing.critChanceBonus;
+  if (blessing.critDamageBonus) critDamage += blessing.critDamageBonus;
 
   // Hard anti-immortality / anti-one-shot caps (expanded gently for hard-earned +13 Mastery gear!)
   const p13CapBoost = Math.min(30, plus13Count * 8);

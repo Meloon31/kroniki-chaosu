@@ -105,6 +105,18 @@ export interface PlayerProfile {
   lastDailyClaimDate?: string;
   bounties?: ActiveBountyState[];
   lifetimeKills?: number;
+  // Main Act Boss quests (1x per Act: 1 Boss Rune + 6 Legendary + 8 Mythic)
+  defeatedActBosses?: ActNumber[];
+  claimedMainQuests?: string[];
+  // Side Quests (1x per location 1..60 full 100% enemy clear: 2 Mythic + 1 Legendary)
+  fullClearedLocations?: number[];
+  claimedSideLocations?: number[];
+  // Daily Act Clear quest (Login + Clear Act Boss: 2 Legendary + 1 Boski)
+  dailyActClearedDate?: string;
+  dailyActClaimedDate?: string;
+  // Daily Wheel of Chaos & Daily Featured Dungeon
+  lastWheelSpinDate?: string;
+  dailyFeaturedClaimedDate?: string;
 }
 
 export interface NetPlayerState {

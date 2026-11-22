@@ -19,16 +19,29 @@ import {
   BOUNTY_BY_ID,
   BountyKind,
   canClaimDailyReward,
+  canSpinDailyWheel,
+  countAllReadyRewards,
+  DAILY_ACT_QUEST_REWARD,
   DAILY_REWARDS,
   ensureActiveBounties,
+  getDailyBlessing,
+  getDailyFeaturedLocation,
   getNextDailyDay,
+  getReadySideLocations,
   getTodayDateKey,
+  isDailyActQuestReady,
+  isMainQuestClaimed,
+  isMainQuestCompleted,
+  MAIN_ACT_QUESTS,
   rollReplacementBounty,
+  SIDE_LOCATION_REWARD,
+  WHEEL_SLICES,
 } from '../shared/bounties';
 import { createStarterRunes, createStarterRuneShards, RUNE_MAX_LEVEL, RUNES } from '../shared/runes';
 import { BoonId, CHAOS_BOONS } from '../shared/mutators';
 import { computePlayerStats } from '../shared/stats';
 import type {
+  ActNumber,
   ClassId,
   EquipmentItem,
   EquipSlot,
@@ -47,7 +60,7 @@ import type {
 import { soundEngine } from './audio/soundEngine';
 import { musicEngine, MusicTrackInfo } from './audio/musicEngine';
 import { BlacksmithModal } from './components/BlacksmithModal';
-import { BountiesModal } from './components/BountiesModal';
+import { BountiesModal, BountiesTab } from './components/BountiesModal';
 import { ChestPuzzleModal } from './components/ChestPuzzleModal';
 import { ActivePanel, Hud } from './components/Hud';
 import { InventoryModal } from './components/InventoryModal';
@@ -187,6 +200,7 @@ export function App() {
   const [floatingTexts, setFloatingTexts] = useState<ScreenFloatingText[]>([]);
   const [interactHint, setInteractHint] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
+  const [bountiesInitialTab, setBountiesInitialTab] = useState<BountiesTab>('daily');
   const [activeChest, setActiveChest] = useState<LockedChestState | null>(null);
   const [boonOffer, setBoonOffer] = useState<{ title: string; choices: BoonId[] } | null>(null);
   const [victorySummary, setVictorySummary] = useState<VictorySummaryData | null>(null);
@@ -294,8 +308,10 @@ export function App() {
   }, [profile]);
 
   const grantXp = useCallback(
-    (amount: number) => {
-      if (amount <= 0) return;
+    (rawAmount: number) => {
+      if (rawAmount <= 0) return;
+      const xpBonus = getDailyBlessing().xpBonusPct || 0;
+      const amount = xpBonus > 0 ? Math.round(rawAmount * (1 + xpBonus / 100)) : rawAmount;
       setProfile((prev) => {
         if (prev.level >= MAX_LEVEL) return prev;
         let lvl = prev.level;
@@ -560,12 +576,61 @@ export function App() {
       grantXp(payload.amount);
     });
 
+    sock.on('boss:defeated', (payload: { act: ActNumber; globalLocation: number; bossName: string }) => {
+      const todayKey = getTodayDateKey();
+      const prev = profileRef.current;
+      const hadAct = (prev.defeatedActBosses || []).includes(payload.act);
+      const hadDaily = prev.dailyActClearedDate === todayKey;
+
+      setProfile((p) => {
+        const curDefeated = p.defeatedActBosses || [];
+        return {
+          ...p,
+          defeatedActBosses: curDefeated.includes(payload.act) ? curDefeated : [...curDefeated, payload.act],
+          dailyActClearedDate: todayKey,
+        };
+      });
+
+      if (!hadAct) {
+        pushToast(
+          `📜 Misja Główna Aktu ${payload.act} ukończona! Odbierz 1× Runę + 6L + 8M w [J] Misje!`,
+          '#fde047'
+        );
+      }
+      if (!hadDaily) {
+        pushToast(
+          `☀️ Misja Dzienna (Przejście Aktu) ukończona! Odbierz 2× Leg + 1× Boski w [J] Misje!`,
+          '#fb7185'
+        );
+      }
+    });
+
+    sock.on('location:full_clear', (payload: { globalLocation: number; locationName: string }) => {
+      const prev = profileRef.current;
+      const alreadyCleared = (prev.fullClearedLocations || []).includes(payload.globalLocation);
+      if (!alreadyCleared) {
+        setProfile((p) => {
+          const cur = p.fullClearedLocations || [];
+          if (cur.includes(payload.globalLocation)) return p;
+          return { ...p, fullClearedLocations: [...cur, payload.globalLocation] };
+        });
+        soundEngine.playPuzzleSolve();
+        pushToast(
+          `🗺️ 100% lokacji „${payload.locationName}” wyczyszczone! Odbierz 2M + 1L w [J] Misje!`,
+          '#38bdf8'
+        );
+      }
+    });
+
     sock.on(
       'location:completed',
       (payload: {
         globalLocation: number;
         clearXp: number;
         locationName?: string;
+        act?: ActNumber;
+        isMainBoss?: boolean;
+        allEnemiesCleared?: boolean;
         enemiesSlain?: number;
         maxCombo?: number;
         chestsOpened?: number;
@@ -574,21 +639,58 @@ export function App() {
         totalSecrets?: number;
         grade?: 'S' | 'A' | 'B';
       }) => {
-        grantXp(payload.clearXp);
+        const todayKey = getTodayDateKey();
+        const featured = getDailyFeaturedLocation();
+        const isFeaturedBonus =
+          payload.globalLocation === featured.globalLocation &&
+          profileRef.current.dailyFeaturedClaimedDate !== todayKey;
+
+        const finalClearXp = isFeaturedBonus ? payload.clearXp * 2 : payload.clearXp;
+        grantXp(finalClearXp);
         advanceBounty('clear', 1, 'add');
         soundEngine.playLevelUp();
-        setProfile((prev) => ({
-          ...prev,
-          unlockedLocationGlobal: Math.min(60, Math.max(prev.unlockedLocationGlobal, payload.globalLocation + 1)),
-          completedLocations: prev.completedLocations.includes(payload.globalLocation)
-            ? prev.completedLocations
-            : [...prev.completedLocations, payload.globalLocation],
-        }));
+
+        if (isFeaturedBonus) {
+          pushToast(
+            `🔥 WYPRAWA DNIA UKOŃCZONA! 2× XP (+${finalClearXp}) + 2× Legendarny & 3× Mityczny Odłamek!`,
+            '#fb923c'
+          );
+        }
+
+        setProfile((prev) => {
+          const nextShards = { ...prev.shards };
+          if (isFeaturedBonus) {
+            nextShards.legendarny = (nextShards.legendarny || 0) + 2;
+            nextShards.mityczny = (nextShards.mityczny || 0) + 3;
+          }
+          const curFull = prev.fullClearedLocations || [];
+          const nextFull =
+            payload.allEnemiesCleared && !curFull.includes(payload.globalLocation)
+              ? [...curFull, payload.globalLocation]
+              : curFull;
+          const curBosses = prev.defeatedActBosses || [];
+          const nextBosses =
+            payload.isMainBoss && payload.act && !curBosses.includes(payload.act)
+              ? [...curBosses, payload.act]
+              : curBosses;
+          return {
+            ...prev,
+            shards: nextShards,
+            fullClearedLocations: nextFull,
+            defeatedActBosses: nextBosses,
+            dailyActClearedDate: payload.isMainBoss ? todayKey : prev.dailyActClearedDate,
+            dailyFeaturedClaimedDate: isFeaturedBonus ? todayKey : prev.dailyFeaturedClaimedDate,
+            unlockedLocationGlobal: Math.min(60, Math.max(prev.unlockedLocationGlobal, payload.globalLocation + 1)),
+            completedLocations: prev.completedLocations.includes(payload.globalLocation)
+              ? prev.completedLocations
+              : [...prev.completedLocations, payload.globalLocation],
+          };
+        });
 
         const summary: VictorySummaryData = {
           locationName: payload.locationName || `Lokacja #${payload.globalLocation}`,
           globalLocation: payload.globalLocation,
-          clearXp: payload.clearXp,
+          clearXp: finalClearXp,
           enemiesSlain: payload.enemiesSlain ?? 0,
           maxCombo: payload.maxCombo ?? 0,
           chestsOpened: payload.chestsOpened ?? 0,
@@ -849,10 +951,11 @@ export function App() {
 
   const handleSalvageItem = (itemId: string) => {
     soundEngine.playAnvilStrike(1);
+    const salvageMult = 1 + (getDailyBlessing().salvageBonusPct || 0) / 100;
     setProfile((prev) => {
       const target = prev.inventory.find((i) => i.id === itemId);
       if (!target) return prev;
-      const gained = getSalvageShardYield(target);
+      const gained = Math.max(1, Math.round(getSalvageShardYield(target) * salvageMult));
       pushToast(`+${gained} × ${RARITY_META[target.rarity].shardName}`, RARITY_META[target.rarity].color);
       return {
         ...prev,
@@ -867,11 +970,12 @@ export function App() {
 
   const handleBulkSalvage = (rarity: Rarity) => {
     soundEngine.playAnvilStrike(3);
+    const salvageMult = 1 + (getDailyBlessing().salvageBonusPct || 0) / 100;
     setProfile((prev) => {
       let gained = 0;
       const kept: EquipmentItem[] = [];
       for (const it of prev.inventory) {
-        if (it.rarity === rarity) gained += getSalvageShardYield(it);
+        if (it.rarity === rarity) gained += Math.max(1, Math.round(getSalvageShardYield(it) * salvageMult));
         else kept.push(it);
       }
       if (gained === 0) return prev;
@@ -921,7 +1025,8 @@ export function App() {
     const cost = getUpgradeShardCost(target.upgradeLevel);
     if ((cur.shards[target.rarity] || 0) < cost) return null;
 
-    const chancePct = getUpgradeSuccessChance(target.upgradeLevel);
+    const blessingForgeBonus = getDailyBlessing().upgradeChanceBonus || 0;
+    const chancePct = Math.min(95, getUpgradeSuccessChance(target.upgradeLevel) + blessingForgeBonus);
     const success = Math.random() * 100 < chancePct;
     const newLevel = success ? target.upgradeLevel + 1 : target.upgradeLevel;
 
@@ -1075,6 +1180,156 @@ export function App() {
     }
   };
 
+  const handleClaimDailyAct = () => {
+    const cur = profileRef.current;
+    if (!isDailyActQuestReady(cur)) return;
+    const todayKey = getTodayDateKey();
+    setProfile((prev) => ({
+      ...prev,
+      dailyActClaimedDate: todayKey,
+      shards: {
+        ...prev.shards,
+        legendarny: (prev.shards.legendarny || 0) + (DAILY_ACT_QUEST_REWARD.shards.legendarny || 0),
+        boski: (prev.shards.boski || 0) + (DAILY_ACT_QUEST_REWARD.shards.boski || 0),
+      },
+    }));
+    grantXp(DAILY_ACT_QUEST_REWARD.xp);
+    soundEngine.playLootDrop('boski');
+    pushToast(`☀️ Odebrano Misję Dzienną Aktu! +2 Legendarne +1 BOSKI Odłamek!`, '#fb7185');
+  };
+
+  const handleClaimMainQuest = (questId: string) => {
+    const cur = profileRef.current;
+    const q = MAIN_ACT_QUESTS.find((item) => item.id === questId);
+    if (!q || !isMainQuestCompleted(cur, q) || isMainQuestClaimed(cur, q)) return;
+    const runeDef = RUNES[q.runeId];
+    setProfile((prev) => {
+      const nextShards = { ...prev.shards };
+      for (const [rKey, amt] of Object.entries(q.rewardShards)) {
+        if (amt && amt > 0) {
+          nextShards[rKey as Rarity] = (nextShards[rKey as Rarity] || 0) + amt;
+        }
+      }
+      return {
+        ...prev,
+        claimedMainQuests: [...(prev.claimedMainQuests || []), q.id],
+        shards: nextShards,
+        runeShards: {
+          ...prev.runeShards,
+          [q.runeId]: (prev.runeShards[q.runeId] || 0) + 1,
+        },
+      };
+    });
+    grantXp(q.rewardXp);
+    soundEngine.playLevelUp();
+    pushToast(
+      `📜 Misja Główna Aktu ${q.act}: +1 ${runeDef.shardName}, +6 Legendarnych, +8 Mitycznych!`,
+      '#fde047'
+    );
+  };
+
+  const handleClaimSideLocation = (globalLocation: number) => {
+    const cur = profileRef.current;
+    if (!(cur.fullClearedLocations || []).includes(globalLocation)) return;
+    if ((cur.claimedSideLocations || []).includes(globalLocation)) return;
+    setProfile((prev) => ({
+      ...prev,
+      claimedSideLocations: [...(prev.claimedSideLocations || []), globalLocation],
+      shards: {
+        ...prev.shards,
+        mityczny: (prev.shards.mityczny || 0) + (SIDE_LOCATION_REWARD.shards.mityczny || 0),
+        legendarny: (prev.shards.legendarny || 0) + (SIDE_LOCATION_REWARD.shards.legendarny || 0),
+      },
+    }));
+    grantXp(SIDE_LOCATION_REWARD.xp);
+    soundEngine.playRuneUpgrade();
+    pushToast(`🗺️ Lokacja #${globalLocation} (100%): +2 Mityczne & +1 Legendarny Odłamek!`, '#38bdf8');
+  };
+
+  const handleClaimAllSideLocations = () => {
+    const cur = profileRef.current;
+    const ready = getReadySideLocations(cur);
+    if (ready.length === 0) return;
+    const totalMythic = ready.length * (SIDE_LOCATION_REWARD.shards.mityczny || 0);
+    const totalLeg = ready.length * (SIDE_LOCATION_REWARD.shards.legendarny || 0);
+    const totalXp = ready.length * SIDE_LOCATION_REWARD.xp;
+
+    setProfile((prev) => ({
+      ...prev,
+      claimedSideLocations: Array.from(new Set([...(prev.claimedSideLocations || []), ...ready])),
+      shards: {
+        ...prev.shards,
+        mityczny: (prev.shards.mityczny || 0) + totalMythic,
+        legendarny: (prev.shards.legendarny || 0) + totalLeg,
+      },
+    }));
+    grantXp(totalXp);
+    soundEngine.playLevelUp();
+    pushToast(
+      `🗺️ Odebrano ${ready.length} Misji Pobocznych: +${totalMythic} Mitycznych, +${totalLeg} Legendarnych!`,
+      '#4ade80'
+    );
+  };
+
+  const handleSpinWheelComplete = (sliceIndex: number) => {
+    const cur = profileRef.current;
+    if (!canSpinDailyWheel(cur.lastWheelSpinDate)) return;
+    const slice = WHEEL_SLICES[sliceIndex] || WHEEL_SLICES[0];
+    const todayKey = getTodayDateKey();
+
+    let bonusItem: EquipmentItem | null = null;
+    if (slice.itemRarity) {
+      bonusItem = generateEquipmentItem(Math.max(1, cur.level), slice.itemRarity, undefined, cur.classId);
+    }
+    const runeIds: RuneId[] = ['malakor', 'azirath', 'sylvara', 'vaelgor'];
+    const rolledRuneId: RuneId | null = slice.randomRune
+      ? runeIds[Math.floor(Math.random() * runeIds.length)]
+      : null;
+
+    setProfile((prev) => {
+      const nextShards = { ...prev.shards };
+      if (slice.shards) {
+        for (const [rKey, amt] of Object.entries(slice.shards)) {
+          if (amt && amt > 0) {
+            nextShards[rKey as Rarity] = (nextShards[rKey as Rarity] || 0) + amt;
+          }
+        }
+      }
+      const nextRuneShards = { ...prev.runeShards };
+      if (rolledRuneId) {
+        nextRuneShards[rolledRuneId] = (nextRuneShards[rolledRuneId] || 0) + 1;
+      }
+      return {
+        ...prev,
+        lastWheelSpinDate: todayKey,
+        shards: nextShards,
+        runeShards: nextRuneShards,
+        inventory: bonusItem ? [bonusItem, ...prev.inventory].slice(0, 60) : prev.inventory,
+      };
+    });
+
+    if (slice.xp) grantXp(slice.xp);
+    soundEngine.playLootDrop(slice.id.includes('boski') ? 'boski' : 'legendarny');
+    pushToast(`🎡 Koło Fortuny: ${slice.icon} ${slice.label}`, '#fde047');
+    if (bonusItem) {
+      pushToast(`⚔️ Otrzymano: ${bonusItem.name}!`, RARITY_META[bonusItem.rarity].color);
+    }
+    if (rolledRuneId) {
+      pushToast(`💠 Wylosowano: ${RUNES[rolledRuneId].shardName}!`, RUNES[rolledRuneId].color);
+    }
+  };
+
+  const handleJumpToLocation = (globalLocation: number) => {
+    if (room) {
+      handleSelectLocation(globalLocation);
+      if (!inGame) {
+        handleStartGame(globalLocation);
+      }
+    } else {
+      handleCreateRoom(globalLocation);
+    }
+  };
+
   const handleSendEmote = (text: string) => {
     const now = Date.now();
     if (now - lastEmoteAtRef.current < 1100) return;
@@ -1084,12 +1339,7 @@ export function App() {
     advanceBounty('emote', 1, 'add');
   };
 
-  const readyBountyCount =
-    (canClaimDailyReward(profile.lastDailyClaimDate) ? 1 : 0) +
-    ensureActiveBounties(profile.bounties).filter((b) => {
-      const def = BOUNTY_BY_ID[b.defId];
-      return def && b.progress >= def.target;
-    }).length;
+  const readyBountyCount = countAllReadyRewards(profile).total;
 
   const handleChangeServerUrl = (nextUrl: string) => {
     const cleaned = nextUrl.trim().replace(/\/+$/, '');
@@ -1166,7 +1416,10 @@ export function App() {
           onSelectLocation={handleSelectLocation}
           onStartGame={handleStartGame}
           onToggleSandbox={handleToggleSandbox}
-          onOpenBounties={() => setActivePanel('bounties')}
+          onOpenBounties={(tab) => {
+            setBountiesInitialTab(tab || 'daily');
+            setActivePanel('bounties');
+          }}
         />
       ) : (
         <>
@@ -1581,8 +1834,15 @@ export function App() {
       {activePanel === 'bounties' && (
         <BountiesModal
           profile={profile}
+          initialTab={bountiesInitialTab}
           onClaimDaily={handleClaimDaily}
+          onClaimDailyAct={handleClaimDailyAct}
           onClaimBounty={handleClaimBounty}
+          onClaimMainQuest={handleClaimMainQuest}
+          onClaimSideLocation={handleClaimSideLocation}
+          onClaimAllSideLocations={handleClaimAllSideLocations}
+          onSpinWheelComplete={handleSpinWheelComplete}
+          onJumpToLocation={handleJumpToLocation}
           onClose={() => setActivePanel(null)}
         />
       )}

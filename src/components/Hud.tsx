@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CLASSES, MAX_LEVEL, xpToNextLevel } from '../../shared/classes';
+import { getDailyBlessing, getDailyFeaturedLocation } from '../../shared/bounties';
 import { RARITY_META } from '../../shared/items';
 import { CHAOS_BOONS, LOCATION_MUTATORS } from '../../shared/mutators';
 import { getLocationDef } from '../../shared/world';
@@ -407,34 +408,72 @@ export const Hud: React.FC<HudProps> = ({
           </div>
           {(() => {
             const mut = LOCATION_MUTATORS[snapshot?.mutatorId ?? loc.mutatorId];
+            const blessing = getDailyBlessing();
+            const isFeatured = getDailyFeaturedLocation().globalLocation === loc.globalIndex;
             return (
-              <div
-                style={{
-                  marginTop: 4,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '2px 10px',
-                  borderRadius: 999,
-                  background: 'rgba(15, 18, 33, 0.82)',
-                  border: `1.5px solid ${mut.color}`,
-                  fontSize: 11,
-                  fontWeight: 900,
-                  color: mut.color,
-                }}
-                title={mut.shortDesc}
-              >
-                <span>
-                  {mut.icon} {mut.name.toUpperCase()}
-                </span>
-                <span style={{ color: '#e2e8f0', fontSize: 10 }}>+{mut.xpBonusPct}% XP</span>
-                {snapshot?.goblinAlive && (
-                  <span style={{ color: '#fde047', fontSize: 10 }}>• 💰 GOBLIN NA MAPIE!</span>
-                )}
-                {snapshot?.obelisk?.state === 'active' && (
-                  <span style={{ color: '#fb7185', fontSize: 10 }}>
-                    • 🔮 FALA {snapshot.obelisk.currentWave}/{snapshot.obelisk.maxWaves}
+              <div style={{ marginTop: 4, display: 'flex', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '2px 10px',
+                    borderRadius: 999,
+                    background: 'rgba(15, 18, 33, 0.82)',
+                    border: `1.5px solid ${mut.color}`,
+                    fontSize: 11,
+                    fontWeight: 900,
+                    color: mut.color,
+                  }}
+                  title={mut.shortDesc}
+                >
+                  <span>
+                    {mut.icon} {mut.name.toUpperCase()}
                   </span>
+                  <span style={{ color: '#e2e8f0', fontSize: 10 }}>+{mut.xpBonusPct}% XP</span>
+                  {snapshot?.goblinAlive && (
+                    <span style={{ color: '#fde047', fontSize: 10 }}>• 💰 GOBLIN NA MAPIE!</span>
+                  )}
+                  {snapshot?.obelisk?.state === 'active' && (
+                    <span style={{ color: '#fb7185', fontSize: 10 }}>
+                      • 🔮 FALA {snapshot.obelisk.currentWave}/{snapshot.obelisk.maxWaves}
+                    </span>
+                  )}
+                </div>
+                <div
+                  title={`Błogosławieństwo Dnia (${blessing.dayName}): ${blessing.summary}`}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '2px 9px',
+                    borderRadius: 999,
+                    background: 'rgba(15, 18, 33, 0.82)',
+                    border: `1.5px solid ${blessing.color}`,
+                    fontSize: 10.5,
+                    fontWeight: 900,
+                    color: blessing.color,
+                  }}
+                >
+                  <span>{blessing.icon} {blessing.name}</span>
+                </div>
+                {isFeatured && (
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '2px 9px',
+                      borderRadius: 999,
+                      background: 'rgba(234, 88, 12, 0.4)',
+                      border: '1.5px solid #fb923c',
+                      fontSize: 10.5,
+                      fontWeight: 900,
+                      color: '#fef08a',
+                    }}
+                  >
+                    🔥 WYPRAWA DNIA 2× XP
+                  </div>
                 )}
               </div>
             );
