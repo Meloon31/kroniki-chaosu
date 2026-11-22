@@ -1,0 +1,38 @@
+name: Build Desktop Clients (macOS / Windows / Linux)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-clients:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            cmd: npm run dist:mac
+          - os: windows-latest
+            cmd: npm run dist:win
+          - os: ubuntu-latest
+            cmd: npm run dist:linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: ${{ matrix.cmd }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kroniki-chaosu-${{ matrix.os }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.AppImage
