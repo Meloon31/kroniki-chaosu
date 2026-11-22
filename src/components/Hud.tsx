@@ -91,10 +91,13 @@ export const Hud: React.FC<HudProps> = ({
   );
 
   const totalRuneShards =
-    profile.runeShards.malakor +
-    profile.runeShards.azirath +
-    profile.runeShards.sylvara +
-    profile.runeShards.vaelgor;
+    (profile.runeShards.malakor || 0) +
+    (profile.runeShards.azirath || 0) +
+    (profile.runeShards.sylvara || 0) +
+    (profile.runeShards.vaelgor || 0) +
+    (profile.runeShards.kaelis || 0) +
+    (profile.runeShards.ignarok || 0) +
+    (profile.runeShards.aeternus || 0);
 
   // Render Minimap Canvas
   useEffect(() => {
@@ -399,9 +402,11 @@ export const Hud: React.FC<HudProps> = ({
             width: '100%',
           }}
         >
-          <div style={{ fontSize: 11, fontWeight: 900, color: '#fde047', letterSpacing: 1 }}>
-            AKT {loc.act} • LOKACJA {loc.locationInAct}/15 (#{loc.globalIndex}/60) • SKALA DRUŻYNY:{' '}
-            {Math.round(room.enemyCountMultiplier * 100)}%
+          <div style={{ fontSize: 11, fontWeight: 900, color: loc.act >= 5 ? '#00f5d4' : '#fde047', letterSpacing: 1 }}>
+            {loc.act >= 5 ? '🔥 HARDCORE • ' : ''}AKT {loc.act} • LOKACJA {loc.locationInAct}/15 (#{loc.globalIndex}/105) •{' '}
+            {loc.act >= 5
+              ? `PT BOSS: ${Math.round(room.bossHpMultiplier * 100)}% / MOB: ${Math.round(room.enemyCountMultiplier * 100)}%`
+              : `SKALA DRUŻYNY: ${Math.round(room.enemyCountMultiplier * 100)}%`}
           </div>
           <div className="comic-title" style={{ fontSize: 22, color: '#fff', lineHeight: 1.1 }}>
             {loc.name}

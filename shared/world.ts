@@ -91,7 +91,63 @@ export const ACT_THEMES: Record<ActNumber, ActTheme> = {
     accentGlowColor: '#f43f5e',
     propKinds: ['obsidian_crystal', 'lava_brazier', 'chaos_monolith', 'lava_fissure'],
   },
+  5: {
+    act: 5,
+    name: 'HARDCORE Akt 5: Cytadela Astralnego Mrozu',
+    subtitle: 'Kryształy zorzy polarnej, zamarznięte gwiazdy i królestwo Kaelisa',
+    skyColor: '#1e3557',
+    fogColor: '#294973',
+    floorColor: '#7eb6e0',
+    floorAccentColor: '#5289b8',
+    wallColor: '#5a7ea8',
+    wallTopColor: '#bae6fd',
+    ambientLightColor: '#d8f3ff',
+    sunLightColor: '#e0f7ff',
+    accentGlowColor: '#38bdf8',
+    propKinds: ['obsidian_crystal', 'dwarf_pillar', 'sand_obelisk', 'elf_arch'],
+  },
+  6: {
+    act: 6,
+    name: 'HARDCORE Akt 6: Kuźnia Zapomnianych Tytanów',
+    subtitle: 'Kanały płynnego złota, brązowe bastiony i piec Ignaroka',
+    skyColor: '#4a291a',
+    fogColor: '#693a21',
+    floorColor: '#9e7348',
+    floorAccentColor: '#c4632b',
+    wallColor: '#7c5534',
+    wallTopColor: '#fbbf24',
+    ambientLightColor: '#ffe7c4',
+    sunLightColor: '#fff1cc',
+    accentGlowColor: '#f97316',
+    propKinds: ['lava_brazier', 'dwarf_pillar', 'torch_pillar', 'lava_fissure'],
+  },
+  7: {
+    act: 7,
+    name: 'HARDCORE Akt 7: Tron Wieczności',
+    subtitle: 'Kosmiczne marmury, złote zaćmienie i sanktuarium Aeternusa',
+    skyColor: '#2d1f4f',
+    fogColor: '#402a6e',
+    floorColor: '#9a8cc7',
+    floorAccentColor: '#5c4b8f',
+    wallColor: '#7c6da8',
+    wallTopColor: '#00f5d4',
+    ambientLightColor: '#f2e8ff',
+    sunLightColor: '#e0fffa',
+    accentGlowColor: '#00f5d4',
+    propKinds: ['chaos_monolith', 'obsidian_crystal', 'elf_arch', 'pharaoh_statue'],
+  },
 };
+
+export const STANDARD_MAX_LOCATION = 60;
+export const TOTAL_LOCATIONS = 105;
+
+export function isHardcoreAct(act: ActNumber): boolean {
+  return act >= 5;
+}
+
+export function isHardcoreLocation(globalIndex: number): boolean {
+  return globalIndex > STANDARD_MAX_LOCATION;
+}
 
 const ACT_LOCATION_NAMES: Record<ActNumber, string[]> = {
   1: [
@@ -162,11 +218,62 @@ const ACT_LOCATION_NAMES: Record<ActNumber, string[]> = {
     'Schody Archonta',
     'Ołtarz Chaosu — Tron Vaelgora',
   ],
+  5: [
+    'Brama Astralnego Mrozu',
+    'Lodowy Most Zorzy',
+    'Kryształowe Krużganki',
+    'Sala Zamarzniętych Gwiazd',
+    'Bastion Rycerza Zorzy',
+    'Komnaty Wiecznego Szronu',
+    'Lustrzany Labirynt Lodu',
+    'Katedra Błękitnych Sopli',
+    'Zamarznięte Obserwatorium',
+    'Sanktuarium Wyroczni Lodu',
+    'Tarasy Polarnego Wichru',
+    'Skarbiec Krystalicznych Run',
+    'Aleja Mroźnych Posągów',
+    'Wrota Wiecznej Zimy',
+    'Tron Kaelisa, Władcy Zimy',
+  ],
+  6: [
+    'Wejście do Prakuźni Tytanów',
+    'Kanały Płynnego Złota',
+    'Warsztat Starożytnych Kowali',
+    'Most Zębatych Kolumn',
+    'Kowadło Kowala Zagłady',
+    'Hala Runicznych Miechów',
+    'Odlewnia Nieśmiertelnych',
+    'Galeria Płonącego Brązu',
+    'Rdzeń Złotego Pieca',
+    'Komnata Złotego Automatu',
+    'Wulkaniczne Tarasy Kuźni',
+    'Skarbiec Hartowanych Ostrzy',
+    'Korytarz Tysiąca Iskier',
+    'Schody Wielkiego Młota',
+    'Prakuźnia Ignaroka, Kolosa',
+  ],
+  7: [
+    'Próg Tronu Wieczności',
+    'Marmurowa Droga Gwiazd',
+    'Ogród Zatrzymanego Czasu',
+    'Arkady Kosmicznego Światła',
+    'Sala Herolda Zaćmienia',
+    'Pęknięty Zegar Galaktyki',
+    'Biblioteka Nieskończoności',
+    'Most Turkusowego Blasku',
+    'Katedra Astralnej Korony',
+    'Arena Ostrza Nieśmiertelnych',
+    'Dziedziniec Siedmiu Słońc',
+    'Komnaty Czystej Wieczności',
+    'Panteon Dawnych Bohaterów',
+    'Brama Ostatecznego Sądu',
+    'Tron Aeternusa, Cesarza Wieczności',
+  ],
 };
 
 export const ALL_LOCATIONS: LocationDefinition[] = [];
 
-for (let act = 1 as ActNumber; act <= 4; act = (act + 1) as ActNumber) {
+for (let act = 1 as ActNumber; act <= 7; act = (act + 1) as ActNumber) {
   for (let loc = 1; loc <= 15; loc++) {
     const globalIndex = (act - 1) * 15 + loc;
     const isMiniBoss = loc === 5 || loc === 10;
@@ -189,7 +296,7 @@ for (let act = 1 as ActNumber; act <= 4; act = (act + 1) as ActNumber) {
       isMainBoss,
       bossName: main?.name ?? mini?.name,
       bossId: main?.id,
-      recommendedLevel: globalIndex,
+      recommendedLevel: Math.min(60, globalIndex),
       seed: act * 100003 + loc * 7919 + 4242,
       mutatorId,
     });
@@ -197,7 +304,7 @@ for (let act = 1 as ActNumber; act <= 4; act = (act + 1) as ActNumber) {
 }
 
 export function getLocationDef(globalIndex: number): LocationDefinition {
-  const idx = Math.max(1, Math.min(60, Math.round(globalIndex)));
+  const idx = Math.max(1, Math.min(TOTAL_LOCATIONS, Math.round(globalIndex)));
   return ALL_LOCATIONS[idx - 1];
 }
 

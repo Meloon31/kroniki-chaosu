@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { getMainBossByAct } from '../../shared/bosses';
+import { getHardcoreUnlockProgress } from '../../shared/items';
 import { getRuneByAct } from '../../shared/runes';
 import { computePlayerStats } from '../../shared/stats';
-import { ACT_THEMES, ALL_LOCATIONS, getLocationDef } from '../../shared/world';
+import { ACT_THEMES, ALL_LOCATIONS, getLocationDef, isHardcoreAct } from '../../shared/world';
 import type { ActNumber, PlayerProfile } from '../../shared/types';
 
 interface WorldMapModalProps {
@@ -25,6 +26,9 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
   const actBoss = getMainBossByAct(actTab);
   const actRune = getRuneByAct(actTab);
   const actLocations = ALL_LOCATIONS.filter((l) => l.act === actTab);
+  const hcProgress = getHardcoreUnlockProgress(profile);
+  const viewingHC = isHardcoreAct(actTab);
+
   const myStats = computePlayerStats(
     profile.classId,
     profile.level,
@@ -39,15 +43,15 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
       <div
         className="comic-panel"
         onClick={(e) => e.stopPropagation()}
-        style={{ width: 'min(960px, 95vw)', maxHeight: '90vh', overflowY: 'auto', padding: 20 }}
+        style={{ width: 'min(980px, 96vw)', maxHeight: '91vh', overflowY: 'auto', padding: 20 }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
           <div>
-            <h2 className="comic-title" style={{ margin: 0, fontSize: 32, color: '#38bdf8' }}>
-              🗺️ ATLAS ŚWIATA — 4 AKTY • 60 LOKACJI
+            <h2 className="comic-title" style={{ margin: 0, fontSize: 32, color: viewingHC ? '#00f5d4' : '#38bdf8' }}>
+              {viewingHC ? '🔥 TRYB HARDCORE — AKTY 5–7 (NIEŚMIERTELNI)' : '🗺️ ATLAS ŚWIATA — 7 AKTÓW • 105 LOKACJI'}
             </h2>
             <div style={{ fontSize: 12, color: '#cbd5e1' }}>
-              Każda rozległa lokacja zawiera ukryte przejścia, zagadkę runiczną oraz losowe skrzynie z łupem.
+              4 Akty Standardowe (1–60) + 3 Ekskluzywne Akty HARDCORE (61–105) z setem Nieśmiertelnym (5% drop) i ulepszeniami +20!
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -56,7 +60,7 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
               onClick={onToggleSandbox}
               style={{ padding: '6px 12px', fontSize: 12 }}
             >
-              {profile.sandboxUnlockAll ? '🔓 Odblokowano wszystkie 60' : '🔑 Odblokuj wszystkie 60 (Test)'}
+              {profile.sandboxUnlockAll ? '🔓 Odblokowano 105 + HC' : '🔑 Odblokuj wszystko (Test)'}
             </button>
             <button className="comic-btn comic-btn-red" onClick={onClose} style={{ padding: '6px 14px' }}>
               ✕ Zamknij [M]
@@ -64,24 +68,72 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
           </div>
         </div>
 
-        {/* 4 Act Tabs */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 14 }}>
-          {([1, 2, 3, 4] as ActNumber[]).map((act) => (
-            <button
-              key={act}
-              onClick={() => setActTab(act)}
-              className="comic-btn"
-              style={{
-                padding: '10px 8px',
-                fontSize: 13,
-                background: actTab === act ? ACT_THEMES[act].accentGlowColor : '#242944',
-                color: actTab === act ? '#111118' : '#e2e8f0',
-              }}
-            >
-              AKT {act} ({(act - 1) * 15 + 1}–{act * 15})
-            </button>
-          ))}
+        {/* Standard Acts 1-4 + Hardcore Acts 5-7 Tabs */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 6, marginBottom: 14 }}>
+          {([1, 2, 3, 4, 5, 6, 7] as ActNumber[]).map((act) => {
+            const isHC = isHardcoreAct(act);
+            const active = actTab === act;
+            return (
+              <button
+                key={act}
+                onClick={() => setActTab(act)}
+                className="comic-btn"
+                style={{
+                  padding: '9px 6px',
+                  fontSize: 12,
+                  background: active
+                    ? ACT_THEMES[act].accentGlowColor
+                    : isHC
+                      ? 'linear-gradient(180deg, #2b163b, #161830)'
+                      : '#242944',
+                  color: active ? '#111118' : isHC ? '#00f5d4' : '#e2e8f0',
+                  borderColor: isHC ? '#00f5d4' : '#111118',
+                }}
+              >
+                {isHC ? '🔥 ' : ''}AKT {act}
+                {isHC && !hcProgress.unlocked ? ' 🔒' : ''}
+              </button>
+            );
+          })}
         </div>
+
+        {/* Hardcore Unlock Progress / Prestige Banner when viewing Act 5-7 */}
+        {viewingHC && (
+          <div
+            className="comic-panel-sm"
+            style={{
+              padding: 13,
+              marginBottom: 14,
+              borderColor: hcProgress.unlocked ? '#00f5d4' : '#f43f5e',
+              background: hcProgress.unlocked
+                ? 'linear-gradient(135deg, rgba(0,245,212,0.16), rgba(99,102,241,0.2))'
+                : 'linear-gradient(135deg, rgba(225,29,72,0.2), rgba(30,22,56,0.92))',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 900, color: hcProgress.unlocked ? '#00f5d4' : '#fde047' }}>
+                  {hcProgress.unlocked
+                    ? '🔥 TRYB HARDCORE ODBLOKOWANY! Walcz o Set Nieśmiertelny (+50% DEF & Wartości, 5% drop)!'
+                    : '🔒 TRYB HARDCORE — ODBLOKUJ NAJWYŻSZE WYZWANIE GRY!'}
+                </div>
+                <div style={{ fontSize: 11.5, color: '#e2e8f0', marginTop: 3 }}>
+                  • 3 Nowe Akty z unikalną muzyką i bossami • Ulepszanie <strong>+13 → +20</strong> • Zakładka <strong>Runy Hardcore</strong> • Skalowanie PT: Bossy <strong>+33% / +66% / +99%</strong>, Mobki <strong>+10% / +20% / +30%</strong>!
+                </div>
+              </div>
+              {!hcProgress.unlocked && (
+                <div style={{ fontSize: 12, fontWeight: 900, textAlign: 'right' }}>
+                  <div style={{ color: hcProgress.allNormalActsCleared ? '#4ade80' : '#fca5a5' }}>
+                    {hcProgress.allNormalActsCleared ? '✅' : '⏳'} Przejdź Akty 1–4 (Vaelgor)
+                  </div>
+                  <div style={{ color: hcProgress.boskiPlus13Slots >= 6 ? '#4ade80' : '#fde047' }}>
+                    {hcProgress.boskiPlus13Slots >= 6 ? '✅' : '⏳'} Ekwipunek Boski +13: {hcProgress.boskiPlus13Slots} / 6
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Act Summary Banner */}
         <div
@@ -110,7 +162,7 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
             </div>
             <div style={{ color: meetsBossPower ? '#4ade80' : '#f87171', fontWeight: 800, fontSize: 11 }}>
               🔥 Twoja Moc: {myStats.combatPower.toLocaleString()} / {actBoss.requiredPower.toLocaleString()}{' '}
-              {meetsBossPower ? '✓ Gotowy!' : '(Za słaby sprzęt!)'}
+              {meetsBossPower ? '✓ Gotowy!' : '(Zbyt niska moc!)'}
             </div>
             <div style={{ color: actRune.color, fontWeight: 800 }}>
               💠 Drop Runy (30%): {actRune.name}
@@ -121,7 +173,12 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
         {/* 15 Locations Grid */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
           {actLocations.map((loc) => {
-            const unlocked = profile.sandboxUnlockAll || loc.globalIndex <= profile.unlockedLocationGlobal;
+            const hcGateOk = !viewingHC || hcProgress.unlocked;
+            const unlocked =
+              profile.sandboxUnlockAll ||
+              (hcGateOk &&
+                (loc.globalIndex <= profile.unlockedLocationGlobal ||
+                  (loc.globalIndex === 61 && hcProgress.unlocked)));
             const completed = profile.completedLocations.includes(loc.globalIndex);
             const current = loc.globalIndex === currentGlobalLocation;
 
@@ -142,12 +199,17 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
                   background: current
                     ? 'linear-gradient(180deg, #fde047, #f59e0b)'
                     : loc.isMainBoss
-                      ? 'linear-gradient(180deg, #881337, #4c0519)'
+                      ? viewingHC
+                        ? 'linear-gradient(180deg, #0f766e, #134e4a)'
+                        : 'linear-gradient(180deg, #881337, #4c0519)'
                       : loc.isMiniBoss
                         ? 'linear-gradient(180deg, #92400e, #451a03)'
-                        : '#20253f',
+                        : viewingHC
+                          ? '#1d1c3b'
+                          : '#20253f',
                   color: current ? '#111118' : '#fff',
-                  borderColor: current ? '#fff' : completed ? '#4ade80' : '#111118',
+                  borderColor: current ? '#fff' : completed ? '#4ade80' : viewingHC ? '#00f5d4' : '#111118',
+                  opacity: unlocked ? 1 : 0.55,
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: 11, fontWeight: 900 }}>
@@ -155,7 +217,7 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
                     {loc.isMainBoss ? '👑 BOSS ' : loc.isMiniBoss ? '💀 MINI-BOSS ' : ''}
                     Lokacja {loc.locationInAct}/15 (#{loc.globalIndex})
                   </span>
-                  <span>{completed ? '✓' : unlocked ? `Poz. ${loc.recommendedLevel}` : '🔒'}</span>
+                  <span>{completed ? '✓' : unlocked ? (viewingHC ? '🔥 HC' : `Poz. ${loc.recommendedLevel}`) : '🔒'}</span>
                 </div>
                 <div style={{ fontSize: 14, fontWeight: 900, marginTop: 3 }}>{loc.name}</div>
                 {loc.bossName && (

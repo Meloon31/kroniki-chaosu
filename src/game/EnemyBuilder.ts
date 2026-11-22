@@ -1001,6 +1001,315 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     }
 
     body.add(lowerRobe, moltenCore, head, wingL, wingR, rightArm, orbitGroup);
+  } else if (enemy.tier === 'boss' && enemy.bossId === 'kaelis') {
+    // =========================================================
+    // HARDCORE AKT 5 BOSS: KAELIS, WŁADCA WIECZNEJ ZIMY (Frost Archangel!)
+    // =========================================================
+    const iceTex = createComicSurfaceTexture('#38bdf8', '#e0f2fe', 'armor');
+    const robe = createComicMesh(
+      createPlushLathe(
+        [
+          [0.01, 0.45],
+          [0.32, 0.9],
+          [0.85, 1.8],
+          [1.22, 3.0],
+          [1.45, 4.0],
+          [1.05, 4.75],
+          [0.01, 4.9],
+        ],
+        26
+      ),
+      '#1e40af',
+      0.045,
+      { map: iceTex, emissive: '#0284c7', emissiveIntensity: 0.25 }
+    );
+    const frostHeart = createComicMesh(new THREE.OctahedronGeometry(0.75, 1), '#a5f3fc', 0.03, {
+      emissive: '#38bdf8',
+      emissiveIntensity: 0.5,
+    });
+    frostHeart.position.set(0, 3.5, 0.95);
+
+    const kFaceTex = createMonsterFaceTexture({
+      skin: '#dbeafe',
+      eyeColor: '#22d3ee',
+      accent: '#38bdf8',
+      style: 'pharaoh',
+    });
+    const head = createComicMesh(new THREE.SphereGeometry(0.76, 28, 22), '#dbeafe', 0.042, {
+      map: kFaceTex,
+    });
+    head.rotation.y = -Math.PI / 2;
+    head.position.y = 5.4;
+
+    // Crystal Ice Crown
+    for (let s = 0; s < 5; s++) {
+      const a = (s / 5) * Math.PI * 2;
+      const spike = createComicMesh(new THREE.ConeGeometry(0.18, 0.92, 8), '#7dd3fc', 0.024, {
+        emissive: '#38bdf8',
+        emissiveIntensity: 0.35,
+      });
+      spike.position.set(Math.cos(a) * 0.62, 6.18, Math.sin(a) * 0.62);
+      spike.rotation.z = -Math.cos(a) * 0.25;
+      spike.rotation.x = Math.sin(a) * 0.25;
+      body.add(spike);
+    }
+
+    // 4 Crystalline Frost Archangel Wings!
+    const wingGeoA = createSoftWingGeometry(3.6, 2.3, 0.14, 'demon');
+    const wingGeoB = createSoftWingGeometry(2.5, 1.5, 0.12, 'demon');
+    const makeIceWing = (side: -1 | 1) => {
+      const wg = new THREE.Group();
+      wg.position.set(side * 1.15, 4.35, -0.55);
+      const u = createComicMesh(wingGeoA, '#7dd3fc', 0.032, { emissive: '#0284c7', emissiveIntensity: 0.32 });
+      if (side === -1) u.scale.x = -1;
+      const l = createComicMesh(wingGeoB, '#e0f2fe', 0.028, { emissive: '#38bdf8', emissiveIntensity: 0.38 });
+      if (side === -1) l.scale.x = -1;
+      l.position.set(0, -0.9, 0.15);
+      wg.add(u, l);
+      return wg;
+    };
+    wingL = makeIceWing(-1);
+    wingR = makeIceWing(1);
+
+    // Frost Halberd in right arm
+    rightArm = new THREE.Group();
+    rightArm.position.set(1.55, 3.75, 0.35);
+    const armK = createComicMesh(new THREE.CapsuleGeometry(0.24, 1.0, 10, 14), '#1d4ed8', 0.03);
+    armK.position.y = -0.4;
+    const pole = createComicMesh(new THREE.CapsuleGeometry(0.1, 4.1, 8, 12), '#e0f2fe', 0.026);
+    pole.position.set(0.15, 0.3, 0.7);
+    pole.rotation.x = 0.55;
+    const spearHead = createComicMesh(createSoftBladeGeometry(0.75, 1.85, 0.16, 'cleaver'), '#22d3ee', 0.032, {
+      emissive: '#38bdf8',
+      emissiveIntensity: 0.45,
+    });
+    spearHead.position.set(0.15, 1.65, 1.65);
+    spearHead.rotation.x = 0.55;
+    rightArm.add(armK, pole, spearHead);
+
+    // Orbiting Aurora Shards + Ice Shield Ring
+    orbitGroup = new THREE.Group();
+    orbitGroup.position.y = 3.2;
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const crystal = createComicMesh(new THREE.OctahedronGeometry(0.34, 0), '#a5f3fc', 0.022, {
+        emissive: '#38bdf8',
+        emissiveIntensity: 0.45,
+      });
+      crystal.position.set(Math.cos(a) * 2.8, Math.sin(i * 1.4) * 0.8, Math.sin(a) * 2.8);
+      orbitGroup.add(crystal);
+    }
+
+    shieldGroup = new THREE.Group();
+    shieldGroup.position.y = 3.0;
+    shieldGroup.visible = false;
+    const frostShell = createComicMesh(new THREE.TorusGeometry(2.7, 0.22, 12, 32), '#22d3ee', 0.025, {
+      emissive: '#38bdf8',
+      emissiveIntensity: 0.5,
+    });
+    frostShell.rotation.x = Math.PI / 2;
+    shieldGroup.add(frostShell);
+
+    body.add(robe, frostHeart, head, wingL, wingR, rightArm, orbitGroup, shieldGroup);
+  } else if (enemy.tier === 'boss' && enemy.bossId === 'ignarok') {
+    // =========================================================
+    // HARDCORE AKT 6 BOSS: IGNAROK, KOLOS PRAKUŹNI (Molten Gold Titan!)
+    // =========================================================
+    const forgeTex = createComicSurfaceTexture('#9a5b24', '#fbbf24', 'armor');
+    const torso = createComicMesh(
+      createPlushLathe(
+        [
+          [0.01, 0.15],
+          [1.25, 0.35],
+          [1.65, 1.65],
+          [1.88, 3.15],
+          [1.45, 4.25],
+          [0.01, 4.45],
+        ],
+        26
+      ),
+      '#7c4319',
+      0.048,
+      { map: forgeTex }
+    );
+    torso.scale.set(1.12, 1, 0.92);
+
+    // Glowing Molten Furnace Core
+    const furnace = createComicMesh(new THREE.SphereGeometry(0.95, 22, 18), '#fbbf24', 0.032, {
+      emissive: '#f97316',
+      emissiveIntensity: 0.58,
+    });
+    furnace.position.set(0, 2.75, 1.15);
+    flameMesh = furnace;
+
+    const igFaceTex = createMonsterFaceTexture({
+      skin: '#57331a',
+      eyeColor: '#fef08a',
+      accent: '#f97316',
+      style: 'golem',
+    });
+    const head = createComicMesh(new THREE.SphereGeometry(0.84, 28, 22), '#57331a', 0.046, {
+      map: igFaceTex,
+    });
+    head.rotation.y = -Math.PI / 2;
+    head.position.set(0, 4.95, 0.18);
+
+    // Twin Molten Chimneys on shoulders
+    for (const s of [-1, 1]) {
+      const paul = createComicMesh(new THREE.SphereGeometry(0.92, 18, 14), '#b45309', 0.04, { map: forgeTex });
+      paul.position.set(s * 1.85, 4.05, 0);
+      const chim = createComicMesh(new THREE.CapsuleGeometry(0.28, 1.0, 10, 14), '#475569', 0.03);
+      chim.position.set(s * 1.45, 4.95, -0.35);
+      const puff = createComicMesh(new THREE.SphereGeometry(0.4, 14, 12), '#fb923c', 0.022, {
+        emissive: '#ea580c',
+        emissiveIntensity: 0.45,
+      });
+      puff.position.set(s * 1.45, 5.72, -0.35);
+      body.add(paul, chim, puff);
+    }
+
+    // Colossal Golden Forge Hammer in right arm
+    leftArm = createComicMesh(new THREE.SphereGeometry(0.82, 18, 14), '#92400e', 0.04, { map: forgeTex });
+    leftArm.scale.set(0.95, 1.35, 0.95);
+    leftArm.position.set(-2.1, 2.55, 0.25);
+
+    rightArm = new THREE.Group();
+    rightArm.position.set(2.1, 3.25, 0.25);
+    const armI = createComicMesh(new THREE.CapsuleGeometry(0.38, 1.2, 10, 16), '#92400e', 0.036);
+    armI.position.y = -0.5;
+    const shaft = createComicMesh(new THREE.CapsuleGeometry(0.16, 4.4, 8, 14), '#475569', 0.032);
+    shaft.position.set(0.2, 0.1, 0.8);
+    shaft.rotation.x = 0.55;
+    const hammerHead = createComicMesh(new THREE.CapsuleGeometry(0.85, 1.35, 14, 22), '#f59e0b', 0.044, {
+      emissive: '#ea580c',
+      emissiveIntensity: 0.42,
+    });
+    hammerHead.rotation.x = Math.PI / 2;
+    hammerHead.position.set(0.2, 1.45, 2.05);
+    rightArm.add(armI, shaft, hammerHead);
+
+    // Orbiting Runic Anvil Rings
+    orbitGroup = new THREE.Group();
+    orbitGroup.position.y = 3.1;
+    const ring = createComicMesh(new THREE.TorusGeometry(3.0, 0.16, 12, 30), '#fbbf24', 0.028, {
+      emissive: '#f97316',
+      emissiveIntensity: 0.4,
+    });
+    ring.rotation.x = Math.PI / 2 + 0.25;
+    orbitGroup.add(ring);
+
+    shieldGroup = new THREE.Group();
+    shieldGroup.position.y = 2.8;
+    shieldGroup.visible = false;
+    const goldShell = createComicMesh(new THREE.TorusGeometry(2.9, 0.25, 12, 32), '#fde047', 0.025, {
+      emissive: '#f59e0b',
+      emissiveIntensity: 0.5,
+    });
+    goldShell.rotation.x = Math.PI / 2;
+    shieldGroup.add(goldShell);
+
+    body.add(torso, furnace, head, leftArm, rightArm, orbitGroup, shieldGroup);
+  } else if (enemy.tier === 'boss' && enemy.bossId === 'aeternus') {
+    // =========================================================
+    // HARDCORE AKT 7 FINAL BOSS: AETERNUS, CESARZ WIECZNOŚCI!
+    // =========================================================
+    const cosmicTex = createComicSurfaceTexture('#4c1d95', '#00f5d4', 'robe');
+    const robe = createComicMesh(
+      createPlushLathe(
+        [
+          [0.01, 0.6],
+          [0.35, 1.15],
+          [0.95, 2.1],
+          [1.35, 3.3],
+          [1.55, 4.35],
+          [1.1, 5.1],
+          [0.01, 5.25],
+        ],
+        28
+      ),
+      '#312e81',
+      0.048,
+      { map: cosmicTex, emissive: '#6d28d9', emissiveIntensity: 0.3 }
+    );
+
+    // Radiant Eclipse Core
+    const eclipseCore = createComicMesh(new THREE.SphereGeometry(0.82, 22, 18), '#00f5d4', 0.032, {
+      emissive: '#06b6d4',
+      emissiveIntensity: 0.55,
+    });
+    eclipseCore.position.set(0, 3.8, 1.05);
+
+    const aeFaceTex = createMonsterFaceTexture({
+      skin: '#f8fafc',
+      eyeColor: '#00f5d4',
+      accent: '#fde047',
+      style: 'pharaoh',
+    });
+    const head = createComicMesh(new THREE.SphereGeometry(0.82, 28, 22), '#f8fafc', 0.044, {
+      map: aeFaceTex,
+    });
+    head.rotation.y = -Math.PI / 2;
+    head.position.y = 5.85;
+
+    // Golden Eclipse Halo Behind Head
+    const haloRing = createComicMesh(new THREE.TorusGeometry(1.45, 0.16, 12, 32), '#fde047', 0.032, {
+      emissive: '#f59e0b',
+      emissiveIntensity: 0.45,
+    });
+    haloRing.position.set(0, 5.95, -0.45);
+    body.add(haloRing);
+
+    // 4 Celestial Galaxy Wings!
+    const wA = createSoftWingGeometry(4.0, 2.5, 0.15, 'demon');
+    const wB = createSoftWingGeometry(2.9, 1.75, 0.13, 'demon');
+    const makeCosmicWing = (side: -1 | 1) => {
+      const wg = new THREE.Group();
+      wg.position.set(side * 1.18, 4.65, -0.58);
+      const u = createComicMesh(wA, '#00f5d4', 0.034, { emissive: '#0d9488', emissiveIntensity: 0.36 });
+      if (side === -1) u.scale.x = -1;
+      const l = createComicMesh(wB, '#c084fc', 0.032, { emissive: '#7e22ce', emissiveIntensity: 0.36 });
+      if (side === -1) l.scale.x = -1;
+      l.position.set(0, -1.0, 0.15);
+      wg.add(u, l);
+      return wg;
+    };
+    wingL = makeCosmicWing(-1);
+    wingR = makeCosmicWing(1);
+
+    // Twin Cosmic Blades
+    const makeBladeArm = (side: -1 | 1) => {
+      const g = new THREE.Group();
+      g.position.set(side * 1.65, 4.0, 0.35);
+      const armM = createComicMesh(new THREE.CapsuleGeometry(0.24, 1.05, 10, 14), '#f8fafc', 0.032);
+      armM.position.y = -0.45;
+      const blade = createComicMesh(createSoftBladeGeometry(0.72, 3.85, 0.16, 'cleaver'), '#00f5d4', 0.038, {
+        emissive: side === 1 ? '#06b6d4' : '#a855f7',
+        emissiveIntensity: 0.48,
+      });
+      blade.position.set(side * 0.2, -0.35, 0.6);
+      blade.rotation.x = 0.62;
+      g.add(armM, blade);
+      return g;
+    };
+    leftArm = makeBladeArm(-1);
+    rightArm = makeBladeArm(1);
+
+    // Orbiting Galaxy Rings & Stars
+    orbitGroup = new THREE.Group();
+    orbitGroup.position.y = 3.4;
+    const galRing1 = createComicMesh(new THREE.TorusGeometry(3.2, 0.12, 10, 32), '#00f5d4', 0.024, {
+      emissive: '#06b6d4',
+      emissiveIntensity: 0.45,
+    });
+    galRing1.rotation.x = Math.PI / 2 + 0.3;
+    const galRing2 = createComicMesh(new THREE.TorusGeometry(2.6, 0.1, 10, 32), '#fde047', 0.022, {
+      emissive: '#f59e0b',
+      emissiveIntensity: 0.45,
+    });
+    galRing2.rotation.x = Math.PI / 2 - 0.35;
+    orbitGroup.add(galRing1, galRing2);
+
+    body.add(robe, eclipseCore, head, wingL, wingR, leftArm, rightArm, orbitGroup);
   } else if (enemy.tier === 'miniboss') {
     // =========================================================
     // 8 BESPOKE SOFT CARTOON MINI-BOSSES — ZERO BOXES!
@@ -1027,6 +1336,9 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
       2: arch.includes('dzinn') ? '#38a3d1' : arch.includes('mumia') ? '#e8d5a3' : '#de8c26',
       3: arch.includes('driada') ? '#9d62d4' : arch.includes('plujec') ? '#84b82c' : '#2d8a52',
       4: arch.includes('szczelina') ? '#8e4ac4' : arch.includes('golem') ? '#3a465c' : '#cf3a56',
+      5: arch.includes('golem') ? '#0284c7' : arch.includes('zorza') ? '#818cf8' : '#38bdf8',
+      6: arch.includes('golem') ? '#ca8a04' : arch.includes('plazma') ? '#facc15' : '#f97316',
+      7: arch.includes('golem') ? '#6366f1' : arch.includes('czas') ? '#c084fc' : '#00f5d4',
     };
     const col = colorMap[enemy.act] || '#cf3a56';
 
@@ -1925,7 +2237,12 @@ export function updateEnemyRig(
 
   if (state.animState === 'burrow') {
     rig.body.position.y = -4.2;
-  } else if (rig.bossId === 'vaelgor' || rig.archetype === 'mb_nekro_lord') {
+  } else if (
+    rig.bossId === 'vaelgor' ||
+    rig.bossId === 'kaelis' ||
+    rig.bossId === 'aeternus' ||
+    rig.archetype === 'mb_nekro_lord'
+  ) {
     rig.body.position.y = 0.55 + Math.sin(elapsedSec * 2.8) * 0.28;
     rig.body.scale.setScalar(baseScale);
   } else if (state.animState === 'run') {

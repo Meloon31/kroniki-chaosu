@@ -531,9 +531,10 @@ export function xpToNextLevel(level: number): number {
 }
 
 export function targetLocationXpPool(globalIndex: number): number {
-  const clamped = Math.max(1, Math.min(60, globalIndex));
+  const clamped = Math.max(1, Math.min(105, globalIndex));
   const refLvl = Math.min(MAX_LEVEL - 1, clamped);
-  return Math.round(xpToNextLevel(refLvl) * 1.015);
+  const hcBonus = clamped > 60 ? 1.55 : 1.015;
+  return Math.round(xpToNextLevel(refLvl) * hcBonus);
 }
 
 export function getEnemyCountMultiplier(partySize: number): number {
@@ -549,10 +550,25 @@ export function getEnemyCountMultiplier(partySize: number): number {
 
 export function getBossHpMultiplier(partySize: number): number {
   const extra = Math.max(0, Math.min(3, partySize - 1));
-  return 1 + extra * 0.75; // +75% HP/Shield per additional player
+  return 1 + extra * 0.75; // +75% HP/Shield per additional player (Acts 1-4)
 }
 
 export function getBossDamageMultiplier(partySize: number): number {
   const extra = Math.max(0, Math.min(3, partySize - 1));
-  return 1 + extra * 0.2; // +20% DMG per additional player
+  return 1 + extra * 0.2; // +20% DMG per additional player (Acts 1-4)
+}
+
+/**
+ * HARDCORE Party Scaling (EXACT user spec):
+ * - Bosses / Mini-bosses: 2p = +33% (1.33x), 3p = +66% (1.66x), 4p = +99% (1.99x)
+ * - Mobs: 2p = +10% (1.10x), 3p = +20% (1.20x), 4p = +30% (1.30x)
+ */
+export function getHardcoreBossDifficultyMultiplier(partySize: number): number {
+  const extra = Math.max(0, Math.min(3, partySize - 1));
+  return Number((1 + extra * 0.33).toFixed(2));
+}
+
+export function getHardcoreMobDifficultyMultiplier(partySize: number): number {
+  const extra = Math.max(0, Math.min(3, partySize - 1));
+  return Number((1 + extra * 0.10).toFixed(2));
 }

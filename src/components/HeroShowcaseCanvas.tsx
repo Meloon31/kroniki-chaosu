@@ -144,7 +144,7 @@ export const HeroShowcaseCanvas: React.FC<HeroShowcaseCanvasProps> = ({
         healPower: 1,
         shieldPower: 1,
         activeSetRarity: null,
-        setCounts: { zwykly: 0, normalny: 0, mityczny: 0, legendarny: 0, boski: 0 },
+        setCounts: { zwykly: 0, normalny: 0, mityczny: 0, legendarny: 0, boski: 0, niesmiertelny: 0 },
         weaponUpgradeGlow: weaponGlow,
         armorUpgradeGlow: armorGlow,
         combatPower: 100,

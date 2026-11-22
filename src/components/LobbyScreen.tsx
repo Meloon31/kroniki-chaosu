@@ -7,9 +7,10 @@ import {
   getDailyFeaturedLocation,
 } from '../../shared/bounties';
 import { CLASS_LIST, CLASSES } from '../../shared/classes';
+import { getHardcoreUnlockProgress } from '../../shared/items';
 import type { BountiesTab } from './BountiesModal';
 import { computePlayerStats } from '../../shared/stats';
-import { ACT_THEMES, ALL_LOCATIONS, getLocationDef } from '../../shared/world';
+import { ACT_THEMES, ALL_LOCATIONS, getLocationDef, isHardcoreAct } from '../../shared/world';
 import type { ActNumber, ClassId, PlayerProfile, RoomSummary } from '../../shared/types';
 import { HeroShowcaseCanvas } from './HeroShowcaseCanvas';
 
@@ -900,107 +901,204 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
             )}
           </div>
 
-          {/* Act & Location Selector */}
-          <div
-            style={{
-              background: 'rgba(10, 13, 24, 0.52)',
-              border: '1px solid rgba(255,255,255,0.07)',
-              borderRadius: 14,
-              padding: 12,
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', color: '#94a3b8' }}>
-                WYBÓR WYPRAWY (60 LOKACJI)
-              </span>
-              <button
-                onClick={onToggleSandbox}
+          {/* Act & Location Selector (Standard 1-4 + HARDCORE 5-7) */}
+          {(() => {
+            const hcProgress = getHardcoreUnlockProgress(profile);
+            const isViewingHC = isHardcoreAct(selectedAct);
+            const stdActs: ActNumber[] = [1, 2, 3, 4];
+            const hcActs: ActNumber[] = [5, 6, 7];
+            return (
+              <div
                 style={{
-                  background: 'rgba(255,255,255,0.07)',
-                  border: '1px solid rgba(255,255,255,0.12)',
-                  borderRadius: 8,
-                  padding: '3px 8px',
-                  fontSize: 10.5,
-                  fontWeight: 700,
-                  color: profile.sandboxUnlockAll ? '#4ade80' : '#cbd5e1',
-                  cursor: 'pointer',
+                  background: isViewingHC
+                    ? 'linear-gradient(155deg, rgba(16, 26, 46, 0.85), rgba(32, 16, 48, 0.78))'
+                    : 'rgba(10, 13, 24, 0.52)',
+                  border: isViewingHC
+                    ? '1.5px solid rgba(0, 245, 212, 0.45)'
+                    : '1px solid rgba(255,255,255,0.07)',
+                  borderRadius: 14,
+                  padding: 12,
                 }}
               >
-                {profile.sandboxUnlockAll ? '🔓 Wszystkie 60' : '🔒 Odblokuj 60'}
-              </button>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5, marginBottom: 8 }}>
-              {([1, 2, 3, 4] as ActNumber[]).map((act) => {
-                const active = selectedAct === act;
-                return (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 6 }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.07em', color: isViewingHC ? '#00f5d4' : '#94a3b8' }}>
+                    {isViewingHC ? '🔥 TRYB HARDCORE (AKTY 5–7)' : 'WYBÓR WYPRAWY (105 LOKACJI)'}
+                  </span>
                   <button
-                    key={act}
-                    onClick={() => setSelectedAct(act)}
+                    onClick={onToggleSandbox}
                     style={{
-                      padding: '6px 4px',
+                      background: 'rgba(255,255,255,0.07)',
+                      border: '1px solid rgba(255,255,255,0.12)',
+                      borderRadius: 8,
+                      padding: '3px 8px',
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      color: profile.sandboxUnlockAll ? '#4ade80' : '#cbd5e1',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {profile.sandboxUnlockAll ? '🔓 Wszystkie 105 + HC' : '🔒 Odblokuj 105 (Test)'}
+                  </button>
+                </div>
+
+                {/* Standard vs HARDCORE Mode Switcher */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 }}>
+                  <button
+                    onClick={() => {
+                      if (isViewingHC) setSelectedAct(1);
+                    }}
+                    style={{
+                      padding: '6px 8px',
                       borderRadius: 9,
-                      border: active
-                        ? `1.5px solid ${ACT_THEMES[act].accentGlowColor}`
-                        : '1px solid rgba(255,255,255,0.08)',
-                      background: active ? `${ACT_THEMES[act].accentGlowColor}30` : 'rgba(255,255,255,0.03)',
-                      color: active ? '#fff' : '#94a3b8',
-                      fontWeight: 800,
+                      border: !isViewingHC ? '1.5px solid #fde047' : '1px solid rgba(255,255,255,0.1)',
+                      background: !isViewingHC ? 'rgba(250, 204, 21, 0.2)' : 'rgba(255,255,255,0.03)',
+                      color: !isViewingHC ? '#fef08a' : '#94a3b8',
+                      fontWeight: 900,
                       fontSize: 11.5,
                       cursor: 'pointer',
                     }}
                   >
-                    Akt {act}
+                    ⚔️ Standard (Akt 1–4)
                   </button>
-                );
-              })}
-            </div>
-
-            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
-              <strong style={{ color: '#e2e8f0' }}>{ACT_THEMES[selectedAct].name.replace(/^Akt \d: /, '')}</strong> • Boss:{' '}
-              <span style={{ color: '#fb7185' }}>{actBoss.recommendedGear}</span>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 5 }}>
-              {ALL_LOCATIONS.filter((l) => l.act === selectedAct).map((loc) => {
-                const unlocked = profile.sandboxUnlockAll || loc.globalIndex <= profile.unlockedLocationGlobal;
-                const chosen = activeGlobalLoc === loc.globalIndex;
-                return (
                   <button
-                    key={loc.globalIndex}
-                    disabled={!unlocked}
-                    onClick={() => handleLocPick(loc.globalIndex)}
-                    title={`${loc.name} — ${loc.subtitle}`}
+                    onClick={() => {
+                      if (!isViewingHC) setSelectedAct(5);
+                    }}
                     style={{
-                      padding: '6px 3px',
+                      padding: '6px 8px',
                       borderRadius: 9,
+                      border: isViewingHC ? '1.5px solid #00f5d4' : '1px solid rgba(0, 245, 212, 0.35)',
+                      background: isViewingHC
+                        ? 'linear-gradient(135deg, rgba(0,245,212,0.28), rgba(168,85,247,0.28))'
+                        : 'rgba(0, 245, 212, 0.08)',
+                      color: '#00f5d4',
+                      fontWeight: 900,
                       fontSize: 11.5,
-                      fontWeight: 800,
-                      cursor: unlocked ? 'pointer' : 'not-allowed',
-                      opacity: unlocked ? 1 : 0.32,
-                      border: chosen ? '1.5px solid #fde047' : '1px solid rgba(255,255,255,0.08)',
-                      background: chosen
-                        ? 'linear-gradient(135deg, #fde047, #f59e0b)'
-                        : loc.isMainBoss
-                          ? 'rgba(225, 29, 72, 0.35)'
-                          : loc.isMiniBoss
-                            ? 'rgba(217, 119, 6, 0.32)'
-                            : 'rgba(255,255,255,0.05)',
-                      color: chosen ? '#1a1205' : '#f8fafc',
+                      cursor: 'pointer',
                     }}
                   >
-                    {loc.isMainBoss ? '👑' : loc.isMiniBoss ? '💀' : ''}
-                    {loc.locationInAct}
+                    🔥 HARDCORE {hcProgress.unlocked ? '(5–7)' : '🔒'}
                   </button>
-                );
-              })}
-            </div>
+                </div>
 
-            <div style={{ marginTop: 8, fontSize: 11.5, color: '#fde68a', fontWeight: 700 }}>
-              📍 {activeLocDef.name}
-              {activeLocDef.bossName ? ` (${activeLocDef.bossName})` : ''}
-            </div>
-          </div>
+                {/* Hardcore Unlock Progress Box when locked */}
+                {isViewingHC && !hcProgress.unlocked && (
+                  <div
+                    style={{
+                      padding: '8px 10px',
+                      marginBottom: 8,
+                      borderRadius: 10,
+                      background: 'rgba(225, 29, 72, 0.16)',
+                      border: '1px solid rgba(251, 113, 133, 0.45)',
+                      fontSize: 11,
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    <div style={{ fontWeight: 900, color: '#fde047', marginBottom: 2 }}>
+                      🔥 ODBLOKUJ TRYB HARDCORE (Set Nieśmiertelny 5%, +20, Runy HC!)
+                    </div>
+                    <div style={{ color: hcProgress.allNormalActsCleared ? '#4ade80' : '#fca5a5', fontWeight: 800 }}>
+                      {hcProgress.allNormalActsCleared ? '✅' : '⏳'} Przejdź Akty 1–4 (Vaelgor)
+                    </div>
+                    <div style={{ color: hcProgress.boskiPlus13Slots >= 6 ? '#4ade80' : '#fef08a', fontWeight: 800 }}>
+                      {hcProgress.boskiPlus13Slots >= 6 ? '✅' : '⏳'} Pełny Ekwipunek Boski +13: {hcProgress.boskiPlus13Slots} / 6
+                    </div>
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: isViewingHC ? 'repeat(3, 1fr)' : 'repeat(4, 1fr)',
+                    gap: 5,
+                    marginBottom: 8,
+                  }}
+                >
+                  {(isViewingHC ? hcActs : stdActs).map((act) => {
+                    const active = selectedAct === act;
+                    return (
+                      <button
+                        key={act}
+                        onClick={() => setSelectedAct(act)}
+                        style={{
+                          padding: '6px 4px',
+                          borderRadius: 9,
+                          border: active
+                            ? `1.5px solid ${ACT_THEMES[act].accentGlowColor}`
+                            : '1px solid rgba(255,255,255,0.08)',
+                          background: active ? `${ACT_THEMES[act].accentGlowColor}30` : 'rgba(255,255,255,0.03)',
+                          color: active ? '#fff' : '#94a3b8',
+                          fontWeight: 800,
+                          fontSize: 11.5,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {isViewingHC ? '🔥 ' : ''}Akt {act}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+                  <strong style={{ color: isViewingHC ? '#00f5d4' : '#e2e8f0' }}>
+                    {ACT_THEMES[selectedAct].name.replace(/^(HARDCORE )?Akt \d: /, '')}
+                  </strong>{' '}
+                  • Boss: <span style={{ color: '#fb7185' }}>{actBoss.recommendedGear}</span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 5 }}>
+                  {ALL_LOCATIONS.filter((l) => l.act === selectedAct).map((loc) => {
+                    const hcGateOk = !isViewingHC || hcProgress.unlocked;
+                    const unlocked =
+                      profile.sandboxUnlockAll ||
+                      (hcGateOk &&
+                        (loc.globalIndex <= profile.unlockedLocationGlobal ||
+                          (loc.globalIndex === 61 && hcProgress.unlocked)));
+                    const chosen = activeGlobalLoc === loc.globalIndex;
+                    return (
+                      <button
+                        key={loc.globalIndex}
+                        disabled={!unlocked}
+                        onClick={() => handleLocPick(loc.globalIndex)}
+                        title={`${loc.name} — ${loc.subtitle}`}
+                        style={{
+                          padding: '6px 3px',
+                          borderRadius: 9,
+                          fontSize: 11.5,
+                          fontWeight: 800,
+                          cursor: unlocked ? 'pointer' : 'not-allowed',
+                          opacity: unlocked ? 1 : 0.32,
+                          border: chosen
+                            ? '1.5px solid #fde047'
+                            : isViewingHC
+                              ? '1px solid rgba(0,245,212,0.28)'
+                              : '1px solid rgba(255,255,255,0.08)',
+                          background: chosen
+                            ? 'linear-gradient(135deg, #fde047, #f59e0b)'
+                            : loc.isMainBoss
+                              ? isViewingHC
+                                ? 'rgba(13, 148, 136, 0.45)'
+                                : 'rgba(225, 29, 72, 0.35)'
+                              : loc.isMiniBoss
+                                ? 'rgba(217, 119, 6, 0.32)'
+                                : 'rgba(255,255,255,0.05)',
+                          color: chosen ? '#1a1205' : '#f8fafc',
+                        }}
+                      >
+                        {loc.isMainBoss ? '👑' : loc.isMiniBoss ? '💀' : ''}
+                        {loc.locationInAct}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div style={{ marginTop: 8, fontSize: 11.5, color: '#fde68a', fontWeight: 700 }}>
+                  📍 {activeLocDef.name}
+                  {activeLocDef.bossName ? ` (${activeLocDef.bossName})` : ''}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Primary Play CTA */}
           {room ? (

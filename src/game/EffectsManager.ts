@@ -1221,6 +1221,7 @@ export class EffectsManager {
             mityczny: 10.0,
             legendarny: 14.5,
             boski: 21.0,
+            niesmiertelny: 26.0,
           };
           const radMap: Record<Rarity, number> = {
             zwykly: 0.14,
@@ -1228,6 +1229,7 @@ export class EffectsManager {
             mityczny: 0.28,
             legendarny: 0.38,
             boski: 0.56,
+            niesmiertelny: 0.72,
           };
           const opMap: Record<Rarity, number> = {
             zwykly: 0.18,
@@ -1235,6 +1237,7 @@ export class EffectsManager {
             mityczny: 0.28,
             legendarny: 0.34,
             boski: 0.42,
+            niesmiertelny: 0.52,
           };
           beamHeight = heightMap[rarity];
           beamRadius = radMap[rarity];
@@ -1282,10 +1285,10 @@ export class EffectsManager {
       vis.gem.position.y = 0.65 + Math.sin(elapsedSec * 4.0) * 0.14;
       vis.ring.rotation.z = -elapsedSec * 1.5;
 
-      if (vis.rarity === 'boski') {
-        const hue = (elapsedSec * 0.42) % 1;
-        (vis.beamMat.uniforms.uColor.value as THREE.Color).setHSL(hue, 0.78, 0.56);
-        (vis.ring.material as THREE.MeshBasicMaterial).color.setHSL((hue + 0.35) % 1, 0.78, 0.56);
+      if (vis.rarity === 'boski' || vis.rarity === 'niesmiertelny') {
+        const hue = vis.rarity === 'niesmiertelny' ? 0.46 + Math.sin(elapsedSec * 2.6) * 0.08 : (elapsedSec * 0.42) % 1;
+        (vis.beamMat.uniforms.uColor.value as THREE.Color).setHSL(hue, 0.85, 0.58);
+        (vis.ring.material as THREE.MeshBasicMaterial).color.setHSL((hue + 0.18) % 1, 0.85, 0.62);
       }
     }
   }

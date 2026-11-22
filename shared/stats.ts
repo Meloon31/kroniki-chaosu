@@ -57,9 +57,11 @@ export function computePlayerStats(
     mityczny: 0,
     legendarny: 0,
     boski: 0,
+    niesmiertelny: 0,
   };
 
   let plus13Count = 0;
+  let plus20Count = 0;
 
   for (const slot of EQUIP_SLOTS) {
     const item = equipped[slot];
@@ -88,23 +90,25 @@ export function computePlayerStats(
     }
     if (b.dodge) dodgeChance += b.dodge;
 
-    // Unique +13 Class Mastery Bonus per equipped +13 item!
+    // Unique +13 Class Mastery Bonus per equipped +13 item (and extra Immortal Perfection on +20!)
     if (item.upgradeLevel >= MAX_UPGRADE_LEVEL) {
       plus13Count++;
       const p13 = getPlus13ClassBonus(classId);
-      if (p13.adPct) adPct += p13.adPct;
-      if (p13.apPct) apPct += p13.apPct;
-      if (p13.hpPct) hpPct += p13.hpPct;
-      if (p13.defPct) defPct += p13.defPct;
-      if (p13.critChance) critChance += p13.critChance;
-      if (p13.critDamage) critDamage += p13.critDamage;
-      if (p13.attackSpeedPct) attackSpeedPct += p13.attackSpeedPct;
-      if (p13.moveSpeedPct) moveSpeedPct += p13.moveSpeedPct;
-      if (p13.cdrPct) cdr += p13.cdrPct;
-      if (p13.dodgeChance) dodgeChance += p13.dodgeChance;
-      if (p13.damageReduction) damageReduction += p13.damageReduction;
-      if (p13.healPowerPct) healPowerPct += p13.healPowerPct;
-      if (p13.shieldPowerPct) shieldPowerPct += p13.shieldPowerPct;
+      const mult = item.upgradeLevel >= 20 ? 1.5 : 1.0;
+      if (item.upgradeLevel >= 20) plus20Count++;
+      if (p13.adPct) adPct += p13.adPct * mult;
+      if (p13.apPct) apPct += p13.apPct * mult;
+      if (p13.hpPct) hpPct += p13.hpPct * mult;
+      if (p13.defPct) defPct += p13.defPct * mult;
+      if (p13.critChance) critChance += p13.critChance * mult;
+      if (p13.critDamage) critDamage += p13.critDamage * mult;
+      if (p13.attackSpeedPct) attackSpeedPct += p13.attackSpeedPct * mult;
+      if (p13.moveSpeedPct) moveSpeedPct += p13.moveSpeedPct * mult;
+      if (p13.cdrPct) cdr += p13.cdrPct * mult;
+      if (p13.dodgeChance) dodgeChance += p13.dodgeChance * mult;
+      if (p13.damageReduction) damageReduction += p13.damageReduction * mult;
+      if (p13.healPowerPct) healPowerPct += p13.healPowerPct * mult;
+      if (p13.shieldPowerPct) shieldPowerPct += p13.shieldPowerPct * mult;
     }
   }
 
@@ -161,11 +165,14 @@ export function computePlayerStats(
       break;
   }
 
-  // 5. Passive Boss Runes (EXACT Appendix values, 0..10 each)
+  // 5. Passive Boss Runes (Standard 1-4 + Hardcore 5-7, 0..10 each)
   const rMalakor = Math.max(0, Math.min(10, runes.malakor || 0));
   const rAzirath = Math.max(0, Math.min(10, runes.azirath || 0));
   const rSylvara = Math.max(0, Math.min(10, runes.sylvara || 0));
   const rVaelgor = Math.max(0, Math.min(10, runes.vaelgor || 0));
+  const rKaelis = Math.max(0, Math.min(10, runes.kaelis || 0));
+  const rIgnarok = Math.max(0, Math.min(10, runes.ignarok || 0));
+  const rAeternus = Math.max(0, Math.min(10, runes.aeternus || 0));
 
   hpPct += rMalakor * 1.0;
   damageReduction += rMalakor * 0.5;
@@ -180,6 +187,22 @@ export function computePlayerStats(
   apPct += rVaelgor * 1.0;
   cdr += rVaelgor * 0.5;
 
+  // Hardcore Runes (Acts 5, 6, 7)
+  const bossDamageBonusPct = Number((rKaelis * 1.5).toFixed(1));
+  damageReduction += rKaelis * 1.0;
+  dodgeChance += rKaelis * 1.2;
+
+  defPct += rIgnarok * 2.0;
+  hpPct += rIgnarok * 1.5;
+  healPowerPct += rIgnarok * 1.5;
+  shieldPowerPct += rIgnarok * 1.5;
+
+  adPct += rAeternus * 1.8;
+  apPct += rAeternus * 1.8;
+  critChance += rAeternus * 1.2;
+  critDamage += rAeternus * 2.0;
+  cdr += rAeternus * 0.8;
+
   // 6. Active Daily Blessing of the Day (rotates every day of the week!)
   const blessing = getDailyBlessing();
   if (blessing.hpPctBonus) hpPct += blessing.hpPctBonus;
@@ -190,14 +213,15 @@ export function computePlayerStats(
   if (blessing.critChanceBonus) critChance += blessing.critChanceBonus;
   if (blessing.critDamageBonus) critDamage += blessing.critDamageBonus;
 
-  // Hard anti-immortality / anti-one-shot caps (expanded gently for hard-earned +13 Mastery gear!)
-  const p13CapBoost = Math.min(30, plus13Count * 8);
-  const maxHp = Math.round(flatHp * (1 + Math.min(75 + p13CapBoost, hpPct) / 100));
-  const ad = Math.round(flatAd * (1 + Math.min(70 + p13CapBoost, adPct) / 100));
-  const ap = Math.round(flatAp * (1 + Math.min(70 + p13CapBoost, apPct) / 100));
-  const def = Math.round(flatDef * (1 + Math.min(75 + p13CapBoost, defPct) / 100));
+  // Hard anti-immortality / anti-one-shot caps (expanded cleanly for +13..+20 & Hardcore Runes!)
+  const hcRunesPower = rKaelis + rIgnarok + rAeternus;
+  const p13CapBoost = Math.min(70, plus13Count * 8 + plus20Count * 6 + hcRunesPower * 0.8);
+  const maxHp = Math.round(flatHp * (1 + Math.min(80 + p13CapBoost, hpPct) / 100));
+  const ad = Math.round(flatAd * (1 + Math.min(75 + p13CapBoost, adPct) / 100));
+  const ap = Math.round(flatAp * (1 + Math.min(75 + p13CapBoost, apPct) / 100));
+  const def = Math.round(flatDef * (1 + Math.min(80 + p13CapBoost, defPct) / 100));
 
-  // Transparent RPG Combat Power metric used to show boss readiness (Normal -> Mityczny+7 -> Legendarny+7 -> Legendarny+9)
+  // Transparent RPG Combat Power metric used to show boss readiness
   const combatPower = Math.round(ad + ap + def * 1.15 + maxHp * 0.12);
 
   return {
@@ -206,19 +230,20 @@ export function computePlayerStats(
     ad,
     ap,
     def,
-    moveSpeed: Math.min(1.75, Number((cls.baseMoveSpeed * (1 + moveSpeedPct / 100)).toFixed(3))),
-    attackSpeed: Math.min(2.0, Number((1 + attackSpeedPct / 100).toFixed(3))),
-    critChance: Math.min(75, Number(critChance.toFixed(1))),
-    critDamage: Math.min(275, Math.round(critDamage)),
-    cdr: Math.min(45, Number(cdr.toFixed(1))),
-    damageReduction: Math.min(32, Number(damageReduction.toFixed(1))),
-    dodgeChance: Math.min(42, Number(dodgeChance.toFixed(1))),
-    healPower: Math.min(2.25, Number((1 + healPowerPct / 100).toFixed(3))),
-    shieldPower: Math.min(2.25, Number((1 + shieldPowerPct / 100).toFixed(3))),
+    moveSpeed: Math.min(1.85, Number((cls.baseMoveSpeed * (1 + moveSpeedPct / 100)).toFixed(3))),
+    attackSpeed: Math.min(2.2, Number((1 + attackSpeedPct / 100).toFixed(3))),
+    critChance: Math.min(88, Number(critChance.toFixed(1))),
+    critDamage: Math.min(315, Math.round(critDamage)),
+    cdr: Math.min(55, Number(cdr.toFixed(1))),
+    damageReduction: Math.min(46, Number(damageReduction.toFixed(1))),
+    dodgeChance: Math.min(54, Number(dodgeChance.toFixed(1))),
+    healPower: Math.min(2.6, Number((1 + healPowerPct / 100).toFixed(3))),
+    shieldPower: Math.min(2.6, Number((1 + shieldPowerPct / 100).toFixed(3))),
     activeSetRarity,
     setCounts,
     weaponUpgradeGlow: equipped.bron?.upgradeLevel ?? 0,
     armorUpgradeGlow: equipped.zbroja?.upgradeLevel ?? 0,
+    bossDamageBonusPct,
     combatPower,
   };
 }

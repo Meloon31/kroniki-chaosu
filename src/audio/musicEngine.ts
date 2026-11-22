@@ -536,6 +536,357 @@ export const ACT_TRACKS: Record<ActNumber, MusicTrackInfo[]> = {
       arpPattern: [0, 2, 1, 3, 2, 3, 0, 2, 1, 3, 2, 0, 3, 2, 1, 3],
     },
   ],
+
+  // ======================================================
+  // HARDCORE AKT 5: CYTADELA ASTRALNEGO MROZU (Crystal Epic)
+  // ======================================================
+  5: [
+    {
+      id: 'act5_zorza_wieczna',
+      act: 5,
+      indexInAct: 1,
+      title: 'Zorza Astralnego Mrozu',
+      bpm: 138,
+      leadStyle: 'celesta',
+      arpStyle: 'harp',
+      drumStyle: 'epic',
+      // C# minor crystalline heroic: C#m - A - E - B | C#m - F#m - A - G#7
+      chordsA: [
+        [49, 52, 56, 61],
+        [45, 49, 52, 57],
+        [52, 56, 59, 64],
+        [47, 51, 54, 59],
+      ],
+      chordsB: [
+        [49, 52, 56, 61],
+        [54, 57, 61, 66],
+        [57, 61, 64, 69],
+        [56, 60, 63, 68],
+      ],
+      melodyA: [
+        73, null, 76, 80, 83, 80, 78, 76,
+        73, null, 76, 81, 80, 76, 73, null,
+        76, 80, 83, 85, 83, 80, 78, 75,
+        78, null, 80, 83, 85, null, null, null,
+      ],
+      melodyB: [
+        85, null, 83, 80, 83, 85, 88, 85,
+        85, 83, 81, 78, 81, 85, 88, null,
+        88, 85, 81, 76, 81, 85, 88, 85,
+        84, null, 87, 92, 85, null, null, null,
+      ],
+      bassPattern: [0, null, 0, 7, 12, null, 7, 5, 0, 0, 7, null, 12, 7, 5, null],
+      arpPattern: [0, 1, 2, 3, 2, 3, 1, 0, 0, 2, 3, 1, 3, 2, 1, 0],
+    },
+    {
+      id: 'act5_lodowy_bastion',
+      act: 5,
+      indexInAct: 2,
+      title: 'Bramy Wiecznej Zimy',
+      bpm: 148,
+      leadStyle: 'horn',
+      arpStyle: 'synth',
+      drumStyle: 'epic',
+      // B minor driving ice battle: Bm - G - D - F# | Bm - Em - G - F#
+      chordsA: [
+        [47, 50, 54, 59],
+        [43, 47, 50, 55],
+        [50, 54, 57, 62],
+        [42, 46, 49, 54],
+      ],
+      chordsB: [
+        [47, 50, 54, 59],
+        [52, 55, 59, 64],
+        [55, 59, 62, 67],
+        [54, 58, 61, 66],
+      ],
+      melodyA: [
+        71, 74, 78, null, 81, 78, 76, 74,
+        74, 79, 83, 79, 78, 74, 71, null,
+        74, 78, 81, 83, 81, 78, 74, 73,
+        78, null, 82, 85, 83, null, null, null,
+      ],
+      melodyB: [
+        83, 81, 78, 74, 78, 81, 83, 86,
+        86, 83, 79, 76, 79, 83, 86, null,
+        86, 83, 79, 74, 79, 83, 86, 83,
+        82, 85, 90, 85, 83, null, null, null,
+      ],
+      bassPattern: [0, 0, 12, 0, 7, 0, 10, 7, 0, 0, 12, 7, 10, 7, 5, 7],
+      arpPattern: [0, 2, 3, 1, 0, 3, 2, 1, 0, 1, 3, 2, 3, 1, 2, 0],
+    },
+    {
+      id: 'act5_korona_kaelisa',
+      act: 5,
+      indexInAct: 3,
+      title: 'Korona Kaelisa (Boss HC)',
+      bpm: 158,
+      leadStyle: 'brass',
+      arpStyle: 'synth',
+      drumStyle: 'epic',
+      // F minor fierce astral blizzard: Fm - Db - Bbm - C | Fm - Ab - Db - C
+      chordsA: [
+        [41, 44, 48, 53],
+        [37, 41, 44, 49],
+        [46, 49, 53, 58],
+        [48, 52, 55, 60],
+      ],
+      chordsB: [
+        [41, 44, 48, 53],
+        [44, 48, 51, 56],
+        [49, 53, 56, 61],
+        [48, 52, 55, 60],
+      ],
+      melodyA: [
+        77, null, 77, 80, 84, 82, 80, 77,
+        73, null, 77, 80, 85, 84, 80, null,
+        82, 80, 77, 73, 77, 82, 84, 82,
+        84, null, 88, 91, 89, null, null, null,
+      ],
+      melodyB: [
+        89, 87, 84, 80, 84, 87, 89, 91,
+        87, null, 84, 80, 77, 80, 87, null,
+        85, 84, 80, 77, 80, 85, 89, 85,
+        84, 88, 91, 88, 89, null, null, null,
+      ],
+      bassPattern: [0, 0, 12, 0, 7, 0, 12, 10, 0, 0, 12, 0, 7, 10, 12, 11],
+      arpPattern: [0, 3, 2, 1, 3, 2, 0, 1, 0, 2, 3, 1, 2, 3, 1, 0],
+    },
+  ],
+
+  // ======================================================
+  // HARDCORE AKT 6: KUŹNIA ZAPOMNIANYCH TYTANÓW (Industrial Forge)
+  // ======================================================
+  6: [
+    {
+      id: 'act6_kowadlo_tytanow',
+      act: 6,
+      indexInAct: 1,
+      title: 'Młoty Prakuźni',
+      bpm: 136,
+      leadStyle: 'brass',
+      arpStyle: 'lute',
+      drumStyle: 'epic',
+      // G minor heavy heroic forge: Gm - Eb - Cm - D | Gm - F - Eb - D
+      chordsA: [
+        [43, 46, 50, 55],
+        [39, 43, 46, 51],
+        [48, 51, 55, 60],
+        [50, 54, 57, 62],
+      ],
+      chordsB: [
+        [43, 46, 50, 55],
+        [41, 45, 48, 53],
+        [39, 43, 46, 51],
+        [50, 54, 57, 62],
+      ],
+      melodyA: [
+        67, null, 67, 70, 74, null, 72, 70,
+        75, null, 74, 70, 67, null, 70, 72,
+        72, 75, 79, 77, 75, 72, 70, 67,
+        74, null, 78, 81, 79, null, null, null,
+      ],
+      melodyB: [
+        79, null, 77, 74, 77, 79, 82, 79,
+        77, 74, 72, 69, 72, 77, 81, null,
+        79, 75, 70, 75, 79, 82, 84, 82,
+        81, null, 78, 81, 79, null, null, null,
+      ],
+      bassPattern: [0, 0, null, 0, 7, 0, 12, null, 0, 0, 7, 0, 10, 7, 5, null],
+      arpPattern: [0, 1, 2, 0, 3, 2, 1, 0, 0, 2, 3, 2, 1, 0, 2, 3],
+    },
+    {
+      id: 'act6_plynne_zloto',
+      act: 6,
+      indexInAct: 2,
+      title: 'Rzeki Płynnego Złota',
+      bpm: 150,
+      leadStyle: 'horn',
+      arpStyle: 'synth',
+      drumStyle: 'war',
+      // A minor fiery forge rush: Am - F - Dm - E | Am - G - F - E
+      chordsA: [
+        [45, 48, 52, 57],
+        [41, 45, 48, 53],
+        [50, 53, 57, 62],
+        [52, 56, 59, 64],
+      ],
+      chordsB: [
+        [45, 48, 52, 57],
+        [43, 47, 50, 55],
+        [41, 45, 48, 53],
+        [52, 56, 59, 64],
+      ],
+      melodyA: [
+        69, 72, 76, null, 79, 76, 74, 72,
+        77, null, 76, 72, 69, null, 72, 74,
+        74, 77, 81, 79, 77, 74, 72, 69,
+        76, 80, 83, 80, 81, null, null, null,
+      ],
+      melodyB: [
+        81, 79, 76, 72, 76, 79, 81, 84,
+        83, 79, 74, 79, 83, 86, 83, null,
+        81, 77, 72, 77, 81, 84, 86, 84,
+        83, 80, 83, 88, 81, null, null, null,
+      ],
+      bassPattern: [0, 12, 0, 7, 0, 12, 10, 7, 0, 12, 0, 7, 10, 7, 5, 7],
+      arpPattern: [0, 2, 1, 3, 0, 3, 2, 1, 0, 2, 3, 1, 3, 2, 1, 0],
+    },
+    {
+      id: 'act6_gniew_ignaroka',
+      act: 6,
+      indexInAct: 3,
+      title: 'Gniew Ignaroka (Boss HC)',
+      bpm: 162,
+      leadStyle: 'brass',
+      arpStyle: 'synth',
+      drumStyle: 'epic',
+      // E minor thunderous titan boss: Em - C - Am - B | Em - D - C - B
+      chordsA: [
+        [40, 43, 47, 52],
+        [48, 52, 55, 60],
+        [45, 48, 52, 57],
+        [47, 51, 54, 59],
+      ],
+      chordsB: [
+        [40, 43, 47, 52],
+        [50, 54, 57, 62],
+        [48, 52, 55, 60],
+        [47, 51, 54, 59],
+      ],
+      melodyA: [
+        76, null, 76, 79, 83, 81, 79, 76,
+        72, null, 76, 79, 84, 83, 79, null,
+        81, 79, 76, 72, 76, 81, 83, 81,
+        83, null, 87, 90, 88, null, null, null,
+      ],
+      melodyB: [
+        88, 86, 83, 79, 83, 86, 88, 91,
+        86, 83, 81, 78, 81, 86, 90, null,
+        88, 84, 79, 84, 88, 91, 88, 84,
+        83, 87, 91, 87, 88, null, null, null,
+      ],
+      bassPattern: [0, 0, 12, 0, 7, 0, 12, 10, 0, 0, 12, 0, 7, 10, 12, 11],
+      arpPattern: [0, 1, 3, 2, 3, 2, 1, 0, 0, 3, 1, 2, 3, 1, 2, 0],
+    },
+  ],
+
+  // ======================================================
+  // HARDCORE AKT 7: TRON WIECZNOŚCI (Celestial Cosmic Finale!)
+  // ======================================================
+  7: [
+    {
+      id: 'act7_bramy_wiecznosci',
+      act: 7,
+      indexInAct: 1,
+      title: 'Bramy Wieczności',
+      bpm: 142,
+      leadStyle: 'celesta',
+      arpStyle: 'harp',
+      drumStyle: 'epic',
+      // C minor cosmic majesty: Cm - Ab - Fm - G | Cm - Eb - Ab - G
+      chordsA: [
+        [48, 51, 55, 60],
+        [44, 48, 51, 56],
+        [41, 44, 48, 53],
+        [43, 47, 50, 55],
+      ],
+      chordsB: [
+        [48, 51, 55, 60],
+        [51, 55, 58, 63],
+        [56, 60, 63, 68],
+        [55, 59, 62, 67],
+      ],
+      melodyA: [
+        72, null, 75, 79, 84, 82, 79, 75,
+        80, null, 79, 75, 72, null, 75, 77,
+        77, 80, 84, 82, 80, 77, 75, 72,
+        79, null, 83, 86, 84, null, null, null,
+      ],
+      melodyB: [
+        84, 82, 79, 75, 79, 82, 84, 87,
+        87, null, 84, 82, 79, 82, 87, null,
+        87, 84, 80, 77, 80, 84, 87, 84,
+        83, null, 86, 91, 84, null, null, null,
+      ],
+      bassPattern: [0, null, 7, 12, 0, null, 12, 7, 0, null, 7, 10, 12, 7, 5, null],
+      arpPattern: [0, 1, 2, 3, 3, 2, 1, 0, 0, 2, 3, 1, 3, 2, 1, 0],
+    },
+    {
+      id: 'act7_zacmienie_gwiazd',
+      act: 7,
+      indexInAct: 2,
+      title: 'Zaćmienie Siedmiu Słońc',
+      bpm: 154,
+      leadStyle: 'horn',
+      arpStyle: 'synth',
+      drumStyle: 'epic',
+      // D minor grand astral battle: Dm - Bb - Gm - A | Dm - C - Bb - A
+      chordsA: [
+        [50, 53, 57, 62],
+        [46, 50, 53, 58],
+        [43, 46, 50, 55],
+        [45, 49, 52, 57],
+      ],
+      chordsB: [
+        [50, 53, 57, 62],
+        [48, 52, 55, 60],
+        [46, 50, 53, 58],
+        [45, 49, 52, 57],
+      ],
+      melodyA: [
+        74, 77, 81, null, 86, 84, 81, 77,
+        82, null, 81, 77, 74, null, 77, 79,
+        79, 82, 86, 84, 82, 79, 77, 74,
+        81, 85, 88, 85, 86, null, null, null,
+      ],
+      melodyB: [
+        86, 84, 81, 77, 81, 84, 86, 89,
+        88, null, 84, 79, 84, 88, 91, null,
+        89, 86, 82, 77, 82, 86, 89, 86,
+        85, 88, 93, 88, 86, null, null, null,
+      ],
+      bassPattern: [0, 0, 12, 7, 0, 12, 10, 7, 0, 0, 12, 7, 10, 7, 5, 7],
+      arpPattern: [0, 2, 3, 1, 2, 3, 0, 1, 0, 3, 2, 1, 3, 2, 1, 0],
+    },
+    {
+      id: 'act7_tron_aeternusa',
+      act: 7,
+      indexInAct: 3,
+      title: 'Tron Aeternusa (Ostateczny Boss HC)',
+      bpm: 168,
+      leadStyle: 'brass',
+      arpStyle: 'harp',
+      drumStyle: 'epic',
+      // F# minor transcendent final boss: F#m - D - Bm - C# | F#m - E - D - C#
+      chordsA: [
+        [42, 45, 49, 54],
+        [50, 54, 57, 62],
+        [47, 50, 54, 59],
+        [49, 53, 56, 61],
+      ],
+      chordsB: [
+        [42, 45, 49, 54],
+        [52, 56, 59, 64],
+        [50, 54, 57, 62],
+        [49, 53, 56, 61],
+      ],
+      melodyA: [
+        78, null, 78, 81, 85, 83, 81, 78,
+        74, null, 78, 81, 86, 85, 81, null,
+        83, 81, 78, 74, 78, 83, 85, 83,
+        85, null, 89, 92, 90, null, null, null,
+      ],
+      melodyB: [
+        90, 88, 85, 81, 85, 88, 90, 93,
+        92, 88, 83, 88, 92, 95, 92, null,
+        90, 86, 81, 86, 90, 93, 90, 86,
+        85, 89, 92, 89, 90, null, null, null,
+      ],
+      bassPattern: [0, 0, 12, 0, 7, 0, 12, 10, 0, 0, 12, 0, 7, 10, 12, 11],
+      arpPattern: [0, 3, 2, 1, 3, 1, 2, 0, 0, 2, 3, 1, 3, 2, 0, 1],
+    },
+  ],
 };
 
 class DynamicMusicEngine {

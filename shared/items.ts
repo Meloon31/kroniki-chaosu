@@ -3,6 +3,7 @@ import type {
   EquipmentItem,
   EquipSlot,
   ItemBonusStats,
+  PlayerProfile,
   Rarity,
   ShardBag,
 } from './types.js';
@@ -13,6 +14,7 @@ export const RARITY_ORDER: Rarity[] = [
   'mityczny',
   'legendarny',
   'boski',
+  'niesmiertelny',
 ];
 
 export const EQUIP_SLOTS: EquipSlot[] = [
@@ -113,9 +115,68 @@ export const RARITY_META: Record<Rarity, RarityMeta> = {
     bonusCount: [4, 4],
     bonusScale: 1.42,
   },
+  niesmiertelny: {
+    id: 'niesmiertelny',
+    name: 'Nieśmiertelny',
+    shardName: 'Odłamek Nieśmiertelny',
+    dropChancePct: 5, // 5% wyłącznie w trybie Hardcore!
+    color: '#00f5d4',
+    beamColor: '#2dd4bf',
+    glowColor: '#06b6d4',
+    badgeBg: '#0f766e',
+    baseMultiplier: 4.08, // dokładnie +50% wartości bazowej (w tym DEF!) względem Boskiego (2.72 * 1.5)
+    bonusCount: [4, 4],
+    bonusScale: 1.62,     // bonusy dodatkowe trochę większe (~+14%) niż w Boskich
+  },
 };
 
 export const MAX_UPGRADE_LEVEL = 13;
+export const MAX_UPGRADE_LEVEL_HARDCORE = 20;
+
+export function getMaxUpgradeLevel(hardcoreUnlocked: boolean): number {
+  return hardcoreUnlocked ? MAX_UPGRADE_LEVEL_HARDCORE : MAX_UPGRADE_LEVEL;
+}
+
+export interface HardcoreUnlockProgress {
+  allNormalActsCleared: boolean;
+  boskiPlus13Slots: number;
+  requiredSlots: number;
+  unlocked: boolean;
+}
+
+export function getHardcoreUnlockProgress(profile: PlayerProfile): HardcoreUnlockProgress {
+  const allNormalActsCleared =
+    (profile.completedLocations || []).includes(60) ||
+    (profile.defeatedActBosses || []).includes(4);
+
+  let boskiPlus13Slots = 0;
+  for (const s of EQUIP_SLOTS) {
+    const it = profile.equipped[s];
+    if (
+      it &&
+      canClassEquipItem(it, profile.classId) &&
+      (it.rarity === 'boski' || it.rarity === 'niesmiertelny') &&
+      it.upgradeLevel >= MAX_UPGRADE_LEVEL
+    ) {
+      boskiPlus13Slots++;
+    }
+  }
+
+  const unlocked =
+    Boolean(profile.sandboxUnlockAll) ||
+    (allNormalActsCleared && boskiPlus13Slots >= EQUIP_SLOTS.length);
+
+  return {
+    allNormalActsCleared,
+    boskiPlus13Slots,
+    requiredSlots: EQUIP_SLOTS.length,
+    unlocked,
+  };
+}
+
+export function isHardcoreUnlocked(profile: PlayerProfile): boolean {
+  return getHardcoreUnlockProgress(profile).unlocked;
+}
 
 export const ALL_CLASS_IDS: ClassId[] = [
   'wojownik',
@@ -131,12 +192,19 @@ export const ALL_CLASS_IDS: ClassId[] = [
  * +6 -> +9: 35%
  * +9 -> +12: 20%
  * +12 -> +13: 10%
+ * Hardcore exclusive (+13 -> +20):
+ * +13 -> +16: 12%
+ * +16 -> +19: 8%
+ * +19 -> +20: 5%
  */
 export function getUpgradeSuccessChance(currentLevel: number): number {
   if (currentLevel < 6) return 60;
   if (currentLevel < 9) return 35;
   if (currentLevel < 12) return 20;
-  return 10;
+  if (currentLevel < 13) return 10;
+  if (currentLevel < 16) return 12;
+  if (currentLevel < 19) return 8;
+  return 5;
 }
 
 export interface Plus13ClassBonus {
@@ -222,16 +290,24 @@ export function canClassEquipItem(item: EquipmentItem, classId: ClassId): boolea
  * Creates clear progression gates (+7 for Act 2/3, +9 for Act 4) without breaking endgame balance!
  */
 export function getUpgradeStatMultiplier(upgradeLevel: number): number {
-  const lvl = Math.max(0, Math.min(MAX_UPGRADE_LEVEL, upgradeLevel));
+  const lvl = Math.max(0, Math.min(MAX_UPGRADE_LEVEL_HARDCORE, upgradeLevel));
   if (lvl <= 6) {
     return 1 + lvl * 0.08;
   }
-  return 1 + 6 * 0.08 + (lvl - 6) * 0.12;
+  if (lvl <= 13) {
+    return 1 + 6 * 0.08 + (lvl - 6) * 0.12;
+  }
+  // Hardcore +14..+20: +15% per level (+20 = 3.37x!)
+  return 1 + 6 * 0.08 + 7 * 0.12 + (lvl - 13) * 0.15;
 }
 
 export function getUpgradeShardCost(currentLevel: number): number {
-  const costs = [1, 1, 2, 2, 3, 4, 6, 9, 13, 18, 24, 32, 42];
-  if (currentLevel < 0 || currentLevel >= MAX_UPGRADE_LEVEL) return 0;
+  const costs = [
+    1, 1, 2, 2, 3, 4, 6, 9, 13, 18, 24, 32, 42,
+    // Hardcore +13 -> +20
+    46, 52, 60, 70, 82, 96, 115,
+  ];
+  if (currentLevel < 0 || currentLevel >= MAX_UPGRADE_LEVEL_HARDCORE) return 0;
   return costs[currentLevel];
 }
 
@@ -242,6 +318,7 @@ export function getSalvageShardYield(item: EquipmentItem): number {
     mityczny: 2,
     legendarny: 2,
     boski: 3,
+    niesmiertelny: 4,
   };
   return baseByRarity[item.rarity] + Math.floor(item.upgradeLevel * 0.8);
 }
@@ -278,6 +355,7 @@ const SET_TIER_SCALE: Record<Rarity, number> = {
   mityczny: 1.25,
   legendarny: 1.75,
   boski: 2.3,
+  niesmiertelny: 2.95,
 };
 
 export function getFullSetBonus(classId: ClassId, rarity: Rarity): FullSetBonusValues {
@@ -336,11 +414,14 @@ export function getFullSetBonus(classId: ClassId, rarity: Rarity): FullSetBonusV
 export function rollDropRarity(
   rng: () => number = Math.random,
   guaranteeDrop = false,
-  luckBonus = 1.0
+  luckBonus = 1.0,
+  isHardcore = false
 ): Rarity | null {
-  if (rng() * 100 < 0.5 * luckBonus) return 'boski';
-  if (rng() * 100 < 5.0 * luckBonus) return 'legendarny';
-  if (rng() * 100 < 15.0 * luckBonus) return 'mityczny';
+  // Nieśmiertelny set drops EXCLUSIVELY in Hardcore Mode with a 5% drop chance!
+  if (isHardcore && rng() * 100 < 5.0) return 'niesmiertelny';
+  if (rng() * 100 < (isHardcore ? 3.5 : 0.5) * luckBonus) return 'boski';
+  if (rng() * 100 < (isHardcore ? 22.0 : 5.0) * luckBonus) return 'legendarny';
+  if (rng() * 100 < (isHardcore ? 45.0 : 15.0) * luckBonus) return 'mityczny';
   if (rng() * 100 < 40.0 * luckBonus) return 'normalny';
   if (guaranteeDrop || rng() * 100 < 80.0) return 'zwykly';
   return null;
@@ -352,6 +433,7 @@ const SLOT_PREFIXES: Record<Rarity, string[]> = {
   mityczny: ['Mityczny', 'Runiczny', 'Gwiezdny', 'Tajemny', 'Księżycowy'],
   legendarny: ['Legendarny', 'Smoczy', 'Królewski', 'Płomienny', 'Niebiański'],
   boski: ['Boski', 'Pradawny', 'Wieczny', 'Karmazynowy', 'Archoncki'],
+  niesmiertelny: ['Nieśmiertelny', 'Astralny', 'Wiekuisty', 'Tytaniczny', 'Nieskończony'],
 };
 
 const CLASS_SLOT_NOUNS: Record<ClassId, Record<EquipSlot, string[]>> = {
@@ -403,6 +485,7 @@ const SUFFIXES: Record<Rarity, string[]> = {
   mityczny: ['Mrozu', 'Burzy', 'Cienia', 'Światła'],
   legendarny: ['Tytanów', 'Katakumb', 'Pustyni', 'Lasu'],
   boski: ['Chaosu', 'Nieskończoności', 'Stworzenia', 'Przeznaczenia'],
+  niesmiertelny: ['Wieczności', 'Astralu', 'Prakuźni', 'Nieśmiertelnych'],
 };
 
 let itemSeq = 1;
@@ -552,6 +635,7 @@ export function createStarterShards(): ShardBag {
     mityczny: 0,
     legendarny: 0,
     boski: 0,
+    niesmiertelny: 0,
   };
 }
 

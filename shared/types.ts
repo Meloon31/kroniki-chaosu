@@ -1,15 +1,22 @@
 export type ClassId = 'wojownik' | 'czarnoksieznik' | 'elf' | 'krasnolud' | 'wrozka';
 
-export type Rarity = 'zwykly' | 'normalny' | 'mityczny' | 'legendarny' | 'boski';
+export type Rarity = 'zwykly' | 'normalny' | 'mityczny' | 'legendarny' | 'boski' | 'niesmiertelny';
 
 export type EquipSlot = 'bron' | 'helm' | 'zbroja' | 'rekawice' | 'buty' | 'amulet';
 
-export type RuneId = 'malakor' | 'azirath' | 'sylvara' | 'vaelgor';
+export type RuneId =
+  | 'malakor'
+  | 'azirath'
+  | 'sylvara'
+  | 'vaelgor'
+  | 'kaelis'
+  | 'ignarok'
+  | 'aeternus';
 
 import type { BoonId, EliteAffix, LocationMutatorId } from './mutators.js';
 import type { ActiveBountyState } from './bounties.js';
 
-export type ActNumber = 1 | 2 | 3 | 4;
+export type ActNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export type DamageType = 'physical' | 'magical' | 'hybrid' | 'heal' | 'shield' | 'poison' | 'true';
 
@@ -81,8 +88,9 @@ export interface ComputedStats {
   shieldPower: number;    // multiplier, e.g. 1.00
   activeSetRarity: Rarity | null;
   setCounts: Record<Rarity, number>;
-  weaponUpgradeGlow: number; // 0..13
-  armorUpgradeGlow: number;  // 0..13
+  weaponUpgradeGlow: number; // 0..20
+  armorUpgradeGlow: number;  // 0..20
+  bossDamageBonusPct?: number; // from Hardcore Kaelis Rune
   combatPower: number;
 }
 

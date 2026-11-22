@@ -241,6 +241,9 @@ export class GameEngine {
       2: { sky: '#fff2d6', ground: '#6b472d', hemiInt: 0.85, sun: '#fff7e3', sunInt: 1.08, rim: '#7dd3fc', mote: '#fde68a', exposure: 1.04 },
       3: { sky: '#c8ffea', ground: '#3e6e5c', hemiInt: 1.08, sun: '#fff5ff', sunInt: 1.28, rim: '#d8b4fe', mote: '#86efac', exposure: 1.16 },
       4: { sky: '#ebd0ff', ground: '#6e3652', hemiInt: 1.08, sun: '#ffe8ec', sunInt: 1.28, rim: '#fda4af', mote: '#fca5a5', exposure: 1.16 },
+      5: { sky: '#d8f3ff', ground: '#2d4e78', hemiInt: 1.12, sun: '#f0faff', sunInt: 1.3, rim: '#7dd3fc', mote: '#bae6fd', exposure: 1.16 },
+      6: { sky: '#ffebd2', ground: '#6e3b1f', hemiInt: 1.1, sun: '#fff4d6', sunInt: 1.32, rim: '#fbbf24', mote: '#fdba74', exposure: 1.15 },
+      7: { sky: '#f2e4ff', ground: '#442b6b', hemiInt: 1.14, sun: '#e8fffb', sunInt: 1.34, rim: '#00f5d4', mote: '#5eead4', exposure: 1.18 },
     };
     const al = actLighting[mapData.location.act];
     this.hemiLight.color.set(al.sky);
@@ -442,6 +445,9 @@ export class GameEngine {
       2: '#c99f62',
       3: '#4a705d',
       4: '#544659',
+      5: '#bae6fd',
+      6: '#fbbf24',
+      7: '#5eead4',
     };
     return map[this.currentAct];
   }

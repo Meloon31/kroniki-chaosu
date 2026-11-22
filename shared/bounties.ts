@@ -103,16 +103,59 @@ export const MAIN_ACT_QUESTS: MainActQuestDef[] = [
     rewardXp: 10000,
     rewardShards: { legendarny: 6, mityczny: 8 },
   },
+  {
+    id: 'main_act_5',
+    act: 5,
+    bossLocationGlobal: 75,
+    title: 'HARDCORE: Pogromca Wiecznej Zimy',
+    bossName: 'Kaelis, Władca Wiecznej Zimy',
+    description: 'Pokonaj Bossa Hardcore Aktu 5 (Lokacja 75) po raz pierwszy.',
+    icon: '❄️',
+    runeId: 'kaelis',
+    rewardXp: 15000,
+    rewardShards: { niesmiertelny: 4, boski: 5 },
+  },
+  {
+    id: 'main_act_6',
+    act: 6,
+    bossLocationGlobal: 90,
+    title: 'HARDCORE: Władca Prakuźni',
+    bossName: 'Ignarok, Kolos Prakuźni',
+    description: 'Pokonaj Bossa Hardcore Aktu 6 (Lokacja 90) po raz pierwszy.',
+    icon: '🔨',
+    runeId: 'ignarok',
+    rewardXp: 20000,
+    rewardShards: { niesmiertelny: 5, boski: 6 },
+  },
+  {
+    id: 'main_act_7',
+    act: 7,
+    bossLocationGlobal: 105,
+    title: 'HARDCORE: Nieśmiertelny Cesarz',
+    bossName: 'Aeternus, Cesarz Wieczności',
+    description: 'Pokonaj ostatecznego Bossa Hardcore Aktu 7 (Lokacja 105) po raz pierwszy.',
+    icon: '👑',
+    runeId: 'aeternus',
+    rewardXp: 30000,
+    rewardShards: { niesmiertelny: 8, boski: 8 },
+  },
 ];
 
 // =========================================================
-// MISJA POBOCZNA (1× na każdą z 60 lokacji — 100% wrogów!)
-// Nagroda: 2 Mityczne Odłamki + 1 Legendarny Odłamek
+// MISJA POBOCZNA (1× na każdą lokację — 100% wrogów!)
+// Standard (1..60): 2 Mityczne + 1 Legendarny
+// Hardcore (61..105): 1 Nieśmiertelny + 2 Boskie!
 // =========================================================
 export const SIDE_LOCATION_REWARD = {
   xp: 550,
   shards: { mityczny: 2, legendarny: 1 } as Partial<Record<Rarity, number>>,
   summary: '2× Mityczny Odłamek + 1× Legendarny Odłamek + 550 XP',
+};
+
+export const SIDE_LOCATION_REWARD_HC = {
+  xp: 1800,
+  shards: { niesmiertelny: 1, boski: 2 } as Partial<Record<Rarity, number>>,
+  summary: '1× Odłamek Nieśmiertelny + 2× Boski Odłamek + 1800 XP',
 };
 
 // =========================================================

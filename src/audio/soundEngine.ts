@@ -133,6 +133,13 @@ class SoundEngine {
         );
         this.playTone(110, 55, 0.6, 'sawtooth', 0.22, 0.02);
         break;
+      case 'niesmiertelny':
+        // Transcendent Immortal fanfare!
+        [293.66, 440.0, 587.33, 739.99, 880.0, 1174.66, 1479.98, 1760.0].forEach((f, idx) =>
+          this.playTone(f, f * 1.02, 1.15, idx % 2 === 0 ? 'triangle' : 'sine', 0.27, idx * 0.055)
+        );
+        this.playTone(146.83, 73.42, 0.75, 'sawtooth', 0.24, 0.02);
+        break;
     }
   }
 

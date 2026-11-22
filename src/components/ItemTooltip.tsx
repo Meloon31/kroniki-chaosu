@@ -60,7 +60,7 @@ export const ItemTooltip: React.FC<ItemTooltipProps> = ({ item, viewerClassId, c
 
   return (
     <div
-      className={`comic-panel-sm p-3 text-left ${item.rarity === 'boski' ? 'boski-shimmer' : ''}`}
+      className={`comic-panel-sm p-3 text-left ${item.rarity === 'boski' || item.rarity === 'niesmiertelny' ? 'boski-shimmer' : ''}`}
       style={{
         borderColor: meta.color,
         minWidth: compact ? 200 : 250,
@@ -155,13 +155,18 @@ export const ItemTooltip: React.FC<ItemTooltipProps> = ({ item, viewerClassId, c
             marginTop: 7,
             padding: '6px 8px',
             borderRadius: 8,
-            background: 'linear-gradient(135deg, rgba(244,63,94,0.25), rgba(168,85,247,0.25))',
-            border: '1.5px solid #fb7185',
+            background:
+              item.upgradeLevel >= 20
+                ? 'linear-gradient(135deg, rgba(0,245,212,0.28), rgba(168,85,247,0.3))'
+                : 'linear-gradient(135deg, rgba(244,63,94,0.25), rgba(168,85,247,0.25))',
+            border: `1.5px solid ${item.upgradeLevel >= 20 ? '#00f5d4' : '#fb7185'}`,
             fontSize: 11,
           }}
         >
-          <div style={{ fontWeight: 900, color: '#fde047' }}>
-            🌟 {p13Bonus.icon} {p13Bonus.title}
+          <div style={{ fontWeight: 900, color: item.upgradeLevel >= 20 ? '#00f5d4' : '#fde047' }}>
+            {item.upgradeLevel >= 20
+              ? `💎 NIEŚMIERTELNA PERFEKCJA (+20 — 1.5×): ${p13Bonus.icon} ${p13Bonus.title}`
+              : `🌟 ${p13Bonus.icon} ${p13Bonus.title}`}
           </div>
           <div style={{ color: '#fff', fontWeight: 800, marginTop: 2 }}>{p13Bonus.summary}</div>
         </div>

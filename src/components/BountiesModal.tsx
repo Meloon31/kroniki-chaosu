@@ -585,8 +585,13 @@ export const BountiesModal: React.FC<BountiesModalProps> = ({
                         }}
                       >
                         <span style={{ color: runeDef.color }}>💠 1× {runeDef.shardName}</span>
-                        <span style={{ color: RARITY_META.legendarny.color }}>🔥 6× Legendarny Odłamek</span>
-                        <span style={{ color: RARITY_META.mityczny.color }}>⚡ 8× Mityczny Odłamek</span>
+                        {Object.entries(q.rewardShards).map(([rk, amt]) =>
+                          amt && amt > 0 ? (
+                            <span key={rk} style={{ color: RARITY_META[rk as Rarity].color }}>
+                              💎 {amt}× {RARITY_META[rk as Rarity].shardName}
+                            </span>
+                          ) : null
+                        )}
                         <span style={{ color: '#4ade80' }}>⭐ +{q.rewardXp} XP</span>
                       </div>
                     </div>
@@ -656,13 +661,14 @@ export const BountiesModal: React.FC<BountiesModalProps> = ({
             >
               <div>
                 <div style={{ fontSize: 14, fontWeight: 900, color: '#7dd3fc' }}>
-                  🗺️ Pełne Wyczyszczenie Lokacji (100% Pokonanych Przeciwników — {(profile.fullClearedLocations || []).length} / 60)
+                  🗺️ Pełne Wyczyszczenie Lokacji (100% Pokonanych Przeciwników — {(profile.fullClearedLocations || []).length} / 105)
                 </div>
                 <div style={{ fontSize: 12, color: '#e2e8f0', marginTop: 2 }}>
-                  Za 1. pokonanie wszystkich wrogów w lokacji:{' '}
-                  <strong style={{ color: '#c084fc' }}>2× Mityczny Odłamek</strong> +{' '}
-                  <strong style={{ color: '#fb923c' }}>1× Legendarny Odłamek</strong> +{' '}
-                  <strong style={{ color: '#4ade80' }}>{SIDE_LOCATION_REWARD.xp} XP</strong>!
+                  Standard (1–60): <strong style={{ color: '#c084fc' }}>2× Mityczny</strong> +{' '}
+                  <strong style={{ color: '#fb923c' }}>1× Legendarny</strong> •{' '}
+                  <span style={{ color: '#00f5d4', fontWeight: 900 }}>
+                    🔥 HARDCORE (61–105): 1× Nieśmiertelny + 2× Boski!
+                  </span>
                 </div>
               </div>
               {readySideLocs.length > 0 && (
@@ -676,18 +682,25 @@ export const BountiesModal: React.FC<BountiesModalProps> = ({
               )}
             </div>
 
-            {/* Act Switcher */}
-            <div style={{ display: 'flex', gap: 6 }}>
-              {([1, 2, 3, 4] as ActNumber[]).map((a) => {
+            {/* Act Switcher (1-4 Standard + 5-7 HARDCORE) */}
+            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+              {([1, 2, 3, 4, 5, 6, 7] as ActNumber[]).map((a) => {
                 const readyInAct = readySideLocs.filter((g) => Math.ceil(g / 15) === a).length;
+                const isHC = a >= 5;
                 return (
                   <button
                     key={a}
-                    className={`comic-btn ${sideAct === a ? 'comic-btn-blue' : 'comic-btn-dark'}`}
+                    className={`comic-btn ${sideAct === a ? (isHC ? 'comic-btn-gold' : 'comic-btn-blue') : 'comic-btn-dark'}`}
                     onClick={() => setSideAct(a)}
-                    style={{ flex: 1, padding: '7px 10px', fontSize: 12 }}
+                    style={{
+                      flex: 1,
+                      minWidth: 74,
+                      padding: '7px 6px',
+                      fontSize: 11.5,
+                      borderColor: isHC ? '#00f5d4' : undefined,
+                    }}
                   >
-                    Akt {a} {readyInAct > 0 ? `(+${readyInAct})` : ''}
+                    {isHC ? '🔥 ' : ''}Akt {a} {readyInAct > 0 ? `(+${readyInAct})` : ''}
                   </button>
                 );
               })}
@@ -731,7 +744,9 @@ export const BountiesModal: React.FC<BountiesModalProps> = ({
                     </div>
                     <div style={{ fontSize: 11, color: '#94a3b8' }}>
                       {claimed
-                        ? 'Nagroda odebrana (2M + 1L)'
+                        ? loc.act >= 5
+                          ? 'Nagroda HC odebrana (1N + 2B)'
+                          : 'Nagroda odebrana (2M + 1L)'
                         : ready
                           ? '100% wrogów pokonanych! Gotowe!'
                           : 'Wyczyść wszystkich wrogów (100%)'}
@@ -742,11 +757,11 @@ export const BountiesModal: React.FC<BountiesModalProps> = ({
                         onClick={() => onClaimSideLocation(loc.globalIndex)}
                         style={{ padding: '5px 10px', fontSize: 11.5 }}
                       >
-                        🎁 Odbierz 2M + 1L
+                        {loc.act >= 5 ? '🎁 Odbierz 1N + 2B' : '🎁 Odbierz 2M + 1L'}
                       </button>
                     ) : !claimed ? (
-                      <div style={{ fontSize: 10.5, fontWeight: 800, color: '#fbbf24' }}>
-                        Nagroda: 2× Mit + 1× Leg
+                      <div style={{ fontSize: 10.5, fontWeight: 800, color: loc.act >= 5 ? '#00f5d4' : '#fbbf24' }}>
+                        {loc.act >= 5 ? 'Nagroda HC: 1× Nieśm. + 2× Boski' : 'Nagroda: 2× Mit + 1× Leg'}
                       </div>
                     ) : null}
                   </div>

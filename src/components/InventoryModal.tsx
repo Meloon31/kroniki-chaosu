@@ -165,7 +165,7 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                       key={slot}
                       onClick={() => item && setSelectedItem(item)}
                       onDoubleClick={() => item && onUnequip(slot)}
-                      className={item?.rarity === 'boski' ? 'boski-shimmer' : ''}
+                      className={item?.rarity === 'boski' || item?.rarity === 'niesmiertelny' ? 'boski-shimmer' : ''}
                       style={{
                         background: '#131627',
                         border: `2.5px solid ${meta ? meta.color : '#2e3454'}`,
@@ -505,7 +505,7 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                                 onEquip(item);
                                 setSelectedItem(null);
                               }}
-                              className={item.rarity === 'boski' ? 'boski-shimmer' : ''}
+                              className={item.rarity === 'boski' || item.rarity === 'niesmiertelny' ? 'boski-shimmer' : ''}
                               style={{
                                 background: isSel ? '#2b3155' : usable ? '#131627' : '#0f101c',
                                 border: `2.5px solid ${usable ? m.color : '#3b415e'}`,

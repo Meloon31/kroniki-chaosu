@@ -4,10 +4,13 @@ import { CLASSES } from '../../shared/classes';
 import {
   EQUIP_SLOTS,
   getEffectiveItemBaseStats,
+  getHardcoreUnlockProgress,
+  getMaxUpgradeLevel,
   getPlus13ClassBonus,
   getUpgradeShardCost,
   getUpgradeSuccessChance,
   MAX_UPGRADE_LEVEL,
+  MAX_UPGRADE_LEVEL_HARDCORE,
   RARITY_META,
   SLOT_LABELS,
 } from '../../shared/items';
@@ -39,9 +42,11 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
 
   const selectedEntry = allItems.find((e) => e.item.id === selectedId) ?? allItems[0] ?? null;
   const item = selectedEntry?.item ?? null;
+  const hcProgress = getHardcoreUnlockProgress(profile);
+  const maxAllowedUpgrade = getMaxUpgradeLevel(hcProgress.unlocked);
 
   const handleForge = () => {
-    if (!item || forging || item.upgradeLevel >= MAX_UPGRADE_LEVEL) return;
+    if (!item || forging || item.upgradeLevel >= maxAllowedUpgrade) return;
     const cost = getUpgradeShardCost(item.upgradeLevel);
     if ((profile.shards[item.rarity] || 0) < cost) return;
 
@@ -51,7 +56,7 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
     setTensionPct(0);
     soundEngine.playAnvilTension(targetLvl);
 
-    const totalMs = targetLvl >= 10 ? 1150 : targetLvl >= 7 ? 850 : 520;
+    const totalMs = targetLvl >= 14 ? 1300 : targetLvl >= 10 ? 1150 : targetLvl >= 7 ? 850 : 520;
     const start = performance.now();
 
     const step = (now: number) => {
@@ -68,9 +73,11 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
             setForgeResult({
               ok: true,
               msg:
-                res.newLevel >= MAX_UPGRADE_LEVEL
-                  ? `👑 MISTRZOWSKI SUKCES! ${item.name} +13 (ODBLOKOWANO BONUS KLASOWY!)`
-                  : `SUKCES! ${item.name} +${res.newLevel}!`,
+                res.newLevel >= MAX_UPGRADE_LEVEL_HARDCORE
+                  ? `💎 NIEŚMIERTELNA PERFEKCJA! ${item.name} +20 (1.5× BONUS KLASOWY!)`
+                  : res.newLevel === MAX_UPGRADE_LEVEL
+                    ? `👑 MISTRZOWSKI SUKCES! ${item.name} +13 (ODBLOKOWANO BONUS KLASOWY!)`
+                    : `SUKCES! ${item.name} +${res.newLevel}!`,
             });
           } else {
             soundEngine.playPuzzleFail();
@@ -88,7 +95,7 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
 
   const currStats = item ? getEffectiveItemBaseStats(item) : null;
   const nextStats =
-    item && item.upgradeLevel < MAX_UPGRADE_LEVEL
+    item && item.upgradeLevel < maxAllowedUpgrade
       ? getEffectiveItemBaseStats({ ...item, upgradeLevel: item.upgradeLevel + 1 })
       : null;
 
@@ -114,13 +121,14 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div>
             <h2 className="comic-title" style={{ margin: 0, fontSize: 32, color: '#fbbf24' }}>
-              🔨 KUŹNIA KOWALA (+0 → +13)
+              🔨 KUŹNIA KOWALA (+0 → {hcProgress.unlocked ? '+20 HARDCORE' : '+13'})
             </h2>
             <div style={{ fontSize: 12, color: '#cbd5e1' }}>
               Szanse: <strong style={{ color: '#4ade80' }}>+0→+6: 60%</strong> •{' '}
               <strong style={{ color: '#fde047' }}>+6→+9: 35%</strong> •{' '}
               <strong style={{ color: '#fb923c' }}>+9→+12: 20%</strong> •{' '}
-              <strong style={{ color: '#fb7185' }}>+13: 10% (Unikalny Bonus Klasowy!)</strong>
+              <strong style={{ color: '#fb7185' }}>+13: 10%</strong> •{' '}
+              <strong style={{ color: '#00f5d4' }}>🔥 HC +13→+20: 12%/8%/5%!</strong>
             </div>
           </div>
           <button
@@ -362,7 +370,7 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
 
                 {/* Cost, Success Chance & Forge Button */}
                 <div>
-                  {item.upgradeLevel < MAX_UPGRADE_LEVEL ? (
+                  {item.upgradeLevel < maxAllowedUpgrade ? (
                     <>
                       <div
                         style={{
@@ -407,11 +415,23 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
                       </button>
                     </>
                   ) : (
-                    <div
-                      className="comic-title"
-                      style={{ textAlign: 'center', fontSize: 24, color: '#fb7185' }}
-                    >
-                      👑 PRZEDMIOT OSIĄGNĄŁ MAKSIMUM (+13)!
+                    <div style={{ textAlign: 'center' }}>
+                      <div
+                        className="comic-title"
+                        style={{
+                          fontSize: 22,
+                          color: item.upgradeLevel >= MAX_UPGRADE_LEVEL_HARDCORE ? '#00f5d4' : '#fb7185',
+                        }}
+                      >
+                        {item.upgradeLevel >= MAX_UPGRADE_LEVEL_HARDCORE
+                          ? '💎 NIEŚMIERTELNA PERFEKCJA (+20 MAX)!'
+                          : '👑 MAKSIMUM TRYBU STANDARDOWEGO (+13)!'}
+                      </div>
+                      {item.upgradeLevel < MAX_UPGRADE_LEVEL_HARDCORE && !hcProgress.unlocked && (
+                        <div style={{ fontSize: 12, color: '#00f5d4', fontWeight: 800, marginTop: 4 }}>
+                          🔥 Odblokuj TRYB HARDCORE (Akt 1–4 + Boski +13: {hcProgress.boskiPlus13Slots}/6), aby kuć aż do +20!
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

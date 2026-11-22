@@ -8,11 +8,14 @@ import {
   createStarterShards,
   EQUIP_SLOTS,
   generateEquipmentItem,
+  getMaxUpgradeLevel,
   getPlus13ClassBonus,
   getSalvageShardYield,
   getUpgradeShardCost,
   getUpgradeSuccessChance,
+  isHardcoreUnlocked,
   MAX_UPGRADE_LEVEL,
+  MAX_UPGRADE_LEVEL_HARDCORE,
   RARITY_META,
 } from '../shared/items';
 import {
@@ -35,8 +38,10 @@ import {
   MAIN_ACT_QUESTS,
   rollReplacementBounty,
   SIDE_LOCATION_REWARD,
+  SIDE_LOCATION_REWARD_HC,
   WHEEL_SLICES,
 } from '../shared/bounties';
+import { TOTAL_LOCATIONS } from '../shared/world';
 import { createStarterRunes, createStarterRuneShards, RUNE_MAX_LEVEL, RUNES } from '../shared/runes';
 import { BoonId, CHAOS_BOONS } from '../shared/mutators';
 import { computePlayerStats } from '../shared/stats';
@@ -534,15 +539,20 @@ export function App() {
       engineRef.current?.addScreenShake(0.38 * (payload.intensity || 1));
     });
 
-    sock.on('juice:boski_drop', (payload: { itemName: string }) => {
-      soundEngine.playLootDrop('boski');
-      engineRef.current?.triggerBoskiSlowMo(1250);
+    sock.on('juice:boski_drop', (payload: { itemName: string; rarity?: Rarity }) => {
+      const isImmortal = payload.rarity === 'niesmiertelny';
+      soundEngine.playLootDrop(isImmortal ? 'niesmiertelny' : 'boski');
+      engineRef.current?.triggerBoskiSlowMo(1350);
       setBoskiFlashKey((k) => k + 1);
       showBanner(
         'boski',
-        `✨ BOSKI DROP! (0.5% SZANSY) ✨`,
-        `Wypadł legendarny artefakt: ${payload.itemName}!`,
-        5200
+        isImmortal
+          ? `💎 NIEŚMIERTELNY DROP! (5% HARDCORE) 💎`
+          : `✨ BOSKI DROP! (0.5% SZANSY) ✨`,
+        isImmortal
+          ? `Wypadł artefakt Nieśmiertelny (+50% DEF i wartości): ${payload.itemName}!`
+          : `Wypadł legendarny artefakt: ${payload.itemName}!`,
+        5600
       );
     });
 
@@ -680,7 +690,10 @@ export function App() {
             defeatedActBosses: nextBosses,
             dailyActClearedDate: payload.isMainBoss ? todayKey : prev.dailyActClearedDate,
             dailyFeaturedClaimedDate: isFeaturedBonus ? todayKey : prev.dailyFeaturedClaimedDate,
-            unlockedLocationGlobal: Math.min(60, Math.max(prev.unlockedLocationGlobal, payload.globalLocation + 1)),
+            unlockedLocationGlobal: Math.min(
+              TOTAL_LOCATIONS,
+              Math.max(prev.unlockedLocationGlobal, payload.globalLocation + 1)
+            ),
             completedLocations: prev.completedLocations.includes(payload.globalLocation)
               ? prev.completedLocations
               : [...prev.completedLocations, payload.globalLocation],
@@ -1021,7 +1034,8 @@ export function App() {
     if (!target) {
       target = cur.inventory.find((i) => i.id === itemId) ?? null;
     }
-    if (!target || target.upgradeLevel >= MAX_UPGRADE_LEVEL) return null;
+    const maxAllowed = getMaxUpgradeLevel(isHardcoreUnlocked(cur));
+    if (!target || target.upgradeLevel >= maxAllowed) return null;
     const cost = getUpgradeShardCost(target.upgradeLevel);
     if ((cur.shards[target.rarity] || 0) < cost) return null;
 
@@ -1053,19 +1067,23 @@ export function App() {
       };
     });
 
-      if (success) {
-        advanceBounty('upgrade', 1, 'add');
-      }
+    if (success) {
+      advanceBounty('upgrade', 1, 'add');
+    }
 
-      if (success && newLevel >= MAX_UPGRADE_LEVEL) {
+    if (success && (newLevel === MAX_UPGRADE_LEVEL || newLevel >= MAX_UPGRADE_LEVEL_HARDCORE)) {
       const bonusClass = target.classAffinity ?? cur.classId;
       const p13 = getPlus13ClassBonus(bonusClass);
       soundEngine.playLevelUp();
       showBanner(
         'boski',
-        `👑 MISTRZOWSKIE +13 ODBLOKOWANE!`,
-        `${p13.icon} ${p13.title}: ${p13.summary}`,
-        5000
+        newLevel >= MAX_UPGRADE_LEVEL_HARDCORE
+          ? `💎 NIEŚMIERTELNA PERFEKCJA +20 ODBLOKOWANA!`
+          : `👑 MISTRZOWSKIE +13 ODBLOKOWANE!`,
+        newLevel >= MAX_UPGRADE_LEVEL_HARDCORE
+          ? `${p13.icon} 1.5× ${p13.title}: ${p13.summary}`
+          : `${p13.icon} ${p13.title}: ${p13.summary}`,
+        5200
       );
     }
 
@@ -1232,27 +1250,46 @@ export function App() {
     const cur = profileRef.current;
     if (!(cur.fullClearedLocations || []).includes(globalLocation)) return;
     if ((cur.claimedSideLocations || []).includes(globalLocation)) return;
+    const isHC = globalLocation > 60;
+    const rew = isHC ? SIDE_LOCATION_REWARD_HC : SIDE_LOCATION_REWARD;
     setProfile((prev) => ({
       ...prev,
       claimedSideLocations: [...(prev.claimedSideLocations || []), globalLocation],
       shards: {
         ...prev.shards,
-        mityczny: (prev.shards.mityczny || 0) + (SIDE_LOCATION_REWARD.shards.mityczny || 0),
-        legendarny: (prev.shards.legendarny || 0) + (SIDE_LOCATION_REWARD.shards.legendarny || 0),
+        mityczny: (prev.shards.mityczny || 0) + (rew.shards.mityczny || 0),
+        legendarny: (prev.shards.legendarny || 0) + (rew.shards.legendarny || 0),
+        boski: (prev.shards.boski || 0) + (rew.shards.boski || 0),
+        niesmiertelny: (prev.shards.niesmiertelny || 0) + (rew.shards.niesmiertelny || 0),
       },
     }));
-    grantXp(SIDE_LOCATION_REWARD.xp);
+    grantXp(rew.xp);
     soundEngine.playRuneUpgrade();
-    pushToast(`🗺️ Lokacja #${globalLocation} (100%): +2 Mityczne & +1 Legendarny Odłamek!`, '#38bdf8');
+    pushToast(
+      isHC
+        ? `🗺️ HC Lokacja #${globalLocation} (100%): +1 Nieśmiertelny & +2 Boskie Odłamki!`
+        : `🗺️ Lokacja #${globalLocation} (100%): +2 Mityczne & +1 Legendarny Odłamek!`,
+      isHC ? '#00f5d4' : '#38bdf8'
+    );
   };
 
   const handleClaimAllSideLocations = () => {
     const cur = profileRef.current;
     const ready = getReadySideLocations(cur);
     if (ready.length === 0) return;
-    const totalMythic = ready.length * (SIDE_LOCATION_REWARD.shards.mityczny || 0);
-    const totalLeg = ready.length * (SIDE_LOCATION_REWARD.shards.legendarny || 0);
-    const totalXp = ready.length * SIDE_LOCATION_REWARD.xp;
+    let totalMythic = 0;
+    let totalLeg = 0;
+    let totalBoski = 0;
+    let totalImmortal = 0;
+    let totalXp = 0;
+    for (const locIdx of ready) {
+      const rew = locIdx > 60 ? SIDE_LOCATION_REWARD_HC : SIDE_LOCATION_REWARD;
+      totalMythic += rew.shards.mityczny || 0;
+      totalLeg += rew.shards.legendarny || 0;
+      totalBoski += rew.shards.boski || 0;
+      totalImmortal += rew.shards.niesmiertelny || 0;
+      totalXp += rew.xp;
+    }
 
     setProfile((prev) => ({
       ...prev,
@@ -1261,14 +1298,18 @@ export function App() {
         ...prev.shards,
         mityczny: (prev.shards.mityczny || 0) + totalMythic,
         legendarny: (prev.shards.legendarny || 0) + totalLeg,
+        boski: (prev.shards.boski || 0) + totalBoski,
+        niesmiertelny: (prev.shards.niesmiertelny || 0) + totalImmortal,
       },
     }));
     grantXp(totalXp);
     soundEngine.playLevelUp();
-    pushToast(
-      `🗺️ Odebrano ${ready.length} Misji Pobocznych: +${totalMythic} Mitycznych, +${totalLeg} Legendarnych!`,
-      '#4ade80'
-    );
+    const parts: string[] = [];
+    if (totalImmortal > 0) parts.push(`+${totalImmortal} Nieśm.`);
+    if (totalBoski > 0) parts.push(`+${totalBoski} Boskich`);
+    if (totalLeg > 0) parts.push(`+${totalLeg} Leg.`);
+    if (totalMythic > 0) parts.push(`+${totalMythic} Mit.`);
+    pushToast(`🗺️ Odebrano ${ready.length} Misji Pobocznych: ${parts.join(', ')}!`, '#4ade80');
   };
 
   const handleSpinWheelComplete = (sliceIndex: number) => {

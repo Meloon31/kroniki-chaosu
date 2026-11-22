@@ -12,6 +12,8 @@ import {
   getBossDamageMultiplier,
   getBossHpMultiplier,
   getEnemyCountMultiplier,
+  getHardcoreBossDifficultyMultiplier,
+  getHardcoreMobDifficultyMultiplier,
   targetLocationXpPool,
 } from '../shared/classes.js';
 import {
@@ -38,8 +40,10 @@ import {
   generateMapData,
   getLocationDef,
   hasLineOfSight,
+  isHardcoreLocation,
   moveWithWallSweep,
   resolveWallCollisions,
+  TOTAL_LOCATIONS,
 } from '../shared/world.js';
 import type {
   ClassId,
@@ -255,6 +259,7 @@ function buildRoomSummary(room: GameRoom): RoomSummary {
     isHost: p.id === room.hostId,
   }));
 
+  const isHC = isHardcoreLocation(room.globalLocation);
   return {
     code: room.code,
     hostId: room.hostId,
@@ -263,9 +268,9 @@ function buildRoomSummary(room: GameRoom): RoomSummary {
     globalLocation: room.globalLocation,
     inGame: room.inGame,
     members,
-    enemyCountMultiplier: getEnemyCountMultiplier(partySize),
-    bossHpMultiplier: getBossHpMultiplier(partySize),
-    bossDamageMultiplier: getBossDamageMultiplier(partySize),
+    enemyCountMultiplier: isHC ? getHardcoreMobDifficultyMultiplier(partySize) : getEnemyCountMultiplier(partySize),
+    bossHpMultiplier: isHC ? getHardcoreBossDifficultyMultiplier(partySize) : getBossHpMultiplier(partySize),
+    bossDamageMultiplier: isHC ? Number((1 + (partySize - 1) * 0.14).toFixed(2)) : getBossDamageMultiplier(partySize),
   };
 }
 
@@ -437,7 +442,7 @@ function applyBoundedShield(player: ServerPlayer, amount: number, durationMs: nu
  * - Act 4 Boss (Vaelgor): Min. Full Legendarny +9 (~4.5 min; even Boski +13 + 4x10/10 Runes ~2.1 min!)
  */
 function initializeLocation(room: GameRoom, globalLocation: number) {
-  room.globalLocation = Math.max(1, Math.min(60, globalLocation));
+  room.globalLocation = Math.max(1, Math.min(TOTAL_LOCATIONS, globalLocation));
   const map = generateMapData(room.globalLocation);
   room.mapData = map;
   room.enemies.clear();
@@ -455,24 +460,34 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
   room.nextMeteorAt = Date.now() + 4500;
 
   const partySize = Math.max(1, room.players.size);
-  const countMult = getEnemyCountMultiplier(partySize);
-  const bossHpMult = getBossHpMultiplier(partySize);
-  const bossDmgMult = getBossDamageMultiplier(partySize);
-
   const loc = map.location;
+  const isHC = isHardcoreLocation(loc.globalIndex);
+
+  const countMult = isHC ? 1.0 : getEnemyCountMultiplier(partySize);
+  const hcMobDiffMult = isHC ? getHardcoreMobDifficultyMultiplier(partySize) : 1.0; // +10% / +20% / +30%
+  const hcBossDiffMult = isHC ? getHardcoreBossDifficultyMultiplier(partySize) : 1.0; // +33% / +66% / +99%
+  const bossHpMult = isHC ? hcBossDiffMult : getBossHpMultiplier(partySize);
+  const bossDmgMult = isHC ? 1 + (partySize - 1) * 0.14 : getBossDamageMultiplier(partySize);
+
   const mutDef = LOCATION_MUTATORS[loc.mutatorId];
   const isBounty = loc.mutatorId === 'bounty_hunt';
   const isFrenzy = loc.mutatorId === 'blood_frenzy';
   const rng = createSeededRng(loc.seed + 999);
   const actRoster = ACT_ENEMIES[loc.act];
 
-  // Calibrated mob HP & DMG curve (Lvl 1 -> 60):
-  // Loc 1 ~ 240 HP; Loc 15 ~ 1,650 HP; Loc 30 ~ 6,200 HP; Loc 45 ~ 14,500 HP; Loc 60 ~ 27,500 HP!
-  // Prevents one-shotting even in maxed Boski +13!
+  // Calibrated mob HP & DMG curve:
+  // Normal (Lvl 1 -> 60): Loc 1..60
+  // HARDCORE (Acts 5-7, Loc 61..105): calibrated so maxed Boski +13 kills mobs in ~10 hits,
+  // and scales +10%/+20%/+30% for 2/3/4 players!
   const L = loc.globalIndex;
-  const baseMobHp = Math.round((180 + L * 68 + Math.pow(L, 2.25) * 2.35) * 1.25);
-  const baseMobDmg = Math.round(16 + L * 5.2 + Math.pow(L, 1.72) * 0.72);
-  const mobArmor = Math.round(12 + L * 4.5);
+  const hcIdx = Math.max(1, L - 60);
+  const baseMobHp = isHC
+    ? Math.round((71000 + hcIdx * 2150 + Math.pow(hcIdx, 1.52) * 115) * hcMobDiffMult)
+    : Math.round((180 + L * 68 + Math.pow(L, 2.25) * 2.35) * 1.25);
+  const baseMobDmg = isHC
+    ? Math.round((3100 + hcIdx * 68) * hcMobDiffMult)
+    : Math.round(16 + L * 5.2 + Math.pow(L, 1.72) * 0.72);
+  const mobArmor = isHC ? Math.round(1350 + hcIdx * 36) : Math.round(12 + L * 4.5);
 
   const totalXpPool = targetLocationXpPool(loc.globalIndex);
   const spawnedEnemies: ServerEnemy[] = [];
@@ -483,7 +498,10 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
     if (r.index === 8) {
       if (loc.isMainBoss) {
         const bossDef = getMainBossByAct(loc.act);
-        const scaledHp = Math.round(bossDef.baseHp * bossHpMult * 1.25);
+        // HC bosses: ~3 min solo fight, +33%/+66%/+99% in 2/3/4-player PT!
+        const scaledHp = isHC
+          ? Math.round(bossDef.baseHp * hcBossDiffMult)
+          : Math.round(bossDef.baseHp * bossHpMult * 1.25);
         const scaledDmg = Math.round(bossDef.baseDamage * bossDmgMult);
         const boss: ServerEnemy = {
           id: nextId('boss'),
@@ -524,8 +542,10 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
       } else if (loc.isMiniBoss) {
         const mb = getMiniBoss(loc.act, loc.locationInAct)!;
         const actBoss = getMainBossByAct(loc.act);
-        const mbHp = Math.round(baseMobHp * 13.5 * bossHpMult);
-        const mbDmg = Math.round(baseMobDmg * 1.95 * bossDmgMult);
+        const mbHp = isHC
+          ? Math.round((baseMobHp / hcMobDiffMult) * 7.4 * hcBossDiffMult)
+          : Math.round(baseMobHp * 13.5 * bossHpMult);
+        const mbDmg = Math.round((baseMobDmg / hcMobDiffMult) * (isHC ? 1.45 : 1.95) * bossDmgMult);
         const miniBoss: ServerEnemy = {
           id: nextId('miniboss'),
           archetype: mb.archetype,
@@ -1015,6 +1035,14 @@ function damageEnemy(
     dmg *= 1.12;
   }
 
+  // Hardcore Kaelis Rune bonus damage vs Bosses, Mini-Bosses & Elites!
+  if (
+    attacker.stats.bossDamageBonusPct &&
+    (enemy.tier === 'boss' || enemy.tier === 'miniboss' || enemy.tier === 'elite')
+  ) {
+    dmg *= 1 + attacker.stats.bossDamageBonusPct / 100;
+  }
+
   // Enemy Armor mitigation
   const offPower = Math.max(
     attacker.stats.ad,
@@ -1128,13 +1156,14 @@ function spawnEquipmentDrop(
   luckBonus = 1.0,
   _classAffinity?: ClassId
 ) {
-  const rarity = rollDropRarity(Math.random, guaranteeDrop, luckBonus);
+  const isHC = isHardcoreLocation(room.globalLocation);
+  const rarity = rollDropRarity(Math.random, guaranteeDrop, luckBonus, isHC);
   if (!rarity) return;
 
   // Equal 20% drop chance for each of the 5 hero classes (Wojownik, Czarnoksiężnik, Elf, Krasnolud, Wróżka)!
   const targetClass = ALL_CLASS_IDS[Math.floor(Math.random() * ALL_CLASS_IDS.length)];
 
-  const item = generateEquipmentItem(itemLevel, rarity, undefined, targetClass);
+  const item = generateEquipmentItem(Math.min(60, itemLevel), rarity, undefined, targetClass);
   const spreadAngle = Math.random() * Math.PI * 2;
   const spreadDist = 0.8 + Math.random() * 2.2;
   const drop: GroundLoot = {
@@ -1147,9 +1176,10 @@ function spawnEquipmentDrop(
   };
   room.loot.set(drop.id, drop);
 
-  if (rarity === 'boski') {
+  if (rarity === 'boski' || rarity === 'niesmiertelny') {
     io.to(room.code).emit('juice:boski_drop', {
       itemName: item.name,
+      rarity,
       x: drop.x,
       z: drop.z,
     });
@@ -1929,6 +1959,427 @@ function startBossAbility(
       break;
     }
 
+    // =========================================================
+    // HARDCORE ACT 5: KAELIS, WŁADCA WIECZNEJ ZIMY
+    // =========================================================
+    case 'lodowe_wlocznie': {
+      for (let i = -1; i <= 1; i++) {
+        const id = nextId('tel');
+        room.telegraphs.set(id, {
+          id,
+          shape: 'line',
+          x: boss.x,
+          z: boss.z,
+          radius: 1.5,
+          length: 19,
+          width: 2.3,
+          angle: angleToTarget + i * 0.28,
+          color: ab.color,
+          label: ab.name,
+          createdAt: now,
+          triggerAt: now + ab.telegraphMs + (i + 1) * 90,
+          ownerId: boss.id,
+          abilityId: ab.id,
+          resolved: false,
+          damage: boss.damage * 1.4,
+          damageType: 'magical',
+          appliesSlow: true,
+          ...bossMeta,
+        });
+      }
+      break;
+    }
+
+    case 'zamiec_absolutna': {
+      const id = nextId('tel');
+      room.telegraphs.set(id, {
+        id,
+        shape: 'ring',
+        x: boss.x,
+        z: boss.z,
+        radius: 2.5,
+        ringMaxRadius: 18,
+        color: ab.color,
+        label: ab.name,
+        createdAt: now,
+        triggerAt: now + ab.telegraphMs,
+        duration: 2400,
+        expiresAt: now + ab.telegraphMs + 2400,
+        ownerId: boss.id,
+        abilityId: ab.id,
+        resolved: false,
+        isLavaRing: true,
+        appliesSlow: true,
+        damage: boss.damage * 1.22,
+        damageType: 'magical',
+        ...bossMeta,
+      });
+      break;
+    }
+
+    case 'krysztalowe_wiezienie': {
+      for (const vp of alivePlayers) {
+        const id = nextId('tel');
+        room.telegraphs.set(id, {
+          id,
+          shape: 'circle',
+          x: vp.x,
+          z: vp.z,
+          radius: 3.6,
+          color: ab.color,
+          label: 'Kryształowe Więzienie',
+          createdAt: now,
+          triggerAt: now + ab.telegraphMs,
+          ownerId: boss.id,
+          abilityId: ab.id,
+          resolved: false,
+          damage: boss.damage * 1.38,
+          damageType: 'magical',
+          appliesSlow: true,
+          ...bossMeta,
+        });
+      }
+      break;
+    }
+
+    case 'gwiazda_zimy': {
+      for (let m = 0; m < 6; m++) {
+        const refP = alivePlayers[m % alivePlayers.length];
+        const rx = m < 2 ? refP.x + (Math.random() - 0.5) * 3.5 : boss.homeX + (Math.random() - 0.5) * 23;
+        const rz = m < 2 ? refP.z + (Math.random() - 0.5) * 3.5 : boss.homeZ + (Math.random() - 0.5) * 23;
+        const id = nextId('tel');
+        room.telegraphs.set(id, {
+          id,
+          shape: 'circle',
+          x: rx,
+          z: rz,
+          radius: 3.9,
+          color: ab.color,
+          label: 'Supernowa Zimy',
+          createdAt: now,
+          triggerAt: now + ab.telegraphMs + m * 150,
+          ownerId: boss.id,
+          abilityId: ab.id,
+          resolved: false,
+          damage: boss.damage * 1.42,
+          damageType: 'magical',
+          appliesSlow: true,
+          ...bossMeta,
+        });
+      }
+      break;
+    }
+
+    case 'tarcza_szronu': {
+      const shieldAmt = Math.round(boss.maxHp * 0.08);
+      boss.shield = shieldAmt;
+      boss.maxShield = shieldAmt;
+      boss.healChannelUntil = now + 5200;
+      pushCombatText(room, boss.x, 4.6, boss.z, '❄️ BARIERA SZRONU!', 'shield', true, true);
+      io.to(room.code).emit('game:banner', {
+        type: 'warning',
+        title: `${boss.name.toUpperCase()} — BARIERA SZRONU!`,
+        subtitle: 'Zbij lodową tarczę, aby przerwać regenerację Bossa!',
+      });
+      break;
+    }
+
+    // =========================================================
+    // HARDCORE ACT 6: IGNAROK, KOLOS PRAKUŹNI
+    // =========================================================
+    case 'uderzenie_kowadla': {
+      const id = nextId('tel');
+      room.telegraphs.set(id, {
+        id,
+        shape: 'circle',
+        x: target.x,
+        z: target.z,
+        radius: 5.8,
+        color: ab.color,
+        label: ab.name,
+        createdAt: now,
+        triggerAt: now + ab.telegraphMs,
+        ownerId: boss.id,
+        abilityId: ab.id,
+        resolved: false,
+        damage: boss.damage * 1.65,
+        damageType: 'physical',
+        ...bossMeta,
+      });
+      break;
+    }
+
+    case 'strumien_plazmy': {
+      const id = nextId('tel');
+      room.telegraphs.set(id, {
+        id,
+        shape: 'beam',
+        x: boss.x,
+        z: boss.z,
+        radius: 1.8,
+        length: 20,
+        width: 2.6,
+        angle: angleToTarget,
+        color: ab.color,
+        label: ab.name,
+        createdAt: now,
+        triggerAt: now + ab.telegraphMs,
+        duration: 4200,
+        expiresAt: now + ab.telegraphMs + 4200,
+        ownerId: boss.id,
+        abilityId: ab.id,
+        resolved: false,
+        damage: boss.damage * 0.62,
+        damageType: 'magical',
+        armorPenPct: boss.armorPenPct,
+        extraMaxHpPct: 6,
+        bossRequiredPower: boss.requiredPower,
+      });
+      break;
+    }
+
+    case 'deszcz_roztopionego_zlota': {
+      for (let m = 0; m < 6; m++) {
+        const refP = alivePlayers[m % alivePlayers.length];
+        const rx = m < 2 ? refP.x + (Math.random() - 0.5) * 3 : boss.homeX + (Math.random() - 0.5) * 24;
+        const rz = m < 2 ? refP.z + (Math.random() - 0.5) * 3 : boss.homeZ + (Math.random() - 0.5) * 24;
+        const id = nextId('tel');
+        room.telegraphs.set(id, {
+          id,
+          shape: 'circle',
+          x: rx,
+          z: rz,
+          radius: 3.7,
+          color: ab.color,
+          label: 'Płynne Złoto',
+          createdAt: now,
+          triggerAt: now + ab.telegraphMs + m * 140,
+          duration: 3600,
+          expiresAt: now + ab.telegraphMs + m * 140 + 3600,
+          ownerId: boss.id,
+          abilityId: ab.id,
+          resolved: false,
+          damage: boss.damage * 0.62,
+          damageType: 'magical',
+          armorPenPct: boss.armorPenPct,
+          bossRequiredPower: boss.requiredPower,
+        });
+      }
+      break;
+    }
+
+    case 'przeciazenie_pieca': {
+      for (let w = 0; w < 2; w++) {
+        const id = nextId('tel');
+        room.telegraphs.set(id, {
+          id,
+          shape: 'ring',
+          x: boss.x,
+          z: boss.z,
+          radius: 2.2,
+          ringMaxRadius: 18,
+          color: ab.color,
+          label: ab.name,
+          createdAt: now,
+          triggerAt: now + ab.telegraphMs + w * 650,
+          duration: 2100,
+          expiresAt: now + ab.telegraphMs + w * 650 + 2100,
+          ownerId: boss.id,
+          abilityId: ab.id,
+          resolved: false,
+          isLavaRing: true,
+          damage: boss.damage * 1.18,
+          damageType: 'magical',
+          ...bossMeta,
+        });
+      }
+      break;
+    }
+
+    case 'hartowanie_pancerza': {
+      const shieldAmt = Math.round(boss.maxHp * 0.085);
+      boss.shield = shieldAmt;
+      boss.maxShield = shieldAmt;
+      boss.healChannelUntil = now + 5000;
+      pushCombatText(room, boss.x, 4.6, boss.z, '🔥 HARTOWANIE TYTANA!', 'shield', true, true);
+      for (let k = 0; k < 4; k++) {
+        const a = (k / 4) * Math.PI * 2;
+        const id = nextId('tel');
+        room.telegraphs.set(id, {
+          id,
+          shape: 'circle',
+          x: boss.x + Math.cos(a) * 6.5,
+          z: boss.z + Math.sin(a) * 6.5,
+          radius: 3.4,
+          color: ab.color,
+          label: 'Iskra Kuźni',
+          createdAt: now,
+          triggerAt: now + ab.telegraphMs,
+          ownerId: boss.id,
+          abilityId: ab.id,
+          resolved: false,
+          damage: boss.damage * 1.3,
+          damageType: 'magical',
+          ...bossMeta,
+        });
+      }
+      break;
+    }
+
+    // =========================================================
+    // HARDCORE ACT 7: AETERNUS, CESARZ WIECZNOŚCI
+    // =========================================================
+    case 'rozdarcie_czasu': {
+      for (let i = 0; i < 3; i++) {
+        const id = nextId('tel');
+        room.telegraphs.set(id, {
+          id,
+          shape: 'line',
+          x: boss.x,
+          z: boss.z,
+          radius: 1.6,
+          length: 22,
+          width: 2.5,
+          angle: angleToTarget + (i * Math.PI) / 3,
+          color: ab.color,
+          label: ab.name,
+          createdAt: now,
+          triggerAt: now + ab.telegraphMs,
+          ownerId: boss.id,
+          abilityId: ab.id,
+          resolved: false,
+          damage: boss.damage * 1.48,
+          damageType: 'magical',
+          ...bossMeta,
+        });
+      }
+      break;
+    }
+
+    case 'zacmienie_wiecznosci': {
+      const behindX = target.x - Math.sin(target.rotY) * 2.5;
+      const behindZ = target.z - Math.cos(target.rotY) * 2.5;
+      boss.castingAbility.targetX = behindX;
+      boss.castingAbility.targetZ = behindZ;
+      const id = nextId('tel');
+      room.telegraphs.set(id, {
+        id,
+        shape: 'circle',
+        x: target.x,
+        z: target.z,
+        radius: 5.5,
+        color: ab.color,
+        label: ab.name,
+        createdAt: now,
+        triggerAt: now + ab.telegraphMs,
+        ownerId: boss.id,
+        abilityId: ab.id,
+        resolved: false,
+        damage: boss.damage * 1.6,
+        damageType: 'magical',
+        ...bossMeta,
+      });
+      break;
+    }
+
+    case 'wir_galaktyki': {
+      for (let t = 0; t < 4; t++) {
+        const ang = (t / 4) * Math.PI * 2 + Math.random() * 0.5;
+        const id = nextId('tel');
+        room.telegraphs.set(id, {
+          id,
+          shape: 'circle',
+          x: boss.x + Math.cos(ang) * 5.2,
+          z: boss.z + Math.sin(ang) * 5.2,
+          radius: 3.1,
+          color: ab.color,
+          label: 'Wir Galaktyki',
+          createdAt: now,
+          triggerAt: now + ab.telegraphMs,
+          duration: 6200,
+          expiresAt: now + ab.telegraphMs + 6200,
+          ownerId: boss.id,
+          abilityId: ab.id,
+          vx: Math.cos(ang + 0.7) * 5.2,
+          vz: Math.sin(ang + 0.7) * 5.2,
+          resolved: false,
+          damage: boss.damage * 0.56,
+          damageType: 'magical',
+          armorPenPct: boss.armorPenPct,
+          bossRequiredPower: boss.requiredPower,
+        });
+      }
+      break;
+    }
+
+    case 'wyrok_niesmiertelnych': {
+      for (let m = 0; m < 7; m++) {
+        const refP = alivePlayers[m % alivePlayers.length];
+        const rx = m < 3 ? refP.x + (Math.random() - 0.5) * 3.2 : boss.homeX + (Math.random() - 0.5) * 24;
+        const rz = m < 3 ? refP.z + (Math.random() - 0.5) * 3.2 : boss.homeZ + (Math.random() - 0.5) * 24;
+        const id = nextId('tel');
+        room.telegraphs.set(id, {
+          id,
+          shape: 'circle',
+          x: rx,
+          z: rz,
+          radius: 3.8,
+          color: ab.color,
+          label: 'Wyrok Nieśmiertelnych',
+          createdAt: now,
+          triggerAt: now + ab.telegraphMs + m * 130,
+          ownerId: boss.id,
+          abilityId: ab.id,
+          resolved: false,
+          damage: boss.damage * 1.45,
+          damageType: 'magical',
+          ...bossMeta,
+        });
+      }
+      break;
+    }
+
+    case 'kronika_zaglady': {
+      room.pillars = [];
+      for (let p = 0; p < 3; p++) {
+        const ang = (p / 3) * Math.PI * 2 + Math.random() * 0.6;
+        room.pillars.push({
+          id: nextId('pillar'),
+          x: boss.homeX + Math.cos(ang) * 9.5,
+          z: boss.homeZ + Math.sin(ang) * 9.5,
+          radius: 1.9,
+          expiresAt: now + ab.telegraphMs + 1400,
+        });
+      }
+      const id = nextId('tel');
+      room.telegraphs.set(id, {
+        id,
+        shape: 'arena_chaos',
+        x: boss.x,
+        z: boss.z,
+        radius: 26,
+        color: ab.color,
+        label: 'KRONIKA ZAGŁADY — SKRYJ SIĘ ZA FILAREM!',
+        createdAt: now,
+        triggerAt: now + ab.telegraphMs,
+        ownerId: boss.id,
+        abilityId: ab.id,
+        resolved: false,
+        isChaosBurst: true,
+        damage: boss.damage * 3.0,
+        damageType: 'magical',
+        armorPenPct: 52,
+        extraMaxHpPct: 48,
+        bossRequiredPower: boss.requiredPower,
+      });
+      io.to(room.code).emit('game:banner', {
+        type: 'warning',
+        title: '👑 AETERNUS ŁADUJE KRONIKĘ ZAGŁADY!',
+        subtitle: 'Schowaj się za Kosmicznym Filarem lub użyj Bariery Światła!',
+      });
+      break;
+    }
+
     default:
       break;
   }
@@ -2067,6 +2518,26 @@ function executeBossAbilityImpact(room: GameRoom, boss: ServerEnemy, now: number
         tz: cast.targetZ,
         color: '#22a355',
       });
+      break;
+
+    case 'zacmienie_wiecznosci': {
+      const clamped = clampToBossChamber(boss, cast.targetX, cast.targetZ);
+      boss.x = clamped.x;
+      boss.z = clamped.z;
+      pushVfx(room, { kind: 'boss_rift_slash', x: boss.x, z: boss.z, radius: 5.5, color: '#a855f7' });
+      break;
+    }
+
+    case 'uderzenie_kowadla':
+      pushVfx(room, { kind: 'miniboss_magma_slam', x: cast.targetX, z: cast.targetZ, radius: 6.0, color: '#f97316' });
+      break;
+
+    case 'lodowe_wlocznie':
+      pushVfx(room, { kind: 'boss_bone_wave', x: boss.x, z: boss.z, tx: cast.targetX, tz: cast.targetZ, color: '#38bdf8' });
+      break;
+
+    case 'rozdarcie_czasu':
+      pushVfx(room, { kind: 'boss_thorn_nova', x: boss.x, z: boss.z, radius: 13.5, color: '#00f5d4' });
       break;
 
     default:
@@ -3402,7 +3873,7 @@ io.on('connection', (socket: Socket) => {
     const room: GameRoom = {
       code,
       hostId: socket.id,
-      globalLocation: Math.max(1, Math.min(60, payload.globalLocation || 1)),
+      globalLocation: Math.max(1, Math.min(TOTAL_LOCATIONS, payload.globalLocation || 1)),
       inGame: false,
       tick: 0,
       mapData: null,
@@ -3499,7 +3970,7 @@ io.on('connection', (socket: Socket) => {
     if (!code) return;
     const room = rooms.get(code);
     if (!room) return;
-    room.globalLocation = Math.max(1, Math.min(60, Number(payload.globalLocation) || 1));
+    room.globalLocation = Math.max(1, Math.min(TOTAL_LOCATIONS, Number(payload.globalLocation) || 1));
     if (room.inGame) {
       initializeLocation(room, room.globalLocation);
     } else {
@@ -3513,7 +3984,7 @@ io.on('connection', (socket: Socket) => {
     const room = rooms.get(code);
     if (!room) return;
     if (payload?.globalLocation) {
-      room.globalLocation = Math.max(1, Math.min(60, Number(payload.globalLocation)));
+      room.globalLocation = Math.max(1, Math.min(TOTAL_LOCATIONS, Number(payload.globalLocation)));
     }
     room.inGame = true;
     initializeLocation(room, room.globalLocation);
@@ -3818,7 +4289,7 @@ io.on('connection', (socket: Socket) => {
           grade,
         });
       }
-      const nextLoc = Math.min(60, room.globalLocation + 1);
+      const nextLoc = Math.min(TOTAL_LOCATIONS, room.globalLocation + 1);
       initializeLocation(room, nextLoc);
     }
   });

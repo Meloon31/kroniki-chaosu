@@ -258,6 +258,212 @@ export const MAIN_BOSSES: Record<RuneId, MainBossDef> = {
       },
     ],
   },
+
+  // =========================================================
+  // HARDCORE ACT 5 BOSS: KAELIS, WŁADCA WIECZNEJ ZIMY (Lok. 75)
+  // =========================================================
+  kaelis: {
+    id: 'kaelis',
+    act: 5,
+    name: 'Kaelis, Władca Wiecznej Zimy',
+    title: 'Boss Hardcore • Akt 5',
+    visualSummary: 'Krystaliczny lodowy archanioł z czterema skrzydłami ze szronu, lodową halabardą i aureolą zorzy polarnej.',
+    recommendedGear: 'HARDCORE • Min. Pełny Boski +13 (6/6)',
+    requiredPower: 8200,
+    baseHp: 1820000, // ~3 min solo w wymaksowanym Boskim +13
+    baseDamage: 4600,
+    bossArmor: 2200,
+    armorPenPct: 38,
+    skillMaxHpPct: 16,
+    radius: 2.85,
+    speed: 5.2,
+    abilities: [
+      {
+        id: 'lodowe_wlocznie',
+        name: 'Salwa Lodowych Włóczni',
+        description: 'Wystrzeliwuje 3 błyskawiczne lodowe włócznie w stronę graczy (przebijają pancerz).',
+        telegraphMs: 850,
+        cooldownMs: 5600,
+        baseWeight: 32,
+        preferredMinDist: 3.5,
+        color: '#38bdf8',
+      },
+      {
+        id: 'zamiec_absolutna',
+        name: 'Zamieć Absolutna',
+        description: 'Wypuszcza lodową falę pierścieniową po całej komnacie, mocno spowalniając bohaterów.',
+        telegraphMs: 1020,
+        cooldownMs: 8800,
+        baseWeight: 28,
+        color: '#7dd3fc',
+      },
+      {
+        id: 'krysztalowe_wiezienie',
+        name: 'Kryształowe Więzienie',
+        description: 'Zamyka graczy w wybuchających bryłach astralnego lodu — ucieknij ze strefy przed detonacją!',
+        telegraphMs: 960,
+        cooldownMs: 8200,
+        baseWeight: 26,
+        color: '#0284c7',
+      },
+      {
+        id: 'gwiazda_zimy',
+        name: 'Supernowa Zimy',
+        description: 'Przyzywa deszcz 6 krystalicznych meteorów zorzy polarnej na arenę.',
+        telegraphMs: 1120,
+        cooldownMs: 10500,
+        baseWeight: 24,
+        color: '#a5f3fc',
+      },
+      {
+        id: 'tarcza_szronu',
+        name: 'Bariera Wiecznego Szronu',
+        description: 'Oplata się lodową tarczą i regeneruje siły — zbij tarczę jak najszybciej!',
+        telegraphMs: 900,
+        cooldownMs: 18500,
+        baseWeight: 22,
+        hpThresholdMax: 0.82,
+        color: '#22d3ee',
+      },
+    ],
+  },
+
+  // =========================================================
+  // HARDCORE ACT 6 BOSS: IGNAROK, KOLOS PRAKUŹNI (Lok. 90)
+  // =========================================================
+  ignarok: {
+    id: 'ignarok',
+    act: 6,
+    name: 'Ignarok, Kolos Prakuźni',
+    title: 'Boss Hardcore • Akt 6',
+    visualSummary: 'Kolosalny runiczny tytan z brązu i płynnego złota, z buchającym piecem w piersi i gigantycznym młotem kowalskim.',
+    recommendedGear: 'HARDCORE • Boski/Nieśmiertelny +15..+17 + Runa Kaelisa',
+    requiredPower: 11200,
+    baseHp: 2850000, // ~3 min solo w ekwipunku +15..+17
+    baseDamage: 5900,
+    bossArmor: 2900,
+    armorPenPct: 42,
+    skillMaxHpPct: 18,
+    radius: 3.05,
+    speed: 4.9,
+    abilities: [
+      {
+        id: 'uderzenie_kowadla',
+        name: 'Wstrząs Prakuźni',
+        description: 'Uderza młotem w posadzkę wywołując potężny sejsmiczny krater przed sobą.',
+        telegraphMs: 920,
+        cooldownMs: 5800,
+        baseWeight: 32,
+        preferredMaxDist: 9,
+        color: '#f97316',
+      },
+      {
+        id: 'strumien_plazmy',
+        name: 'Strumień Płynnego Złota',
+        description: 'Obraca się wokół osi wypuszczając niszczycielski laser z pieca Prakuźni!',
+        telegraphMs: 1150,
+        cooldownMs: 11200,
+        baseWeight: 26,
+        color: '#facc15',
+      },
+      {
+        id: 'deszcz_roztopionego_zlota',
+        name: 'Deszcz Roztopionego Złota',
+        description: 'Zasypuje arenę 6 strefami płynnego metalu zostawiającymi parzące kałuże.',
+        telegraphMs: 1040,
+        cooldownMs: 8800,
+        baseWeight: 28,
+        color: '#ea580c',
+      },
+      {
+        id: 'przeciazenie_pieca',
+        name: 'Przeciążenie Pieca',
+        description: 'Wypuszcza podwójną falę ognistych pierścieni ze swojego reaktora!',
+        telegraphMs: 980,
+        cooldownMs: 9600,
+        baseWeight: 26,
+        color: '#dc2626',
+      },
+      {
+        id: 'hartowanie_pancerza',
+        name: 'Hartowanie Tytana',
+        description: 'Wytwarza tarczę z hartowanego złota i wywołuje salwę iskier wokół siebie.',
+        telegraphMs: 900,
+        cooldownMs: 18000,
+        baseWeight: 22,
+        hpThresholdMax: 0.8,
+        color: '#fbbf24',
+      },
+    ],
+  },
+
+  // =========================================================
+  // HARDCORE ACT 7 FINAL BOSS: AETERNUS, CESARZ WIECZNOŚCI (Lok. 105)
+  // =========================================================
+  aeternus: {
+    id: 'aeternus',
+    act: 7,
+    name: 'Aeternus, Cesarz Wieczności',
+    title: 'Ostateczny Boss Hardcore • Akt 7',
+    visualSummary: 'Lewitujący bóg czasu w biało-złotej szacie gwiazd z czterema skrzydłami galaktyki, koroną zaćmienia i kosmicznym ostrzem.',
+    recommendedGear: 'HARDCORE • Nieśmiertelny +18..+20 + Runy HC',
+    requiredPower: 14800,
+    baseHp: 4350000, // ~3 min solo w Nieśmiertelnym +18..+20
+    baseDamage: 7400,
+    bossArmor: 3600,
+    armorPenPct: 46,
+    skillMaxHpPct: 20,
+    radius: 3.1,
+    speed: 5.5,
+    abilities: [
+      {
+        id: 'rozdarcie_czasu',
+        name: 'Rozdarcie Czasoprzestrzeni',
+        description: 'Przecina całą arenę 3 skrzyżowanymi szczelinami czasu!',
+        telegraphMs: 940,
+        cooldownMs: 6500,
+        baseWeight: 30,
+        color: '#00f5d4',
+      },
+      {
+        id: 'zacmienie_wiecznosci',
+        name: 'Zaćmienie Wieczności',
+        description: 'Teleportuje się w stronę gracza i detonuje potężną sferę zaćmienia.',
+        telegraphMs: 920,
+        cooldownMs: 7400,
+        baseWeight: 28,
+        color: '#a855f7',
+      },
+      {
+        id: 'wir_galaktyki',
+        name: 'Wiry Galaktyki',
+        description: 'Przywołuje 4 wędrujące kosmiczne wiry krążące po komnacie tronu.',
+        telegraphMs: 1000,
+        cooldownMs: 11000,
+        baseWeight: 25,
+        color: '#38bdf8',
+      },
+      {
+        id: 'wyrok_niesmiertelnych',
+        name: 'Wyrok Nieśmiertelnych',
+        description: 'Zsyła 7 kosmicznych meteorów światła i purpury na wszystkich bohaterów.',
+        telegraphMs: 1050,
+        cooldownMs: 8800,
+        baseWeight: 27,
+        color: '#fde047',
+      },
+      {
+        id: 'kronika_zaglady',
+        name: 'Kronika Zagłady',
+        description: 'Ładuje ostateczny impuls wieczności — skryj się za filarami lub odpal Barierę Światła!',
+        telegraphMs: 3000,
+        cooldownMs: 20000,
+        baseWeight: 22,
+        hpThresholdMax: 0.78,
+        color: '#f43f5e',
+      },
+    ],
+  },
 };
 
 export interface MiniBossDef {
@@ -495,6 +701,180 @@ export const MINI_BOSSES: MiniBossDef[] = [
       },
     ],
   },
+
+  // HARDCORE ACT 5 MINI-BOSSES
+  {
+    act: 5,
+    locationInAct: 5,
+    archetype: 'mb_hc_mroz_rycerz',
+    name: 'Voryn, Rycerz Zorzy',
+    styleTag: 'Krystaliczny paladyn mrozu z wielką lodową lancą',
+    color: '#38bdf8',
+    abilities: [
+      {
+        id: 'lodowe_wlocznie',
+        name: 'Lanca Zorzy',
+        description: 'Szybkie pchnięcie lodową lancą przez środek komnaty.',
+        telegraphMs: 860,
+        cooldownMs: 5600,
+        baseWeight: 34,
+        color: '#38bdf8',
+      },
+      {
+        id: 'zamiec_absolutna',
+        name: 'Fala Szronu',
+        description: 'Rozchodzący się lodowy pierścień spowalniający wrogów.',
+        telegraphMs: 1000,
+        cooldownMs: 8500,
+        baseWeight: 26,
+        color: '#7dd3fc',
+      },
+    ],
+  },
+  {
+    act: 5,
+    locationInAct: 10,
+    archetype: 'mb_hc_mroz_wiedma',
+    name: 'Glacia, Wyrocznia Lodu',
+    styleTag: 'Lewitująca czarodziejka szronu z koroną sopli',
+    color: '#22d3ee',
+    abilities: [
+      {
+        id: 'krysztalowe_wiezienie',
+        name: 'Klatka Szronu',
+        description: 'Detonuje lodowe kręgi pod nogami drużyny.',
+        telegraphMs: 950,
+        cooldownMs: 7400,
+        baseWeight: 30,
+        color: '#0284c7',
+      },
+      {
+        id: 'gwiazda_zimy',
+        name: 'Grad Kryształów',
+        description: 'Zsyła serię lodowych meteorów na arenę.',
+        telegraphMs: 1050,
+        cooldownMs: 9200,
+        baseWeight: 28,
+        color: '#a5f3fc',
+      },
+    ],
+  },
+
+  // HARDCORE ACT 6 MINI-BOSSES
+  {
+    act: 6,
+    locationInAct: 5,
+    archetype: 'mb_hc_kuznia_straznik',
+    name: 'Brimstone, Kowal Zagłady',
+    styleTag: 'Opancerzony w brąz kolos z dwoma rozgrzanymi kowadłami',
+    color: '#f97316',
+    abilities: [
+      {
+        id: 'uderzenie_kowadla',
+        name: 'Grzmot Kowadła',
+        description: 'Potężne uderzenie wstrząsające ziemią.',
+        telegraphMs: 920,
+        cooldownMs: 6000,
+        baseWeight: 32,
+        color: '#f97316',
+      },
+      {
+        id: 'przeciazenie_pieca',
+        name: 'Wybuch Żaru',
+        description: 'Rozszerzająca się fala ognistego żaru.',
+        telegraphMs: 980,
+        cooldownMs: 8800,
+        baseWeight: 28,
+        color: '#dc2626',
+      },
+    ],
+  },
+  {
+    act: 6,
+    locationInAct: 10,
+    archetype: 'mb_hc_kuznia_automat',
+    name: 'Solarius, Złoty Automat',
+    styleTag: 'Pradawny runiczny konstrukt z laserowym rdzeniem',
+    color: '#facc15',
+    abilities: [
+      {
+        id: 'strumien_plazmy',
+        name: 'Promień Prakuźni',
+        description: 'Obracający się złoty promień plazmy.',
+        telegraphMs: 1120,
+        cooldownMs: 10500,
+        baseWeight: 28,
+        color: '#facc15',
+      },
+      {
+        id: 'deszcz_roztopionego_zlota',
+        name: 'Salwa Złotej Lawy',
+        description: 'Rozrzuca strefy wrzącego złota po arenie.',
+        telegraphMs: 1000,
+        cooldownMs: 8200,
+        baseWeight: 30,
+        color: '#ea580c',
+      },
+    ],
+  },
+
+  // HARDCORE ACT 7 MINI-BOSSES
+  {
+    act: 7,
+    locationInAct: 5,
+    archetype: 'mb_hc_tron_herold',
+    name: 'Chronos, Herold Zaćmienia',
+    styleTag: 'Skrzydlaty strażnik czasu z klepsydrą gwiazd',
+    color: '#a855f7',
+    abilities: [
+      {
+        id: 'rozdarcie_czasu',
+        name: 'Cięcie Czasu',
+        description: 'Przecina arenę świetlistymi liniami czasu.',
+        telegraphMs: 920,
+        cooldownMs: 6500,
+        baseWeight: 32,
+        color: '#00f5d4',
+      },
+      {
+        id: 'zacmienie_wiecznosci',
+        name: 'Sfera Zaćmienia',
+        description: 'Teleportuje się i detonuje kosmiczną falę.',
+        telegraphMs: 940,
+        cooldownMs: 7800,
+        baseWeight: 28,
+        color: '#a855f7',
+      },
+    ],
+  },
+  {
+    act: 7,
+    locationInAct: 10,
+    archetype: 'mb_hc_tron_serafin',
+    name: 'Serafina, Ostrze Nieśmiertelnych',
+    styleTag: 'Świetlista wojowniczka z turkusowymi skrzydłami i podwójnym mieczem',
+    color: '#00f5d4',
+    abilities: [
+      {
+        id: 'wyrok_niesmiertelnych',
+        name: 'Deszcz Gwiazd',
+        description: 'Zsyła serię kosmicznych meteorów na graczy.',
+        telegraphMs: 1000,
+        cooldownMs: 8200,
+        baseWeight: 30,
+        color: '#fde047',
+      },
+      {
+        id: 'wir_galaktyki',
+        name: 'Tornado Astralu',
+        description: 'Wypuszcza wędrujące kosmiczne wiry po arenie.',
+        telegraphMs: 1000,
+        cooldownMs: 10200,
+        baseWeight: 26,
+        color: '#38bdf8',
+      },
+    ],
+  },
 ];
 
 export interface ActEnemyArchetype {
@@ -533,6 +913,24 @@ export const ACT_ENEMIES: Record<ActNumber, ActEnemyArchetype[]> = {
     { archetype: 'a4_rycerz', name: 'Rycerz Lawy', role: 'melee', hpMult: 1.4, dmgMult: 1.3, speed: 4.4, radius: 1.05, color: '#d9641e' },
     { archetype: 'a4_golem', name: 'Obsydianowy Kolos', role: 'brute', hpMult: 1.9, dmgMult: 1.42, speed: 3.3, radius: 1.35, color: '#2c3647' },
   ],
+  5: [
+    { archetype: 'a5_mroz_straznik', name: 'Strażnik Szronu', role: 'melee', hpMult: 1.0, dmgMult: 1.05, speed: 4.8, radius: 0.92, color: '#38bdf8' },
+    { archetype: 'a5_zorza_mag', name: 'Tkacz Zorzy', role: 'caster', hpMult: 0.95, dmgMult: 1.18, speed: 4.2, radius: 0.9, color: '#818cf8' },
+    { archetype: 'a5_sopel_strzelec', name: 'Astralny Łowca', role: 'ranged', hpMult: 0.92, dmgMult: 1.15, speed: 4.5, radius: 0.85, color: '#22d3ee' },
+    { archetype: 'a5_golem_lodu', name: 'Kolos Wiecznej Zimy', role: 'brute', hpMult: 1.45, dmgMult: 1.25, speed: 3.5, radius: 1.35, color: '#0284c7' },
+  ],
+  6: [
+    { archetype: 'a6_kuznia_woj', name: 'Kowal Runiczny', role: 'melee', hpMult: 1.05, dmgMult: 1.08, speed: 4.7, radius: 0.95, color: '#f97316' },
+    { archetype: 'a6_plazma_mag', name: 'Alchemik Prakuźni', role: 'caster', hpMult: 0.96, dmgMult: 1.2, speed: 4.2, radius: 0.9, color: '#facc15' },
+    { archetype: 'a6_iskra_strzelec', name: 'Strzelec Żaru', role: 'ranged', hpMult: 0.94, dmgMult: 1.16, speed: 4.5, radius: 0.88, color: '#ea580c' },
+    { archetype: 'a6_golem_zlota', name: 'Złoty Tytan Kuźni', role: 'brute', hpMult: 1.48, dmgMult: 1.28, speed: 3.5, radius: 1.38, color: '#ca8a04' },
+  ],
+  7: [
+    { archetype: 'a7_niezmierny_rycerz', name: 'Rycerz Wieczności', role: 'melee', hpMult: 1.06, dmgMult: 1.1, speed: 5.0, radius: 0.95, color: '#00f5d4' },
+    { archetype: 'a7_czas_mag', name: 'Kronikarz Pustki', role: 'caster', hpMult: 0.98, dmgMult: 1.22, speed: 4.4, radius: 0.92, color: '#c084fc' },
+    { archetype: 'a7_gwiazda_lowca', name: 'Łucznik Zaćmienia', role: 'ranged', hpMult: 0.95, dmgMult: 1.18, speed: 4.8, radius: 0.88, color: '#fde047' },
+    { archetype: 'a7_golem_astralu', name: 'Astralny Behemot', role: 'brute', hpMult: 1.5, dmgMult: 1.3, speed: 3.7, radius: 1.4, color: '#6366f1' },
+  ],
 };
 
 export function getMainBossByAct(act: ActNumber): MainBossDef {
@@ -541,6 +939,9 @@ export function getMainBossByAct(act: ActNumber): MainBossDef {
     2: 'azirath',
     3: 'sylvara',
     4: 'vaelgor',
+    5: 'kaelis',
+    6: 'ignarok',
+    7: 'aeternus',
   };
   return MAIN_BOSSES[map[act]];
 }
