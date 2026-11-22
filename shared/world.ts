@@ -1,4 +1,5 @@
 import { getMainBossByAct, getMiniBoss } from './bosses.js';
+import { getMutatorForLocation, LOCATION_MUTATORS } from './mutators.js';
 import type {
   ActNumber,
   GeneratedMapData,
@@ -9,6 +10,7 @@ import type {
   MapWall,
   PuzzleType,
   SecretPassageState,
+  WaveObeliskState,
   WorldPuzzleState,
 } from './types.js';
 
@@ -171,6 +173,8 @@ for (let act = 1 as ActNumber; act <= 4; act = (act + 1) as ActNumber) {
     const isMainBoss = loc === 15;
     const mini = isMiniBoss ? getMiniBoss(act, loc) : undefined;
     const main = isMainBoss ? getMainBossByAct(act) : undefined;
+    const mutatorId = getMutatorForLocation(act, loc);
+    const mutDef = LOCATION_MUTATORS[mutatorId];
     ALL_LOCATIONS.push({
       globalIndex,
       act,
@@ -180,13 +184,14 @@ for (let act = 1 as ActNumber; act <= 4; act = (act + 1) as ActNumber) {
         ? `Boss Główny: ${main!.name}`
         : isMiniBoss
           ? `Mini-Boss: ${mini!.name}`
-          : ACT_THEMES[act].subtitle,
+          : `${mutDef.icon} ${mutDef.name}`,
       isMiniBoss,
       isMainBoss,
       bossName: main?.name ?? mini?.name,
       bossId: main?.id,
       recommendedLevel: globalIndex,
       seed: act * 100003 + loc * 7919 + 4242,
+      mutatorId,
     });
   }
 }
@@ -751,6 +756,20 @@ export function generateMapData(globalIndex: number): GeneratedMapData {
   const spawnRoom = roomCenter(0);
   const exitRoom = roomCenter(8);
 
+  // Place a Wave Challenge Obelisk on wave_obelisk maps (and as a bonus event on every 4th non-boss map)
+  let obelisk: WaveObeliskState | undefined;
+  if (location.mutatorId === 'wave_obelisk' || (!location.isMainBoss && !location.isMiniBoss && location.locationInAct % 4 === 0)) {
+    const obRoom = rooms.find((r) => r.kind === 'combat' && r.index !== 0 && r.index !== 8) ?? rooms[1];
+    obelisk = {
+      id: `obelisk_${location.globalIndex}`,
+      x: obRoom.cx,
+      z: obRoom.cz,
+      state: 'idle',
+      currentWave: 0,
+      maxWaves: 3,
+    };
+  }
+
   return {
     location,
     width: CELL_STEP * 3 + 12,
@@ -761,6 +780,7 @@ export function generateMapData(globalIndex: number): GeneratedMapData {
     walls,
     props,
     shrines,
+    obelisk,
     puzzles,
     secrets,
     chests,

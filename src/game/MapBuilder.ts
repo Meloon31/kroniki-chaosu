@@ -5,6 +5,7 @@ import type {
   LockedChestState,
   ObsidianPillarState,
   SecretPassageState,
+  WaveObeliskState,
   WorldPuzzleState,
 } from '../../shared/types';
 import {
@@ -22,6 +23,7 @@ export interface BuiltMapHandles {
   leverMeshes: Map<string, THREE.Object3D>;
   chestMeshes: Map<string, { group: THREE.Group; lid: THREE.Object3D; glow: THREE.Mesh }>;
   shrineMeshes: Map<string, THREE.Mesh>;
+  obeliskVisual?: { crystal: THREE.Mesh; ring: THREE.Mesh };
   puzzleVisuals: Map<
     string,
     {
@@ -464,13 +466,42 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     });
     crystal.scale.set(0.82, 1.38, 0.82);
     crystal.position.y = 1.75;
-    const lbl = makeSpriteLabel('💚 KAPLICZKA [F]', '#22c55e', '#bbf7d0');
-    lbl.scale.set(2.6, 0.75, 1);
-    lbl.position.y = 3.05;
+    const lbl = makeSpriteLabel('✨ KAPLICZKA DARU [F]', '#4ade80', '#dcfce7');
+    lbl.scale.set(3.2, 0.8, 1);
+    lbl.position.y = 3.1;
     sGroup.add(ped, rim, crystal, lbl);
     root.add(sGroup);
     shrineMeshes.set(sh.id, crystal);
     animatedProps.push(crystal);
+  }
+
+  // Wave Challenge Obelisk (3-Wave Ambush Crystal!)
+  let obeliskVisual: { crystal: THREE.Mesh; ring: THREE.Mesh } | undefined;
+  if (map.obelisk) {
+    const oGroup = new THREE.Group();
+    oGroup.position.set(map.obelisk.x, 0, map.obelisk.z);
+    oGroup.add(createContactShadow(1.65, 0.44));
+    const ped = createComicMesh(new THREE.CylinderGeometry(1.15, 1.48, 0.9, 22), '#3b3754', 0.032);
+    ped.position.y = 0.45;
+    const obCrystal = createComicMesh(new THREE.SphereGeometry(0.74, 18, 14), '#38bdf8', 0.03, {
+      emissive: '#0284c7',
+      emissiveIntensity: 0.36,
+    });
+    obCrystal.scale.set(0.75, 1.65, 0.75);
+    obCrystal.position.y = 2.45;
+    const obRing = createComicMesh(new THREE.TorusGeometry(1.38, 0.12, 10, 28), '#7dd3fc', 0.022, {
+      emissive: '#0284c7',
+      emissiveIntensity: 0.32,
+    });
+    obRing.rotation.x = Math.PI / 2 - 0.25;
+    obRing.position.y = 2.45;
+    const obLbl = makeSpriteLabel('🔮 OŁTARZ FAL [F]', '#38bdf8', '#e0f2fe');
+    obLbl.scale.set(3.2, 0.82, 1);
+    obLbl.position.y = 4.35;
+    oGroup.add(ped, obCrystal, obRing, obLbl);
+    root.add(oGroup);
+    animatedProps.push(obCrystal);
+    obeliskVisual = { crystal: obCrystal, ring: obRing };
   }
 
   // Exit Portal
@@ -678,6 +709,7 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     leverMeshes,
     chestMeshes,
     shrineMeshes,
+    obeliskVisual,
     puzzleVisuals,
     exitPortalRing,
     exitPortalCore,
@@ -694,7 +726,8 @@ export function syncWorldMapVisuals(
   shrines: Array<{ id: string; used: boolean }>,
   pillars: ObsidianPillarState[],
   exitUnlocked: boolean,
-  elapsedSec: number
+  elapsedSec: number,
+  obelisk?: WaveObeliskState
 ) {
   for (const obj of handles.animatedProps) {
     obj.rotation.y = elapsedSec * 1.15;
@@ -756,6 +789,21 @@ export function syncWorldMapVisuals(
   for (const sh of shrines) {
     const crystal = handles.shrineMeshes.get(sh.id);
     if (crystal) crystal.visible = !sh.used;
+  }
+
+  if (handles.obeliskVisual && obelisk) {
+    const cMat = handles.obeliskVisual.crystal.material as THREE.MeshToonMaterial;
+    handles.obeliskVisual.ring.rotation.z = elapsedSec * (obelisk.state === 'active' ? 3.2 : 1.0);
+    if (obelisk.state === 'active') {
+      cMat.color.set('#f43f5e');
+      cMat.emissive.set('#e11d48');
+    } else if (obelisk.state === 'completed') {
+      cMat.color.set('#4ade80');
+      cMat.emissive.set('#16a34a');
+    } else {
+      cMat.color.set('#38bdf8');
+      cMat.emissive.set('#0284c7');
+    }
   }
 
   handles.exitPortalRing.rotation.z = elapsedSec * (exitUnlocked ? 1.8 : 0.35);

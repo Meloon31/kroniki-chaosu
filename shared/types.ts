@@ -6,6 +6,8 @@ export type EquipSlot = 'bron' | 'helm' | 'zbroja' | 'rekawice' | 'buty' | 'amul
 
 export type RuneId = 'malakor' | 'azirath' | 'sylvara' | 'vaelgor';
 
+import type { BoonId, EliteAffix, LocationMutatorId } from './mutators.js';
+
 export type ActNumber = 1 | 2 | 3 | 4;
 
 export type DamageType = 'physical' | 'magical' | 'hybrid' | 'heal' | 'shield' | 'poison' | 'true';
@@ -127,10 +129,20 @@ export interface NetPlayerState {
   invulnUntil: number;
   shieldExpiresAt: number;
   potionReadyAt: number;
+  activeBoons?: BoonId[];
   stats: ComputedStats;
 }
 
-export type EnemyTier = 'normal' | 'elite' | 'miniboss' | 'boss' | 'summon' | 'root_trap';
+export type EnemyTier =
+  | 'normal'
+  | 'elite'
+  | 'miniboss'
+  | 'boss'
+  | 'summon'
+  | 'root_trap'
+  | 'goblin'
+  | 'totem'
+  | 'barrel';
 
 export interface EnemyState {
   id: string;
@@ -139,6 +151,7 @@ export interface EnemyState {
   tier: EnemyTier;
   act: ActNumber;
   bossId?: RuneId;
+  affix?: EliteAffix;
   x: number;
   z: number;
   rotY: number;
@@ -298,6 +311,16 @@ export interface LocationDefinition {
   bossId?: RuneId;
   recommendedLevel: number;
   seed: number;
+  mutatorId: LocationMutatorId;
+}
+
+export interface WaveObeliskState {
+  id: string;
+  x: number;
+  z: number;
+  state: 'idle' | 'active' | 'completed';
+  currentWave: number;
+  maxWaves: number;
 }
 
 export interface GeneratedMapData {
@@ -310,6 +333,7 @@ export interface GeneratedMapData {
   walls: MapWall[];
   props: MapProp[];
   shrines: Array<{ id: string; x: number; z: number; used: boolean }>;
+  obelisk?: WaveObeliskState;
   puzzles: WorldPuzzleState[];
   secrets: SecretPassageState[];
   chests: LockedChestState[];
@@ -432,9 +456,14 @@ export interface WorldSnapshot {
   secrets: SecretPassageState[];
   chests: LockedChestState[];
   shrines: Array<{ id: string; x: number; z: number; used: boolean }>;
+  obelisk?: WaveObeliskState;
   pillars: ObsidianPillarState[];
   exitUnlocked: boolean;
   enemiesRemaining: number;
   totalEnemies: number;
   bossDefeated: boolean;
+  mutatorId: LocationMutatorId;
+  comboCount: number;
+  comboExpiresAt: number;
+  goblinAlive?: boolean;
 }

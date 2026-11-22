@@ -88,7 +88,184 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
   let rightArm: THREE.Object3D | undefined;
   let spiderLegs: THREE.Object3D[] | undefined;
 
-  if (enemy.tier === 'root_trap') {
+  if (enemy.tier === 'barrel') {
+    // =========================================================
+    // TACTICAL EXPLOSIVE POWDER BARREL (Plush Cartoon Keg w/ Glowing Fuse!)
+    // =========================================================
+    const barrelBody = createComicMesh(
+      createPlushLathe(
+        [
+          [0.01, 0],
+          [0.56, 0.04],
+          [0.7, 0.42],
+          [0.72, 0.78],
+          [0.58, 1.24],
+          [0.01, 1.28],
+        ],
+        22
+      ),
+      '#dc2626',
+      0.032,
+      { emissive: '#991b1b', emissiveIntensity: 0.14 }
+    );
+    for (const hy of [0.26, 0.98]) {
+      const hoop = createComicMesh(new THREE.TorusGeometry(0.65, 0.065, 10, 22), '#334155', 0.02);
+      hoop.rotation.x = Math.PI / 2;
+      hoop.position.y = hy;
+      body.add(hoop);
+    }
+    const warnOrb = createComicMesh(new THREE.SphereGeometry(0.2, 12, 10), '#fde047', 0.018);
+    warnOrb.scale.set(1, 1, 0.45);
+    warnOrb.position.set(0, 0.64, 0.68);
+    const fuse = createComicMesh(
+      createTaperedCurveGeometry(
+        [
+          [0, 1.26, 0],
+          [0.08, 1.5, 0.05],
+          [0.24, 1.56, 0.14],
+        ],
+        0.045,
+        0.028,
+        10,
+        8
+      ),
+      '#e2d5b8',
+      0.015
+    );
+    const spark = createComicMesh(new THREE.SphereGeometry(0.14, 12, 10), '#fb923c', 0.014, {
+      emissive: '#f97316',
+      emissiveIntensity: 0.44,
+    });
+    spark.position.set(0.24, 1.56, 0.14);
+    flameMesh = spark;
+    body.add(barrelBody, warnOrb, fuse, spark);
+  } else if (enemy.tier === 'totem') {
+    // =========================================================
+    // SHIELD TOTEM (Carved Plush Arcane Idol w/ Floating Shield Crystal!)
+    // =========================================================
+    const base = createComicMesh(new THREE.CylinderGeometry(0.85, 1.05, 0.48, 20), '#3b3254', 0.032);
+    base.position.y = 0.24;
+    const pole = createComicMesh(
+      createPlushLathe(
+        [
+          [0.01, 0.45],
+          [0.64, 0.55],
+          [0.52, 1.4],
+          [0.66, 2.25],
+          [0.54, 2.6],
+          [0.01, 2.7],
+        ],
+        22
+      ),
+      '#4c3b73',
+      0.036
+    );
+    addMonsterEyes(body, 1.95, 0.58, 0.22, 0.12, '#c084fc');
+
+    orbitGroup = new THREE.Group();
+    orbitGroup.position.y = 3.25;
+    const crystal = createComicMesh(new THREE.SphereGeometry(0.46, 16, 14), '#a855f7', 0.026, {
+      emissive: '#9333ea',
+      emissiveIntensity: 0.4,
+    });
+    crystal.scale.set(0.85, 1.35, 0.85);
+    const ring = createComicMesh(new THREE.TorusGeometry(0.75, 0.08, 10, 22), '#e879f9', 0.02, {
+      emissive: '#a855f7',
+      emissiveIntensity: 0.32,
+    });
+    ring.rotation.x = Math.PI / 2 - 0.35;
+    orbitGroup.add(crystal, ring);
+    body.add(base, pole, orbitGroup);
+  } else if (enemy.tier === 'goblin') {
+    // =========================================================
+    // GOLDEN TREASURE GOBLIN (Adorable Cheeky Imp w/ GIANT Overflowing Gold Sack!)
+    // =========================================================
+    const torso = createComicMesh(
+      createPlushLathe(
+        [
+          [0.01, 0.22],
+          [0.44, 0.35],
+          [0.48, 0.72],
+          [0.36, 1.08],
+          [0.01, 1.15],
+        ],
+        20
+      ),
+      '#34a853',
+      0.028
+    );
+    const head = createComicMesh(new THREE.SphereGeometry(0.42, 22, 18), '#4ade80', 0.028);
+    head.scale.set(1.08, 0.94, 0.96);
+    head.position.y = 1.42;
+    addMonsterEyes(body, 1.46, 0.37, 0.16, 0.095, '#fde047', '#166534');
+
+    // Long playful pointy goblin ears!
+    for (const s of [-1, 1]) {
+      const ear = createComicMesh(
+        createTaperedCurveGeometry(
+          [
+            [s * 0.36, 1.45, 0],
+            [s * 0.64, 1.56, -0.05],
+            [s * 0.84, 1.72, -0.1],
+          ],
+          0.11,
+          0.025,
+          12,
+          10
+        ),
+        '#4ade80',
+        0.02
+      );
+      body.add(ear);
+    }
+
+    // Golden jester cap!
+    const cap = createComicMesh(
+      createTaperedCurveGeometry(
+        [
+          [0, 1.72, 0],
+          [0.08, 2.08, -0.1],
+          [0.24, 2.2, -0.35],
+        ],
+        0.34,
+        0.05,
+        14,
+        12
+      ),
+      '#f59e0b',
+      0.024
+    );
+    const pom = createComicMesh(new THREE.SphereGeometry(0.11, 12, 10), '#fde047', 0.016, {
+      emissive: '#f59e0b',
+      emissiveIntensity: 0.35,
+    });
+    pom.position.set(0.24, 2.2, -0.36);
+
+    // GIANT Plush Overflowing Gold Treasure Sack on Back!
+    const sack = createComicMesh(new THREE.SphereGeometry(0.84, 20, 16), '#d97706', 0.034, {
+      emissive: '#b45309',
+      emissiveIntensity: 0.16,
+    });
+    sack.scale.set(1.06, 1.15, 0.96);
+    sack.position.set(0, 1.32, -0.68);
+    // Overflowing shiny gold coins & colorful gems at top of sack!
+    const gemCols = ['#fde047', '#38bdf8', '#f43f5e', '#fde047', '#c084fc'];
+    for (let g = 0; g < 5; g++) {
+      const a = (g / 5) * Math.PI * 2;
+      const coin = createComicMesh(new THREE.SphereGeometry(0.2, 12, 10), gemCols[g], 0.016, {
+        emissive: gemCols[g],
+        emissiveIntensity: 0.34,
+      });
+      coin.position.set(Math.cos(a) * 0.32, 2.22 + (g % 2) * 0.12, -0.68 + Math.sin(a) * 0.3);
+      body.add(coin);
+    }
+
+    leftArm = createComicMesh(new THREE.CapsuleGeometry(0.1, 0.32, 8, 12), '#4ade80', 0.02);
+    leftArm.position.set(-0.48, 0.85, 0.12);
+    rightArm = createComicMesh(new THREE.CapsuleGeometry(0.1, 0.32, 8, 12), '#4ade80', 0.02);
+    rightArm.position.set(0.48, 0.85, 0.12);
+    body.add(torso, head, cap, pom, sack, leftArm, rightArm);
+  } else if (enemy.tier === 'root_trap') {
     // Organic curved creeping cartoon vines!
     for (let i = 0; i < 7; i++) {
       const ang = (i / 7) * Math.PI * 2;
@@ -918,10 +1095,20 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     }
 
     if (isElite) {
-      // Smooth cartoon golden-purple Elite Crown!
-      const crown = createComicMesh(new THREE.TorusGeometry(0.32, 0.085, 10, 20), '#a855f7', 0.024, {
-        emissive: '#7c3aed',
-        emissiveIntensity: 0.3,
+      const affixCol =
+        enemy.affix === 'mortar'
+          ? '#f97316'
+          : enemy.affix === 'frost'
+            ? '#38bdf8'
+            : enemy.affix === 'charger'
+              ? '#facc15'
+              : enemy.affix === 'vampiric'
+                ? '#4ade80'
+                : '#a855f7';
+      // Smooth cartoon Affix-colored Elite Crown!
+      const crown = createComicMesh(new THREE.TorusGeometry(0.32, 0.085, 10, 20), affixCol, 0.024, {
+        emissive: affixCol,
+        emissiveIntensity: 0.32,
       });
       crown.rotation.x = Math.PI / 2;
       crown.position.y = 2.24;
@@ -936,13 +1123,40 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     body.scale.setScalar(scale);
   }
 
+  const ringColor =
+    enemy.tier === 'goblin'
+      ? '#fbbf24'
+      : enemy.tier === 'totem'
+        ? '#a855f7'
+        : enemy.tier === 'barrel'
+          ? '#ef4444'
+          : enemy.tier === 'elite' && enemy.affix
+            ? enemy.affix === 'mortar'
+              ? '#f97316'
+              : enemy.affix === 'frost'
+                ? '#38bdf8'
+                : enemy.affix === 'charger'
+                  ? '#facc15'
+                  : '#4ade80'
+            : enemy.tier === 'boss'
+              ? '#be123c'
+              : '#d97706';
+
   const tauntRing = new THREE.Mesh(
-    new THREE.RingGeometry(enemy.radius * 0.92, enemy.radius * 1.12, 32),
+    new THREE.RingGeometry(enemy.radius * 0.92, enemy.radius * 1.16, 32),
     new THREE.MeshBasicMaterial({
-      color: enemy.tier === 'boss' ? '#be123c' : '#d97706',
+      color: ringColor,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: enemy.tier === 'boss' || enemy.tier === 'miniboss' ? 0.42 : 0,
+      opacity:
+        enemy.tier === 'boss' ||
+        enemy.tier === 'miniboss' ||
+        enemy.tier === 'goblin' ||
+        enemy.tier === 'totem' ||
+        enemy.tier === 'barrel' ||
+        enemy.tier === 'elite'
+          ? 0.48
+          : 0,
       depthWrite: false,
     })
   );
@@ -950,25 +1164,38 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
   tauntRing.position.y = 0.05;
   root.add(tauntRing);
 
-  const barW = enemy.tier === 'boss' ? 3.8 : enemy.tier === 'miniboss' ? 2.7 : 1.45;
-  const barY = enemy.tier === 'boss' ? 7.0 : enemy.tier === 'miniboss' ? 4.9 : 2.6;
+  const barW =
+    enemy.tier === 'boss' ? 3.8 : enemy.tier === 'miniboss' ? 2.7 : enemy.tier === 'goblin' ? 1.85 : 1.45;
+  const barY =
+    enemy.tier === 'boss' ? 7.0 : enemy.tier === 'miniboss' ? 4.9 : enemy.tier === 'totem' ? 4.2 : 2.6;
   const hpBarBg = new THREE.Mesh(
     new THREE.PlaneGeometry(barW + 0.16, 0.28),
     new THREE.MeshBasicMaterial({ color: '#141122', side: THREE.DoubleSide })
   );
   hpBarBg.position.y = barY;
   hpBarBg.rotation.x = -0.65;
+  hpBarBg.visible = enemy.tier !== 'barrel';
   root.add(hpBarBg);
 
   const hpBarFill = new THREE.Mesh(
     new THREE.PlaneGeometry(barW, 0.17),
     new THREE.MeshBasicMaterial({
-      color: enemy.tier === 'boss' ? '#f43f5e' : enemy.tier === 'miniboss' ? '#f59e0b' : '#ef4444',
+      color:
+        enemy.tier === 'goblin'
+          ? '#fbbf24'
+          : enemy.tier === 'totem'
+            ? '#a855f7'
+            : enemy.tier === 'boss'
+              ? '#f43f5e'
+              : enemy.tier === 'miniboss'
+                ? '#f59e0b'
+                : '#ef4444',
       side: THREE.DoubleSide,
     })
   );
   hpBarFill.position.set(0, barY, 0.02);
   hpBarFill.rotation.x = -0.65;
+  hpBarFill.visible = enemy.tier !== 'barrel';
   root.add(hpBarFill);
 
   return {
@@ -1597,6 +1824,26 @@ export function updateEnemyRig(
   if (nowMs < state.tauntedUntil) {
     rm.color.set('#f59e0b');
     rm.opacity = 0.64;
+  } else if (state.tier === 'goblin') {
+    rm.color.set('#fbbf24');
+    rm.opacity = 0.55 + Math.sin(elapsedSec * 8) * 0.2;
+  } else if (state.tier === 'totem') {
+    rm.color.set('#a855f7');
+    rm.opacity = 0.5 + Math.sin(elapsedSec * 5) * 0.15;
+  } else if (state.tier === 'barrel') {
+    rm.color.set('#ef4444');
+    rm.opacity = 0.35 + Math.sin(elapsedSec * 6) * 0.12;
+  } else if (state.tier === 'elite' && state.affix) {
+    rm.color.set(
+      state.affix === 'mortar'
+        ? '#f97316'
+        : state.affix === 'frost'
+          ? '#38bdf8'
+          : state.affix === 'charger'
+            ? '#facc15'
+            : '#4ade80'
+    );
+    rm.opacity = 0.45;
   } else if (state.tier === 'boss' || state.tier === 'miniboss') {
     rm.color.set(state.tier === 'boss' ? '#e11d48' : '#f59e0b');
     rm.opacity = 0.38;

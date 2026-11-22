@@ -526,9 +526,13 @@ export class GameEngine {
     }
     for (const sh of snap.shrines) {
       if (!sh.used && Math.hypot(local.x - sh.x, local.z - sh.z) <= 4.2) {
-        this.callbacks.onInteractHint('[F] Użyj Kapliczki Odnowy (100% HP & Mana)');
+        this.callbacks.onInteractHint('[F] ✨ Kapliczka: 100% HP/Mana + Wybór Daru Chaosu!');
         return;
       }
+    }
+    if (snap.obelisk && snap.obelisk.state === 'idle' && Math.hypot(local.x - snap.obelisk.x, local.z - snap.obelisk.z) <= 4.6) {
+      this.callbacks.onInteractHint('[F] 🔮 Aktywuj Ołtarz Fal (3 Fale Wyzwania -> Skarb + Dar!)');
+      return;
     }
     if (Math.hypot(local.x - map.exitPortal.x, local.z - map.exitPortal.z) <= 5.0) {
       this.callbacks.onInteractHint(
@@ -622,7 +626,8 @@ export class GameEngine {
           snap.shrines,
           snap.pillars,
           snap.exitUnlocked,
-          this.elapsedSec
+          this.elapsedSec,
+          snap.obelisk
         );
       }
 

@@ -12,6 +12,7 @@ import {
   RARITY_META,
 } from '../shared/items';
 import { createStarterRunes, createStarterRuneShards, RUNE_MAX_LEVEL, RUNES } from '../shared/runes';
+import { BoonId, CHAOS_BOONS } from '../shared/mutators';
 import { computePlayerStats } from '../shared/stats';
 import type {
   ClassId,
@@ -153,6 +154,7 @@ export function App() {
   const [interactHint, setInteractHint] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
   const [activeChest, setActiveChest] = useState<LockedChestState | null>(null);
+  const [boonOffer, setBoonOffer] = useState<{ title: string; choices: BoonId[] } | null>(null);
   const [activeTrade, setActiveTrade] = useState<TradeSessionState | null>(null);
   const [incomingTrade, setIncomingTrade] = useState<TradeSessionState | null>(null);
   const [banner, setBanner] = useState<BannerMessage | null>(null);
@@ -255,6 +257,33 @@ export function App() {
     [showBanner]
   );
 
+  const handleChooseBoon = useCallback(
+    (boonId: BoonId) => {
+      socketRef.current?.emit('boon:choose', { boonId });
+      const def = CHAOS_BOONS[boonId];
+      if (def) {
+        soundEngine.playRuneUpgrade();
+        pushToast(`${def.icon} Wybrano Dar: ${def.name}!`, def.color);
+      }
+      setBoonOffer(null);
+    },
+    [pushToast]
+  );
+
+  // Quick hotkeys [Z], [X], [C] to pick a Chaos Boon without stopping movement!
+  useEffect(() => {
+    if (!boonOffer) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z' && boonOffer.choices[0]) handleChooseBoon(boonOffer.choices[0]);
+      else if (k === 'x' && boonOffer.choices[1]) handleChooseBoon(boonOffer.choices[1]);
+      else if (k === 'c' && boonOffer.choices[2]) handleChooseBoon(boonOffer.choices[2]);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [boonOffer, handleChooseBoon]);
+
   // Fetch LAN sharing URLs from server
   useEffect(() => {
     fetch('/api/network-info')
@@ -308,6 +337,7 @@ export function App() {
 
     sock.on('world:loaded', (payload: { mapData: GeneratedMapData }) => {
       setMapData(payload.mapData);
+      setBoonOffer(null);
       setInGame(true);
       setActiveChest(null);
       engineRef.current?.loadMap(payload.mapData);
@@ -415,6 +445,11 @@ export function App() {
 
     sock.on('chest:open_modal', (chest: LockedChestState) => {
       setActiveChest(chest);
+    });
+
+    sock.on('boon:offer', (payload: { title: string; choices: BoonId[] }) => {
+      setBoonOffer(payload);
+      soundEngine.playLevelUp();
     });
 
     sock.on('game:banner', (payload: { type: BannerMessage['type']; title: string; subtitle?: string }) => {
@@ -915,6 +950,81 @@ export function App() {
                   {banner.subtitle}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Roguelike Chaos Boon Choice Overlay (Hades-style 1 of 3 cards, selectable via click or [Z]/[X]/[C]!) */}
+          {boonOffer && (
+            <div
+              style={{
+                position: 'fixed',
+                bottom: 168,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 82,
+                width: 'min(760px, 94vw)',
+                pointerEvents: 'auto',
+              }}
+            >
+              <div
+                className="comic-panel"
+                style={{
+                  padding: '14px 16px',
+                  borderColor: '#fbbf24',
+                  background: 'linear-gradient(180deg, rgba(24, 18, 48, 0.96), rgba(12, 14, 28, 0.97))',
+                }}
+              >
+                <div style={{ textAlign: 'center', marginBottom: 10 }}>
+                  <div className="comic-title" style={{ fontSize: 22, color: '#fde047' }}>
+                    {boonOffer.title}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#cbd5e1', fontWeight: 700 }}>
+                    Wybierz 1 z 3 Mocy na czas bieżącej lokacji (kliknij lub naciśnij [Z] / [X] / [C])
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+                  {boonOffer.choices.map((bid, idx) => {
+                    const b = CHAOS_BOONS[bid];
+                    const hotkey = ['Z', 'X', 'C'][idx] || `${idx + 1}`;
+                    return (
+                      <button
+                        key={bid}
+                        onClick={() => handleChooseBoon(bid)}
+                        className="comic-panel-sm"
+                        style={{
+                          cursor: 'pointer',
+                          padding: '12px 12px',
+                          textAlign: 'left',
+                          borderColor: b.color,
+                          background: 'linear-gradient(160deg, rgba(30, 27, 56, 0.95), rgba(15, 17, 34, 0.95))',
+                          transition: 'transform 0.12s',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 6,
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 24 }}>{b.icon}</span>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 900,
+                              padding: '2px 7px',
+                              borderRadius: 6,
+                              background: b.color,
+                              color: '#111118',
+                            }}
+                          >
+                            [{hotkey}]
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 14, fontWeight: 900, color: b.color }}>{b.name}</div>
+                        <div style={{ fontSize: 11, color: '#e2e8f0', lineHeight: 1.35 }}>{b.description}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           )}
 

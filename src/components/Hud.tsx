@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CLASSES, MAX_LEVEL, xpToNextLevel } from '../../shared/classes';
 import { RARITY_META } from '../../shared/items';
+import { CHAOS_BOONS, LOCATION_MUTATORS } from '../../shared/mutators';
 import { getLocationDef } from '../../shared/world';
 import type {
   GeneratedMapData,
@@ -139,15 +140,39 @@ export const Hud: React.FC<HudProps> = ({
       if (sh.used) continue;
       ctx.fillStyle = '#4ade80';
       ctx.beginPath();
-      ctx.arc(toX(sh.x), toY(sh.z), 2.8, 0, Math.PI * 2);
+      ctx.arc(toX(sh.x), toY(sh.z), 3.1, 0, Math.PI * 2);
       ctx.fill();
     }
 
-    // Enemies
+    // Wave Obelisk
+    if (snapshot.obelisk && snapshot.obelisk.state !== 'completed') {
+      ctx.fillStyle = snapshot.obelisk.state === 'active' ? '#f43f5e' : '#38bdf8';
+      ctx.beginPath();
+      ctx.arc(toX(snapshot.obelisk.x), toY(snapshot.obelisk.z), 4.0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Enemies (including Golden Goblin & Shield Totems!)
     for (const e of snapshot.enemies) {
-      if (!e.alive || e.tier === 'root_trap') continue;
-      ctx.fillStyle = e.tier === 'boss' || e.tier === 'miniboss' ? '#f43f5e' : '#ef4444';
-      const r = e.tier === 'boss' ? 4.5 : e.tier === 'miniboss' ? 3.5 : 1.9;
+      if (!e.alive || e.tier === 'root_trap' || e.tier === 'barrel') continue;
+      ctx.fillStyle =
+        e.tier === 'goblin'
+          ? '#fde047'
+          : e.tier === 'totem'
+            ? '#c084fc'
+            : e.tier === 'boss' || e.tier === 'miniboss'
+              ? '#f43f5e'
+              : e.tier === 'elite'
+                ? '#fb923c'
+                : '#ef4444';
+      const r =
+        e.tier === 'boss'
+          ? 4.6
+          : e.tier === 'miniboss' || e.tier === 'goblin'
+            ? 3.8
+            : e.tier === 'totem' || e.tier === 'elite'
+              ? 2.8
+              : 1.9;
       ctx.beginPath();
       ctx.arc(toX(e.x), toY(e.z), r, 0, Math.PI * 2);
       ctx.fill();
@@ -358,8 +383,42 @@ export const Hud: React.FC<HudProps> = ({
           <div className="comic-title" style={{ fontSize: 22, color: '#fff', lineHeight: 1.1 }}>
             {loc.name}
           </div>
+          {(() => {
+            const mut = LOCATION_MUTATORS[snapshot?.mutatorId ?? loc.mutatorId];
+            return (
+              <div
+                style={{
+                  marginTop: 4,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '2px 10px',
+                  borderRadius: 999,
+                  background: 'rgba(15, 18, 33, 0.82)',
+                  border: `1.5px solid ${mut.color}`,
+                  fontSize: 11,
+                  fontWeight: 900,
+                  color: mut.color,
+                }}
+                title={mut.shortDesc}
+              >
+                <span>
+                  {mut.icon} {mut.name.toUpperCase()}
+                </span>
+                <span style={{ color: '#e2e8f0', fontSize: 10 }}>+{mut.xpBonusPct}% XP</span>
+                {snapshot?.goblinAlive && (
+                  <span style={{ color: '#fde047', fontSize: 10 }}>• 💰 GOBLIN NA MAPIE!</span>
+                )}
+                {snapshot?.obelisk?.state === 'active' && (
+                  <span style={{ color: '#fb7185', fontSize: 10 }}>
+                    • 🔮 FALA {snapshot.obelisk.currentWave}/{snapshot.obelisk.maxWaves}
+                  </span>
+                )}
+              </div>
+            );
+          })()}
           {snapshot && (
-            <div style={{ fontSize: 11, color: '#cbd5e1', marginTop: 3, display: 'flex', justifyContent: 'center', gap: 12 }}>
+            <div style={{ fontSize: 11, color: '#cbd5e1', marginTop: 4, display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap' }}>
               <span>⚔️ Wrogowie: {snapshot.enemiesRemaining}/{snapshot.totalEnemies}</span>
               <span>
                 🧩 Zagadka:{' '}
@@ -450,6 +509,109 @@ export const Hud: React.FC<HudProps> = ({
           </div>
         )}
       </div>
+
+      {/* KILL-STREAK COMBO COUNTER (Right-Center) */}
+      {snapshot && snapshot.comboCount >= 2 && snapshot.comboExpiresAt > now && (
+        <div
+          className="comic-panel-sm"
+          style={{
+            position: 'absolute',
+            right: 16,
+            top: 235,
+            padding: '8px 14px',
+            borderColor:
+              snapshot.comboCount >= 20
+                ? '#f43f5e'
+                : snapshot.comboCount >= 10
+                  ? '#f59e0b'
+                  : '#fbbf24',
+            background: 'linear-gradient(135deg, rgba(40, 14, 48, 0.92), rgba(17, 20, 38, 0.92))',
+            minWidth: 168,
+            textAlign: 'right',
+          }}
+        >
+          <div
+            className="comic-title"
+            style={{
+              fontSize: 26,
+              lineHeight: 1,
+              color:
+                snapshot.comboCount >= 20
+                  ? '#fb7185'
+                  : snapshot.comboCount >= 10
+                    ? '#fb923c'
+                    : '#fde047',
+            }}
+          >
+            {snapshot.comboCount >= 30
+              ? '👑 '
+              : snapshot.comboCount >= 20
+                ? '💀 '
+                : snapshot.comboCount >= 10
+                  ? '⚡ '
+                  : '🔥 '}
+            {snapshot.comboCount}x COMBO!
+          </div>
+          <div style={{ fontSize: 10, fontWeight: 900, color: '#e2e8f0', marginTop: 2 }}>
+            +{Math.min(40, snapshot.comboCount * 2)}% ASPD • +{Math.min(50, snapshot.comboCount * 3)}% XP
+          </div>
+          <div
+            style={{
+              height: 5,
+              marginTop: 5,
+              background: '#0f1221',
+              borderRadius: 99,
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                width: `${Math.max(0, Math.min(100, ((snapshot.comboExpiresAt - now) / 5500) * 100))}%`,
+                height: '100%',
+                background: 'linear-gradient(90deg, #f59e0b, #f43f5e)',
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ACTIVE CHAOS BOONS BAR (Just above bottom action bar) */}
+      {localPlayer && localPlayer.activeBoons && localPlayer.activeBoons.length > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 138,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            gap: 6,
+            pointerEvents: 'auto',
+          }}
+        >
+          {localPlayer.activeBoons.map((bid) => {
+            const b = CHAOS_BOONS[bid];
+            if (!b) return null;
+            return (
+              <div
+                key={bid}
+                title={`${b.name}: ${b.description}`}
+                style={{
+                  padding: '3px 10px',
+                  borderRadius: 999,
+                  background: 'rgba(16, 18, 34, 0.9)',
+                  border: `2px solid ${b.color}`,
+                  fontSize: 11,
+                  fontWeight: 900,
+                  color: b.color,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.45)',
+                }}
+              >
+                {b.icon} {b.name}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* TOP-RIGHT: Minimap + Quick Controls */}
       <div

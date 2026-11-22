@@ -22,6 +22,15 @@ import {
   MAIN_BOSSES,
 } from '../shared/bosses.js';
 import { generateEquipmentItem, rollDropRarity } from '../shared/items.js';
+import {
+  ALL_BOON_IDS,
+  BoonId,
+  CHAOS_BOONS,
+  ELITE_AFFIX_META,
+  EliteAffix,
+  LOCATION_MUTATORS,
+  LocationMutatorId,
+} from '../shared/mutators.js';
 import { getRuneByAct, RUNE_SHARD_DROP_CHANCE } from '../shared/runes.js';
 import {
   createSeededRng,
@@ -141,6 +150,10 @@ interface ServerPlayer extends NetPlayerState {
   respawnAt: number;
   lastPlateId?: string;
   lastWardHintAt?: number;
+  activeBoons: BoonId[];
+  pendingBoonChoices?: BoonId[];
+  flameAuraNextTick: number;
+  titanBarrierNextTick: number;
 }
 
 interface ServerEnemy extends EnemyState {
@@ -160,6 +173,9 @@ interface ServerEnemy extends EnemyState {
   armorPenPct: number;
   requiredPower: number;
   skillMaxHpPct: number;
+  isWaveMob?: boolean;
+  goblinDespawnAt?: number;
+  nextSpecialAt?: number;
 }
 
 interface ActiveTelegraph extends TelegraphZone {
@@ -176,6 +192,7 @@ interface ActiveTelegraph extends TelegraphZone {
   armorPenPct?: number;
   extraMaxHpPct?: number;
   bossRequiredPower?: number;
+  hitsEnemies?: boolean;
 }
 
 interface GameRoom {
@@ -193,6 +210,10 @@ interface GameRoom {
   totalEnemies: number;
   bossDefeated: boolean;
   clearBonusAwarded: boolean;
+  mutatorId: LocationMutatorId;
+  comboCount: number;
+  comboExpiresAt: number;
+  nextMeteorAt: number;
   trades: Map<string, TradeSessionState>;
   pendingCombatTexts: FloatingCombatText[];
   pendingVfx: SkillVfxEvent[];
@@ -292,7 +313,102 @@ function getPartyFairyAuraCdr(room: GameRoom): number {
 function getEffectivePlayerCdr(room: GameRoom, player: ServerPlayer): number {
   const baseCdr = player.stats.cdr;
   const fairyAura = player.classId === 'wrozka' ? 0 : getPartyFairyAuraCdr(room);
-  return Math.min(35, baseCdr + fairyAura);
+  const boonCdr = player.activeBoons.includes('swift_step') ? 25 : 0;
+  return Math.min(55, baseCdr + fairyAura + boonCdr);
+}
+
+function offerBoonsToParty(room: GameRoom, sourceTitle: string) {
+  for (const ally of room.players.values()) {
+    const available = ALL_BOON_IDS.filter((id) => !ally.activeBoons.includes(id));
+    const pool = available.length >= 3 ? available : [...ALL_BOON_IDS];
+    const shuffled = [...pool].sort(() => Math.random() - 0.5);
+    const choices = shuffled.slice(0, 3);
+    ally.pendingBoonChoices = choices;
+    io.to(ally.socketId).emit('boon:offer', {
+      title: sourceTitle,
+      choices,
+    });
+  }
+}
+
+function pickEliteAffix(rng: () => number): EliteAffix {
+  const list: EliteAffix[] = ['mortar', 'frost', 'charger', 'vampiric'];
+  return list[Math.floor(rng() * list.length)];
+}
+
+function spawnObeliskWave(room: GameRoom, waveNum: number) {
+  if (!room.mapData?.obelisk) return;
+  const ob = room.mapData.obelisk;
+  const loc = room.mapData.location;
+  const partySize = Math.max(1, room.players.size);
+  const countMult = getEnemyCountMultiplier(partySize);
+  const actRoster = ACT_ENEMIES[loc.act];
+  const L = loc.globalIndex;
+  const baseMobHp = Math.round(180 + L * 68 + Math.pow(L, 2.25) * 2.35);
+  const baseMobDmg = Math.round(16 + L * 5.2 + Math.pow(L, 1.72) * 0.72);
+  const mobArmor = Math.round(12 + L * 4.5);
+
+  const packCount = Math.round((4 + waveNum * 2) * countMult);
+  for (let i = 0; i < packCount; i++) {
+    const arch = actRoster[Math.floor(Math.random() * actRoster.length)];
+    const isElite = i === 0 || (waveNum === 3 && i === 1);
+    const affix = isElite ? pickEliteAffix(Math.random) : undefined;
+    const ang = (i / packCount) * Math.PI * 2 + Math.random() * 0.4;
+    const dist = 6.5 + Math.random() * 4.5;
+    const ex = ob.x + Math.cos(ang) * dist;
+    const ez = ob.z + Math.sin(ang) * dist;
+    const hp = Math.round(baseMobHp * arch.hpMult * (isElite ? 2.2 : 0.92));
+    const dmg = Math.round(baseMobDmg * arch.dmgMult * (isElite ? 1.3 : 1.0));
+    const mob: ServerEnemy = {
+      id: nextId('wave'),
+      archetype: arch.archetype,
+      name:
+        isElite && affix
+          ? `${ELITE_AFFIX_META[affix].icon} Elitarny ${arch.name}`
+          : isElite
+            ? `Elitarny ${arch.name}`
+            : arch.name,
+      tier: isElite ? 'elite' : 'normal',
+      act: loc.act,
+      affix,
+      x: ex,
+      z: ez,
+      homeX: ob.x,
+      homeZ: ob.z,
+      rotY: 0,
+      hp,
+      maxHp: hp,
+      shield: 0,
+      maxShield: 0,
+      radius: arch.radius * (isElite ? 1.24 : 1.0),
+      speed: arch.speed * 1.08,
+      damage: dmg,
+      xpReward: Math.max(15, Math.round(targetLocationXpPool(L) * 0.015)),
+      alive: true,
+      animState: 'run',
+      stunnedUntil: 0,
+      slowedUntil: 0,
+      weakenedUntil: 0,
+      tauntedBy: null,
+      tauntedUntil: 0,
+      aggro: true,
+      nextAttackAt: 0,
+      abilityCooldowns: {},
+      armor: isElite ? Math.round(mobArmor * 1.25) : mobArmor,
+      armorPenPct: isElite ? 8 : 4,
+      requiredPower: 0,
+      skillMaxHpPct: 0,
+      isWaveMob: true,
+      nextSpecialAt: Date.now() + 2600 + Math.random() * 2000,
+    };
+    room.enemies.set(mob.id, mob);
+  }
+  pushVfx(room, { kind: 'boss_summon', x: ob.x, z: ob.z, radius: 7, color: '#38bdf8' });
+  io.to(room.code).emit('game:banner', {
+    type: 'boss',
+    title: `🔮 FALA ${waveNum}/${ob.maxWaves} — PRZETRWAJ ZASADZKĘ!`,
+    subtitle: 'Pokonaj wszystkich napastników wokół Kryształu Fal!',
+  });
 }
 
 /**
@@ -324,6 +440,10 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
   room.pillars = [];
   room.bossDefeated = false;
   room.clearBonusAwarded = false;
+  room.mutatorId = map.location.mutatorId;
+  room.comboCount = 0;
+  room.comboExpiresAt = 0;
+  room.nextMeteorAt = Date.now() + 4500;
 
   const partySize = Math.max(1, room.players.size);
   const countMult = getEnemyCountMultiplier(partySize);
@@ -331,6 +451,9 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
   const bossDmgMult = getBossDamageMultiplier(partySize);
 
   const loc = map.location;
+  const mutDef = LOCATION_MUTATORS[loc.mutatorId];
+  const isBounty = loc.mutatorId === 'bounty_hunt';
+  const isFrenzy = loc.mutatorId === 'blood_frenzy';
   const rng = createSeededRng(loc.seed + 999);
   const actRoster = ACT_ENEMIES[loc.act];
 
@@ -433,7 +556,8 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
         const count = Math.round(6 * countMult);
         for (let k = 0; k < count; k++) {
           const arch = actRoster[Math.floor(rng() * actRoster.length)];
-          const isElite = k < 2;
+          const isElite = k < (isBounty ? 3 : 2);
+          const affix = isElite ? pickEliteAffix(rng) : undefined;
           const angle = (k / count) * Math.PI * 2;
           const dist = 4 + rng() * 6;
           const ex = r.cx + Math.cos(angle) * dist;
@@ -443,9 +567,15 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
           spawnedEnemies.push({
             id: nextId('mob'),
             archetype: arch.archetype,
-            name: isElite ? `Elitarny ${arch.name}` : arch.name,
+            name:
+              isElite && affix
+                ? `${ELITE_AFFIX_META[affix].icon} Elitarny ${arch.name}`
+                : isElite
+                  ? `Elitarny ${arch.name}`
+                  : arch.name,
             tier: isElite ? 'elite' : 'normal',
             act: loc.act,
+            affix,
             x: ex,
             z: ez,
             homeX: ex,
@@ -456,7 +586,7 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
             shield: 0,
             maxShield: 0,
             radius: arch.radius * (isElite ? 1.25 : 1.0),
-            speed: arch.speed,
+            speed: arch.speed * (isFrenzy ? 1.25 : 1.0),
             damage: dmg,
             xpReward: 0,
             alive: true,
@@ -473,6 +603,7 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
             armorPenPct: isElite ? 10 : 4,
             requiredPower: 0,
             skillMaxHpPct: 0,
+            nextSpecialAt: Date.now() + 2500 + Math.floor(rng() * 2500),
           });
         }
       }
@@ -485,7 +616,9 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
 
     for (let k = 0; k < scaledCount; k++) {
       const arch = actRoster[Math.floor(rng() * actRoster.length)];
-      const isElite = k === 0 && (r.kind === 'combat' || r.kind === 'secret');
+      const isElite =
+        (k === 0 || (isBounty && k === 1)) && (r.kind === 'combat' || r.kind === 'secret' || (isBounty && r.kind === 'shrine'));
+      const affix = isElite ? pickEliteAffix(rng) : undefined;
       const angle = rng() * Math.PI * 2;
       const dist = 3 + rng() * 9.5;
       const ex = r.cx + Math.cos(angle) * dist;
@@ -496,9 +629,15 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
       spawnedEnemies.push({
         id: nextId('mob'),
         archetype: arch.archetype,
-        name: isElite ? `Elitarny ${arch.name}` : arch.name,
+        name:
+          isElite && affix
+            ? `${ELITE_AFFIX_META[affix].icon} Elitarny ${arch.name}`
+            : isElite
+              ? `Elitarny ${arch.name}`
+              : arch.name,
         tier: isElite ? 'elite' : 'normal',
         act: loc.act,
+        affix,
         x: ex,
         z: ez,
         homeX: ex,
@@ -509,7 +648,7 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
         shield: 0,
         maxShield: 0,
         radius: arch.radius * (isElite ? 1.22 : 1.0),
-        speed: arch.speed,
+        speed: arch.speed * (isFrenzy ? 1.25 : 1.0),
         damage: dmg,
         xpReward: 0,
         alive: true,
@@ -526,6 +665,166 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
         armorPenPct: isElite ? 8 : 4,
         requiredPower: 0,
         skillMaxHpPct: 0,
+        nextSpecialAt: Date.now() + 2500 + Math.floor(rng() * 2500),
+      });
+    }
+
+    // Spawn 1-2 tactical Explosive Powder Barrels in combat/shrine/puzzle rooms!
+    if (r.kind === 'combat' || r.kind === 'shrine' || r.kind === 'puzzle') {
+      const barrelCount = r.kind === 'combat' ? 2 : 1;
+      for (let b = 0; b < barrelCount; b++) {
+        const ba = rng() * Math.PI * 2;
+        const bd = 4.5 + rng() * 5.5;
+        const bx = r.cx + Math.cos(ba) * bd;
+        const bz = r.cz + Math.sin(ba) * bd;
+        const bid = nextId('barrel');
+        room.enemies.set(bid, {
+          id: bid,
+          archetype: 'explosive_barrel',
+          name: '🧨 Beczka Prochowa',
+          tier: 'barrel',
+          act: loc.act,
+          x: bx,
+          z: bz,
+          homeX: bx,
+          homeZ: bz,
+          rotY: rng() * Math.PI * 2,
+          hp: 1,
+          maxHp: 1,
+          shield: 0,
+          maxShield: 0,
+          radius: 0.95,
+          speed: 0,
+          damage: 0,
+          xpReward: 0,
+          alive: true,
+          animState: 'idle',
+          stunnedUntil: 0,
+          slowedUntil: 0,
+          weakenedUntil: 0,
+          tauntedBy: null,
+          tauntedUntil: 0,
+          aggro: false,
+          nextAttackAt: 0,
+          abilityCooldowns: {},
+          armor: 0,
+          armorPenPct: 0,
+          requiredPower: 0,
+          skillMaxHpPct: 0,
+        });
+      }
+    }
+
+    // Spawn Shield Totems on shield_totems maps!
+    if (loc.mutatorId === 'shield_totems' && (r.kind === 'combat' || r.kind === 'shrine')) {
+      const totemHp = Math.round(baseMobHp * 1.8);
+      const tid = nextId('totem');
+      room.enemies.set(tid, {
+        id: tid,
+        archetype: 'shield_totem',
+        name: '🛡️ Totem Ochronny',
+        tier: 'totem',
+        act: loc.act,
+        x: r.cx + (rng() - 0.5) * 6,
+        z: r.cz + (rng() - 0.5) * 6,
+        homeX: r.cx,
+        homeZ: r.cz,
+        rotY: 0,
+        hp: totemHp,
+        maxHp: totemHp,
+        shield: 0,
+        maxShield: 0,
+        radius: 1.15,
+        speed: 0,
+        damage: 0,
+        xpReward: Math.max(25, Math.round(totalXpPool * 0.03)),
+        alive: true,
+        animState: 'idle',
+        stunnedUntil: 0,
+        slowedUntil: 0,
+        weakenedUntil: 0,
+        tauntedBy: null,
+        tauntedUntil: 0,
+        aggro: false,
+        nextAttackAt: 0,
+        abilityCooldowns: {},
+        armor: 0,
+        armorPenPct: 0,
+        requiredPower: 0,
+        skillMaxHpPct: 0,
+        nextSpecialAt: Date.now() + 2000,
+      });
+    }
+  }
+
+  // Spawn Golden Treasure Goblin on treasure_goblin maps (or 25% surprise chance on regular maps!)
+  if (loc.mutatorId === 'treasure_goblin' || (!loc.isMainBoss && !loc.isMiniBoss && Math.random() < 0.25)) {
+    const gobRoom = map.rooms.find((r) => r.kind === 'combat' && r.index !== 0 && r.index !== 8) ?? map.rooms[4];
+    const gobHp = Math.round(baseMobHp * 3.6 * countMult);
+    const gid = nextId('goblin');
+    room.enemies.set(gid, {
+      id: gid,
+      archetype: 'treasure_goblin',
+      name: '💰 Złoty Goblin Skarbów',
+      tier: 'goblin',
+      act: loc.act,
+      x: gobRoom.cx + 3,
+      z: gobRoom.cz - 3,
+      homeX: gobRoom.cx,
+      homeZ: gobRoom.cz,
+      rotY: 0,
+      hp: gobHp,
+      maxHp: gobHp,
+      shield: 0,
+      maxShield: 0,
+      radius: 1.0,
+      speed: 7.4,
+      damage: 0,
+      xpReward: Math.max(40, Math.round(totalXpPool * 0.08)),
+      alive: true,
+      animState: 'idle',
+      stunnedUntil: 0,
+      slowedUntil: 0,
+      weakenedUntil: 0,
+      tauntedBy: null,
+      tauntedUntil: 0,
+      aggro: false,
+      nextAttackAt: 0,
+      abilityCooldowns: {},
+      armor: 0,
+      armorPenPct: 0,
+      requiredPower: 0,
+      skillMaxHpPct: 0,
+    });
+  }
+
+  // Spawn 4 roaming 3D elemental vortices on roaming_vortex maps!
+  if (loc.mutatorId === 'roaming_vortex') {
+    const now = Date.now();
+    const vortexRooms = map.rooms.filter((r) => r.index !== 0 && r.kind !== 'secret').slice(0, 4);
+    for (const vr of vortexRooms) {
+      const ang = rng() * Math.PI * 2;
+      const vid = nextId('vortex');
+      room.telegraphs.set(vid, {
+        id: vid,
+        shape: 'circle',
+        x: vr.cx,
+        z: vr.cz,
+        radius: 2.7,
+        color: '#2dd4bf',
+        label: 'Wir Żywiołów',
+        createdAt: now,
+        triggerAt: now + 800,
+        duration: 600000,
+        expiresAt: now + 600800,
+        ownerId: 'world',
+        abilityId: 'burza_piaskowa',
+        vx: Math.cos(ang) * 4.8,
+        vz: Math.sin(ang) * 4.8,
+        resolved: false,
+        damage: Math.round(baseMobDmg * 0.72),
+        damageType: 'magical',
+        appliesSlow: true,
       });
     }
   }
@@ -557,6 +856,10 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
     p.slowedUntil = 0;
     p.poisonUntil = 0;
     p.animState = 'idle';
+    p.activeBoons = [];
+    p.pendingBoonChoices = undefined;
+    p.flameAuraNextTick = 0;
+    p.titanBarrierNextTick = 0;
     pIdx++;
   }
 
@@ -566,6 +869,11 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
     enemyCountMultiplier: countMult,
     bossHpMultiplier: bossHpMult,
     bossDamageMultiplier: bossDmgMult,
+  });
+  io.to(room.code).emit('game:banner', {
+    type: loc.isMainBoss || loc.isMiniBoss ? 'boss' : 'secret',
+    title: `${mutDef.icon} ${loc.name.toUpperCase()}`,
+    subtitle: `${mutDef.name}: ${mutDef.shortDesc}`,
   });
   broadcastRoomSummary(room);
 }
@@ -674,7 +982,8 @@ function damageEnemy(
   rawDamage: number,
   damageType: DamageType,
   now: number,
-  canCrit = true
+  canCrit = true,
+  allowBoonProcs = true
 ): number {
   if (!enemy.alive) return 0;
   if (enemy.burrowUntil && now < enemy.burrowUntil) return 0;
@@ -713,9 +1022,12 @@ function damageEnemy(
     }
   }
 
-  const isCrit = canCrit && Math.random() * 100 < attacker.stats.critChance;
+  const hasCritFury = attacker.activeBoons.includes('crit_fury');
+  const effCritChance = attacker.stats.critChance + (hasCritFury ? 28 : 0);
+  const effCritDmg = attacker.stats.critDamage + (hasCritFury ? 55 : 0);
+  const isCrit = canCrit && enemy.tier !== 'barrel' && Math.random() * 100 < effCritChance;
   if (isCrit) {
-    dmg *= attacker.stats.critDamage / 100;
+    dmg *= effCritDmg / 100;
   }
 
   dmg = Math.max(1, Math.round(dmg * (0.94 + Math.random() * 0.12)));
@@ -737,18 +1049,43 @@ function damageEnemy(
 
   if (dmg > 0) {
     enemy.hp = Math.max(0, enemy.hp - dmg);
+    if (allowBoonProcs && enemy.tier !== 'barrel') {
+      // Vampiric Strikes Boon: heal 10% of damage dealt!
+      if (attacker.activeBoons.includes('vampiric_strikes') && attacker.alive && attacker.hp < attacker.maxHp) {
+        const vampHeal = Math.max(2, Math.min(attacker.maxHp - attacker.hp, Math.round(dmg * 0.1)));
+        attacker.hp += vampHeal;
+      }
+      // Chain Lightning Boon: 35% chance to arc lightning to nearby enemies!
+      if (attacker.activeBoons.includes('chain_lightning') && Math.random() < 0.35) {
+        let jumps = 0;
+        for (const other of room.enemies.values()) {
+          if (!other.alive || other.id === enemy.id || other.tier === 'root_trap') continue;
+          if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 6.8) {
+            jumps++;
+            pushVfx(room, { kind: 'wind_blade', x: enemy.x, z: enemy.z, tx: other.x, tz: other.z, color: '#a855f7' });
+            damageEnemy(room, attacker, other, Math.round(dmg * 0.55), 'magical', now, false, false);
+            if (jumps >= 2) break;
+          }
+        }
+        if (jumps > 0) {
+          pushCombatText(room, enemy.x, 3.3, enemy.z, '⚡ PIORUN!', 'magical', false, true);
+        }
+      }
+    }
   }
 
-  pushCombatText(
-    room,
-    enemy.x + (Math.random() - 0.5) * 0.8,
-    enemy.tier === 'boss' ? 4.2 : 2.5,
-    enemy.z + (Math.random() - 0.5) * 0.8,
-    isCrit ? `${dmg}!` : `${dmg}`,
-    damageType,
-    isCrit,
-    false
-  );
+  if (enemy.tier !== 'barrel') {
+    pushCombatText(
+      room,
+      enemy.x + (Math.random() - 0.5) * 0.8,
+      enemy.tier === 'boss' ? 4.2 : 2.5,
+      enemy.z + (Math.random() - 0.5) * 0.8,
+      isCrit ? `${dmg}!` : `${dmg}`,
+      damageType,
+      isCrit,
+      false
+    );
+  }
 
   if (isCrit) {
     io.to(attacker.socketId).emit('juice:crit', { intensity: enemy.tier === 'boss' ? 1.15 : 0.8 });
@@ -813,19 +1150,133 @@ function handleEnemyDeath(
     return;
   }
 
+  if (enemy.tier === 'barrel') {
+    pushVfx(room, { kind: 'meteor', x: enemy.x, z: enemy.z, radius: 6.5, color: '#f97316' });
+    pushCombatText(room, enemy.x, 2.8, enemy.z, '💥 KABOOM!', 'physical', true, true);
+    for (const other of room.enemies.values()) {
+      if (!other.alive || other.id === enemy.id || other.tier === 'root_trap') continue;
+      if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 6.8 + other.radius) {
+        const blastPct = other.tier === 'boss' ? 0.06 : other.tier === 'miniboss' ? 0.1 : 0.42;
+        const blastDmg = Math.max(120, Math.round(other.maxHp * blastPct));
+        damageEnemy(room, killer, other, blastDmg, 'magical', now, false, false);
+      }
+    }
+    return;
+  }
+
   if (enemy.tier === 'summon') return;
 
   const loc = getLocationDef(room.globalLocation);
+  const mutDef = LOCATION_MUTATORS[room.mutatorId];
+  const fortuneLuck = killer.activeBoons.includes('golden_fortune') ? 1.65 : 1.0;
+  const effectiveLuck = mutDef.luckBonus * fortuneLuck;
 
-  io.to(room.code).emit('player:xp_gain', {
-    amount: enemy.xpReward,
-    source: enemy.name,
-  });
+  // Update Party Kill-Streak Combo!
+  room.comboCount = now <= room.comboExpiresAt ? room.comboCount + 1 : 1;
+  room.comboExpiresAt = now + 5500;
+  if (room.comboCount === 5 || room.comboCount === 10 || room.comboCount === 20 || room.comboCount === 30) {
+    const label =
+      room.comboCount >= 30
+        ? '👑 30x LEGENDA!'
+        : room.comboCount >= 20
+          ? '💀 20x MASAKRA!'
+          : room.comboCount >= 10
+            ? '⚡ 10x SZAŁ!'
+            : '🔥 5x SERIA!';
+    pushCombatText(room, killer.x, 3.6, killer.z, label, 'physical', true, true);
+  }
+
+  const comboXpMult = 1 + Math.min(0.5, room.comboCount * 0.03);
+  const mutXpMult = 1 + mutDef.xpBonusPct / 100;
+  const boonXpMult = killer.activeBoons.includes('golden_fortune') ? 1.35 : 1.0;
+  const finalXp = Math.round(enemy.xpReward * comboXpMult * mutXpMult * boonXpMult);
+
+  if (finalXp > 0) {
+    io.to(room.code).emit('player:xp_gain', {
+      amount: finalXp,
+      source: enemy.name,
+    });
+  }
+
+  if (enemy.tier === 'goblin') {
+    pushVfx(room, { kind: 'chest_open', x: enemy.x, z: enemy.z, radius: 5, color: '#fbbf24' });
+    for (let i = 0; i < 5; i++) {
+      spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, true, 1.55 * fortuneLuck, killer.classId);
+    }
+    io.to(room.code).emit('game:banner', {
+      type: 'secret',
+      title: '💰 ZŁOTY GOBLIN POKONANY!',
+      subtitle: 'Worek skarbów pękł — 5 rzadkich łupów rozsypało się na arenie!',
+    });
+    return;
+  }
+
+  if (enemy.tier === 'totem') {
+    pushVfx(room, { kind: 'puzzle_solve', x: enemy.x, z: enemy.z, radius: 5, color: '#a855f7' });
+    pushCombatText(room, enemy.x, 3.2, enemy.z, '🛡️ TOTEM ROZBITY!', 'shield', true, true);
+    for (const other of room.enemies.values()) {
+      if (other.alive && other.shield > 0 && Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 18) {
+        other.shield = 0;
+      }
+    }
+    return;
+  }
+
+  // Volatile Foes mutator: slain mobs leave a telegraphed blast that hits players AND nearby enemies!
+  if (room.mutatorId === 'volatile_foes' && (enemy.tier === 'normal' || enemy.tier === 'elite')) {
+    const bid = nextId('tel');
+    room.telegraphs.set(bid, {
+      id: bid,
+      shape: 'circle',
+      x: enemy.x,
+      z: enemy.z,
+      radius: 4.1,
+      color: '#ef4444',
+      label: 'Wybuch!',
+      createdAt: now,
+      triggerAt: now + 1150,
+      ownerId: enemy.id,
+      abilityId: 'volatile_blast',
+      resolved: false,
+      damage: Math.round(enemy.damage * 1.15),
+      damageType: 'magical',
+      hitsEnemies: true,
+    });
+  }
+
+  // Check Wave Obelisk progress!
+  if (enemy.isWaveMob && room.mapData?.obelisk && room.mapData.obelisk.state === 'active') {
+    let waveRemaining = 0;
+    for (const e of room.enemies.values()) {
+      if (e.alive && e.isWaveMob) waveRemaining++;
+    }
+    if (waveRemaining === 0) {
+      const ob = room.mapData.obelisk;
+      if (ob.currentWave < ob.maxWaves) {
+        ob.currentWave++;
+        spawnObeliskWave(room, ob.currentWave);
+      } else {
+        ob.state = 'completed';
+        pushVfx(room, { kind: 'chest_open', x: ob.x, z: ob.z, radius: 6, color: '#38bdf8' });
+        for (let i = 0; i < 3; i++) {
+          spawnEquipmentDrop(room, ob.x, ob.z, loc.globalIndex, true, 1.45 * fortuneLuck, killer.classId);
+        }
+        const waveBonusXp = Math.round(targetLocationXpPool(loc.globalIndex) * 0.18);
+        io.to(room.code).emit('player:xp_gain', { amount: waveBonusXp, source: 'Ołtarz Fal' });
+        io.to(room.code).emit('game:banner', {
+          type: 'boss_kill',
+          title: '🏆 WYZWANIE FAL UKOŃCZONE!',
+          subtitle: 'Zdobyto Skarb Mistrzów oraz wybór nowego Daru Chaosu!',
+        });
+        offerBoonsToParty(room, '🏆 NAGRODA OŁTARZA FAL — WYBIERZ DAR!');
+      }
+    }
+  }
 
   if (enemy.tier === 'boss') {
     room.bossDefeated = true;
     for (let i = 0; i < 6; i++) {
-      spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, i < 3, 1.35, killer.classId);
+      spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, i < 3, 1.35 * fortuneLuck, killer.classId);
     }
 
     const rune = getRuneByAct(loc.act);
@@ -853,7 +1304,7 @@ function handleEnemyDeath(
   } else if (enemy.tier === 'miniboss') {
     room.bossDefeated = true;
     for (let i = 0; i < 4; i++) {
-      spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, i < 2, 1.2, killer.classId);
+      spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, i < 2, 1.2 * fortuneLuck, killer.classId);
     }
     io.to(room.code).emit('game:banner', {
       type: 'boss_kill',
@@ -861,10 +1312,10 @@ function handleEnemyDeath(
       subtitle: 'Portal do kolejnej lokacji został otwarty!',
     });
   } else if (enemy.tier === 'elite') {
-    spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, true, 1.15, killer.classId);
-    spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, false, 1.0, killer.classId);
+    spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, true, 1.15 * effectiveLuck, killer.classId);
+    spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, false, effectiveLuck, killer.classId);
   } else if (Math.random() < 0.55) {
-    spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, false, 1.0, killer.classId);
+    spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, false, effectiveLuck, killer.classId);
   }
 }
 
@@ -1586,6 +2037,11 @@ function tickRoom(room: GameRoom) {
     room.pillars = room.pillars.filter((p) => p.expiresAt > now);
   }
 
+  // Decay Kill-Streak Combo cleanly
+  if (room.comboCount > 0 && now > room.comboExpiresAt) {
+    room.comboCount = 0;
+  }
+
   for (const p of room.players.values()) {
     if (!p.alive) {
       if (p.respawnAt > 0 && now >= p.respawnAt) {
@@ -1604,6 +2060,32 @@ function tickRoom(room: GameRoom) {
     if (p.shield > 0 && p.shieldExpiresAt > 0 && now >= p.shieldExpiresAt) {
       p.shield = 0;
       p.shieldExpiresAt = 0;
+    }
+
+    // Chaos Boon: Titan Barrier (refresh 22% Max HP shield every 6s!)
+    if (p.activeBoons.includes('titan_barrier') && now >= p.titanBarrierNextTick) {
+      p.titanBarrierNextTick = now + 6000;
+      const shAmt = applyBoundedShield(p, Math.round(p.maxHp * 0.22), 5500, now);
+      if (shAmt > 0) {
+        pushCombatText(room, p.x, 2.8, p.z, `🛡️ +${shAmt}`, 'shield', false, false);
+      }
+    }
+
+    // Chaos Boon: Flame Aura (pulsing fire ring around hero every 1.6s!)
+    if (p.activeBoons.includes('flame_aura') && now >= p.flameAuraNextTick) {
+      p.flameAuraNextTick = now + 1600;
+      const auraDmg = Math.max(25, Math.round(Math.max(p.stats.ad, p.stats.ap) * 0.62));
+      let hitAny = false;
+      for (const e of room.enemies.values()) {
+        if (!e.alive || e.tier === 'root_trap') continue;
+        if (Math.hypot(e.x - p.x, e.z - p.z) <= 4.6 + e.radius) {
+          damageEnemy(room, p, e, auraDmg, 'magical', now, false, false);
+          hitAny = true;
+        }
+      }
+      if (hitAny) {
+        pushVfx(room, { kind: 'miniboss_magma_slam', x: p.x, z: p.z, radius: 4.5, color: '#f97316' });
+      }
     }
 
     p.mana = Math.min(p.maxMana, p.mana + p.maxMana * 0.068 * dt);
@@ -1648,9 +2130,122 @@ function tickRoom(room: GameRoom) {
 
   const alivePlayers = Array.from(room.players.values()).filter((p) => p.alive);
 
+  // Meteor Storm mutator: periodic telegraphed sky meteors near a player (can hit mobs too!)
+  if (room.mutatorId === 'meteor_storm' && alivePlayers.length > 0 && now >= room.nextMeteorAt) {
+    room.nextMeteorAt = now + 4200;
+    const refP = alivePlayers[Math.floor(Math.random() * alivePlayers.length)];
+    const L = room.globalLocation;
+    const metDmg = Math.round((24 + L * 6.5 + Math.pow(L, 1.7) * 0.8) * 1.15);
+    for (let m = 0; m < 2; m++) {
+      const mx = refP.x + (Math.random() - 0.5) * 10;
+      const mz = refP.z + (Math.random() - 0.5) * 10;
+      const mid = nextId('tel');
+      room.telegraphs.set(mid, {
+        id: mid,
+        shape: 'circle',
+        x: mx,
+        z: mz,
+        radius: 3.4,
+        color: '#f97316',
+        label: '☄️ Meteor',
+        createdAt: now,
+        triggerAt: now + 1350 + m * 220,
+        ownerId: 'world',
+        abilityId: 'mutator_meteor',
+        resolved: false,
+        damage: metDmg,
+        damageType: 'magical',
+        hitsEnemies: true,
+      });
+    }
+  }
+
   for (const e of room.enemies.values()) {
     if (!e.alive) continue;
-    if (e.tier === 'root_trap') continue;
+    if (e.tier === 'root_trap' || e.tier === 'barrel') continue;
+
+    // Shield Totem AI: periodically grants protective shield to nearby enemies!
+    if (e.tier === 'totem') {
+      if (!e.nextSpecialAt || now >= e.nextSpecialAt) {
+        e.nextSpecialAt = now + 4400;
+        let buffed = false;
+        for (const ally of room.enemies.values()) {
+          if (!ally.alive || ally.id === e.id || ally.tier === 'totem' || ally.tier === 'barrel' || ally.tier === 'goblin') continue;
+          if (Math.hypot(ally.x - e.x, ally.z - e.z) <= 15) {
+            const sh = Math.round(ally.maxHp * 0.25);
+            if (ally.shield < sh) {
+              ally.shield = sh;
+              ally.maxShield = sh;
+              buffed = true;
+            }
+          }
+        }
+        if (buffed) {
+          pushVfx(room, { kind: 'light_barrier', x: e.x, z: e.z, radius: 13, color: '#a855f7' });
+          pushCombatText(room, e.x, 3.3, e.z, '🛡️ OSŁONA!', 'shield', false, true);
+        }
+      }
+      continue;
+    }
+
+    // Golden Treasure Goblin AI: flees wildly from nearby heroes & drops treasure if slain in time!
+    if (e.tier === 'goblin') {
+      if (alivePlayers.length === 0) continue;
+      let nearest = alivePlayers[0];
+      let nearestDist = Math.hypot(nearest.x - e.x, nearest.z - e.z);
+      for (const p of alivePlayers) {
+        const d = Math.hypot(p.x - e.x, p.z - e.z);
+        if (d < nearestDist) {
+          nearestDist = d;
+          nearest = p;
+        }
+      }
+      if (!e.aggro && nearestDist <= 16.5) {
+        e.aggro = true;
+        e.goblinDespawnAt = now + 38000;
+        pushCombatText(room, e.x, 2.8, e.z, '💰 ŁAP MNIE! HEHE!', 'physical', true, true);
+        io.to(room.code).emit('game:banner', {
+          type: 'secret',
+          title: '💰 ZŁOTY GOBLIN SPŁOSZONY!',
+          subtitle: 'Goń go i pokonaj w 38 sekund zanim ucieknie ze skarbem!',
+        });
+      }
+      if (!e.aggro) {
+        e.animState = 'idle';
+        continue;
+      }
+      if (e.goblinDespawnAt && now >= e.goblinDespawnAt) {
+        e.alive = false;
+        pushVfx(room, { kind: 'puzzle_solve', x: e.x, z: e.z, radius: 4, color: '#fbbf24' });
+        pushCombatText(room, e.x, 2.8, e.z, '💨 GOBLIN UCIEKŁ!', 'physical', false, true);
+        continue;
+      }
+      if (now < e.stunnedUntil) {
+        e.animState = 'idle';
+        continue;
+      }
+      // Run away from nearest player with playful zigzag!
+      const awayX = e.x - nearest.x;
+      const awayZ = e.z - nearest.z;
+      const alen = Math.hypot(awayX, awayZ) || 1;
+      const wobble = Math.sin(now * 0.004) * 0.65;
+      const dirX = (awayX / alen) * Math.cos(wobble) - (awayZ / alen) * Math.sin(wobble);
+      const dirZ = (awayX / alen) * Math.sin(wobble) + (awayZ / alen) * Math.cos(wobble);
+      const spd = e.speed * (now < e.slowedUntil ? 0.55 : 1.0);
+      const resolved = resolveWallCollisions(
+        e.x + dirX * spd * dt,
+        e.z + dirZ * spd * dt,
+        e.radius,
+        map.walls,
+        solvedGates,
+        revealedSecrets
+      );
+      e.x = resolved.x;
+      e.z = resolved.z;
+      e.rotY = Math.atan2(dirX, dirZ);
+      e.animState = 'run';
+      continue;
+    }
 
     if (e.healChannelUntil && now < e.healChannelUntil && e.shield > 0) {
       if (e.healNextTick && now >= e.healNextTick) {
@@ -1708,6 +2303,91 @@ function tickRoom(room: GameRoom) {
         if (ab) {
           startBossAbility(room, e, ab, target, now);
           continue;
+        }
+      }
+    }
+
+    // Elite Affix Special Abilities (makes every Elite exciting to dodge & prioritize!)
+    if (e.tier === 'elite' && e.affix && dist <= 15 && (!e.nextSpecialAt || now >= e.nextSpecialAt)) {
+      e.nextSpecialAt = now + 5600 + Math.random() * 1400;
+      if (e.affix === 'mortar') {
+        const tid = nextId('tel');
+        room.telegraphs.set(tid, {
+          id: tid,
+          shape: 'circle',
+          x: target.x,
+          z: target.z,
+          radius: 3.1,
+          color: '#f97316',
+          label: '🔥 Moździerz',
+          createdAt: now,
+          triggerAt: now + 1100,
+          ownerId: e.id,
+          abilityId: 'elite_mortar',
+          resolved: false,
+          damage: Math.round(e.damage * 1.25),
+          damageType: 'magical',
+          armorPenPct: e.armorPenPct,
+        });
+        pushCombatText(room, e.x, 3.0, e.z, '🔥 MOŹDZIERZ!', 'magical', false, true);
+      } else if (e.affix === 'frost') {
+        const tid = nextId('tel');
+        room.telegraphs.set(tid, {
+          id: tid,
+          shape: 'ring',
+          x: e.x,
+          z: e.z,
+          radius: 6.2,
+          color: '#38bdf8',
+          label: '❄️ Fala Mrozu',
+          createdAt: now,
+          triggerAt: now + 1050,
+          ownerId: e.id,
+          abilityId: 'elite_frost',
+          resolved: false,
+          damage: Math.round(e.damage * 1.05),
+          damageType: 'magical',
+          appliesSlow: true,
+          armorPenPct: e.armorPenPct,
+        });
+        pushCombatText(room, e.x, 3.0, e.z, '❄️ MRÓZ!', 'shield', false, true);
+      } else if (e.affix === 'charger') {
+        const ang = Math.atan2(target.z - e.z, target.x - e.x);
+        const tid = nextId('tel');
+        room.telegraphs.set(tid, {
+          id: tid,
+          shape: 'line',
+          x: e.x,
+          z: e.z,
+          radius: 1.8,
+          length: 11,
+          width: 2.6,
+          angle: ang,
+          color: '#facc15',
+          label: '⚡ Szarża',
+          createdAt: now,
+          triggerAt: now + 950,
+          ownerId: e.id,
+          abilityId: 'elite_charge',
+          resolved: false,
+          damage: Math.round(e.damage * 1.3),
+          damageType: 'physical',
+          armorPenPct: e.armorPenPct,
+        });
+        pushCombatText(room, e.x, 3.0, e.z, '⚡ SZARŻA!', 'physical', false, true);
+      } else if (e.affix === 'vampiric') {
+        let healed = false;
+        for (const ally of room.enemies.values()) {
+          if (!ally.alive || ally.tier === 'barrel' || ally.tier === 'goblin') continue;
+          if (Math.hypot(ally.x - e.x, ally.z - e.z) <= 10 && ally.hp < ally.maxHp) {
+            const h = Math.round(ally.maxHp * 0.14);
+            ally.hp = Math.min(ally.maxHp, ally.hp + h);
+            healed = true;
+          }
+        }
+        if (healed) {
+          pushVfx(room, { kind: 'heal_wave', x: e.x, z: e.z, radius: 9, color: '#4ade80' });
+          pushCombatText(room, e.x, 3.0, e.z, '💚 REGENERACJA!', 'heal', false, true);
         }
       }
     }
@@ -1932,10 +2612,29 @@ function tickRoom(room: GameRoom) {
         }
       }
 
+      // Friendly-fire environmental hazards (Meteor Storm & Volatile Foes) damage enemies dragged into them!
+      if (tel.hitsEnemies) {
+        const refPlayer = alivePlayers[0];
+        if (refPlayer) {
+          for (const foe of room.enemies.values()) {
+            if (!foe.alive || foe.tier === 'root_trap' || foe.id === tel.ownerId) continue;
+            if (Math.hypot(foe.x - tel.x, foe.z - tel.z) <= tel.radius + foe.radius) {
+              const envPct = foe.tier === 'boss' ? 0.04 : foe.tier === 'miniboss' ? 0.08 : 0.28;
+              const envDmg = Math.max(tel.damage, Math.round(foe.maxHp * envPct));
+              damageEnemy(room, refPlayer, foe, envDmg, 'magical', now, false, false);
+            }
+          }
+        }
+      }
+
       if (tel.isChaosBurst) {
         pushVfx(room, { kind: 'boss_chaos_burst', x: tel.x, z: tel.z, radius: tel.radius, color: '#be123c' });
-      } else if (tel.abilityId === 'deszcz_obsydianu') {
-        pushVfx(room, { kind: 'boss_obsidian_rain', x: tel.x, z: tel.z, radius: tel.radius, color: '#ea580c' });
+      } else if (tel.abilityId === 'deszcz_obsydianu' || tel.abilityId === 'mutator_meteor') {
+        pushVfx(room, { kind: 'boss_obsidian_rain', x: tel.x, z: tel.z, radius: tel.radius, color: '#f97316' });
+      } else if (tel.abilityId === 'volatile_blast' || tel.abilityId === 'elite_mortar') {
+        pushVfx(room, { kind: 'meteor', x: tel.x, z: tel.z, radius: tel.radius, color: '#ef4444' });
+      } else if (tel.abilityId === 'elite_frost') {
+        pushVfx(room, { kind: 'light_barrier', x: tel.x, z: tel.z, radius: tel.radius, color: '#38bdf8' });
       }
       room.telegraphs.delete(tid);
     }
@@ -1951,8 +2650,20 @@ function tickRoom(room: GameRoom) {
   }
 
   let enemiesRemaining = 0;
+  let goblinAlive = false;
   for (const e of room.enemies.values()) {
-    if (e.alive && e.tier !== 'summon' && e.tier !== 'root_trap') enemiesRemaining++;
+    if (!e.alive) continue;
+    if (e.tier === 'goblin') goblinAlive = true;
+    if (
+      e.tier !== 'summon' &&
+      e.tier !== 'root_trap' &&
+      e.tier !== 'barrel' &&
+      e.tier !== 'totem' &&
+      e.tier !== 'goblin' &&
+      !e.isWaveMob
+    ) {
+      enemiesRemaining++;
+    }
   }
 
   const loc = getLocationDef(room.globalLocation);
@@ -1992,6 +2703,7 @@ function tickRoom(room: GameRoom) {
       invulnUntil: p.invulnUntil,
       shieldExpiresAt: p.shieldExpiresAt,
       potionReadyAt: p.potionReadyAt,
+      activeBoons: p.activeBoons,
       stats: p.stats,
     })),
     enemies: Array.from(room.enemies.values())
@@ -2003,6 +2715,7 @@ function tickRoom(room: GameRoom) {
         tier: e.tier,
         act: e.act,
         bossId: e.bossId,
+        affix: e.affix,
         x: Number(e.x.toFixed(2)),
         z: Number(e.z.toFixed(2)),
         rotY: Number(e.rotY.toFixed(2)),
@@ -2030,11 +2743,16 @@ function tickRoom(room: GameRoom) {
     secrets: map.secrets,
     chests: map.chests,
     shrines: map.shrines,
+    obelisk: map.obelisk,
     pillars: room.pillars,
     exitUnlocked,
     enemiesRemaining,
     totalEnemies: room.totalEnemies,
     bossDefeated: room.bossDefeated,
+    mutatorId: room.mutatorId,
+    comboCount: room.comboCount,
+    comboExpiresAt: room.comboExpiresAt,
+    goblinAlive,
   };
 
   io.to(room.code).emit('world:snapshot', snapshot);
@@ -2401,7 +3119,11 @@ function handleBasicAttack(room: GameRoom, player: ServerPlayer, aimX: number, a
   if (now < player.cooldowns.basic) return;
 
   const cls = CLASSES[player.classId];
-  const cdMs = Math.round((cls.baseAttackCooldown * 1000) / Math.max(0.5, player.stats.attackSpeed));
+  const frenzyAspd = room.mutatorId === 'blood_frenzy' ? 1.28 : 1.0;
+  const comboAspd = 1 + Math.min(0.4, room.comboCount * 0.02);
+  const cdMs = Math.round(
+    (cls.baseAttackCooldown * 1000) / Math.max(0.5, player.stats.attackSpeed * frenzyAspd * comboAspd)
+  );
   player.cooldowns.basic = now + cdMs;
   player.animState = 'attack';
   player.animTime = now;
@@ -2533,6 +3255,9 @@ io.on('connection', (socket: Socket) => {
     poisonNextTick: 0,
     poisonDps: 0,
     respawnAt: 0,
+    activeBoons: [],
+    flameAuraNextTick: 0,
+    titanBarrierNextTick: 0,
   });
 
   socket.on('room:create', (payload, ack) => {
@@ -2554,6 +3279,10 @@ io.on('connection', (socket: Socket) => {
       totalEnemies: 0,
       bossDefeated: false,
       clearBonusAwarded: false,
+      mutatorId: 'treasure_goblin',
+      comboCount: 0,
+      comboExpiresAt: 0,
+      nextMeteorAt: 0,
       trades: new Map(),
       pendingCombatTexts: [],
       pendingVfx: [],
@@ -2675,6 +3404,8 @@ io.on('connection', (socket: Socket) => {
       let speed = 8.4 * p.stats.moveSpeed;
       if (now < p.slowedUntil) speed *= 0.55;
       if (now < p.hasteUntil) speed *= 1.3;
+      if (room.mutatorId === 'blood_frenzy') speed *= 1.24;
+      if (p.activeBoons.includes('swift_step')) speed *= 1.3;
       const dt = 0.05;
       const nx = p.x + ndx * speed * dt;
       const nz = p.z + ndz * speed * dt;
@@ -2880,16 +3611,34 @@ io.on('connection', (socket: Socket) => {
           ally.alive = true;
           ally.hp = ally.maxHp;
           ally.mana = ally.maxMana;
-          pushCombatText(room, ally.x, 2.8, ally.z, 'KAPLICZKA: 100% HP/MANA!', 'heal', true, true);
+          pushCombatText(room, ally.x, 2.8, ally.z, 'KAPLICZKA: 100% HP + DAR CHAOSU!', 'heal', true, true);
         }
+        offerBoonsToParty(room, '✨ KAPLICZKA CHAOSU — WYBIERZ BŁOGOSŁAWIEŃSTWO!');
         return;
       }
+    }
+
+    if (map.obelisk && map.obelisk.state === 'idle' && Math.hypot(p.x - map.obelisk.x, p.z - map.obelisk.z) <= 4.6) {
+      map.obelisk.state = 'active';
+      map.obelisk.currentWave = 1;
+      spawnObeliskWave(room, 1);
+      return;
     }
 
     if (Math.hypot(p.x - map.exitPortal.x, p.z - map.exitPortal.z) <= 4.8) {
       let remaining = 0;
       for (const e of room.enemies.values()) {
-        if (e.alive && e.tier !== 'summon' && e.tier !== 'root_trap') remaining++;
+        if (
+          e.alive &&
+          e.tier !== 'summon' &&
+          e.tier !== 'root_trap' &&
+          e.tier !== 'barrel' &&
+          e.tier !== 'totem' &&
+          e.tier !== 'goblin' &&
+          !e.isWaveMob
+        ) {
+          remaining++;
+        }
       }
       const loc = map.location;
       const unlocked =
@@ -2911,6 +3660,26 @@ io.on('connection', (socket: Socket) => {
       const nextLoc = Math.min(60, room.globalLocation + 1);
       initializeLocation(room, nextLoc);
     }
+  });
+
+  socket.on('boon:choose', (payload: { boonId: BoonId }) => {
+    const code = socketToRoom.get(socket.id);
+    if (!code) return;
+    const room = rooms.get(code);
+    const p = room?.players.get(socket.id);
+    if (!room || !p || !p.pendingBoonChoices) return;
+    if (!p.pendingBoonChoices.includes(payload.boonId)) return;
+
+    p.pendingBoonChoices = undefined;
+    if (!p.activeBoons.includes(payload.boonId)) {
+      p.activeBoons.push(payload.boonId);
+    }
+    const def = CHAOS_BOONS[payload.boonId];
+    if (payload.boonId === 'titan_barrier') {
+      applyBoundedShield(p, Math.round(p.maxHp * 0.25), 6000, Date.now());
+    }
+    pushVfx(room, { kind: 'level_up', x: p.x, z: p.z, radius: 3.2, color: def.color });
+    pushCombatText(room, p.x, 3.4, p.z, `${def.icon} ${def.name.toUpperCase()}!`, 'heal', true, true);
   });
 
   socket.on('chest:solved', (payload: { chestId: string }) => {
