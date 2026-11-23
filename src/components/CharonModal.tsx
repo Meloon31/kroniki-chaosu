@@ -31,10 +31,10 @@ export const CharonModal: React.FC<CharonModalProps> = ({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div>
             <h2 className="comic-title" style={{ margin: 0, fontSize: 30, color: '#e879f9' }}>
-              🛶 WĘDROWNY KUPIEC — CHARON
+              🧪 WĘDROWNY ALCHEMIK — VAREK
             </h2>
             <div style={{ fontSize: 12, color: '#cbd5e1', fontWeight: 700 }}>
-              Wydaj zdobywaną podczas wyprawy <strong style={{ color: '#fde047' }}>Esencję Chaosu</strong> na Dary i Kryształy!
+              Wydaj zdobywaną podczas wyprawy <strong style={{ color: '#fde047' }}>Esencję Chaosu</strong> na Relikty i Klejnoty!
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

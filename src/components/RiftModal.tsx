@@ -185,7 +185,7 @@ export const RiftModal: React.FC<RiftModalProps> = ({
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                       <span style={{ fontSize: 11.5, fontWeight: 900, color: '#fde047' }}>
-                        🔥 PAKT CHAOSU (Żar: {pactSummary.totalHeat})
+                        🔥 PIECZĘCIE WYZWANIA (Groza: {pactSummary.totalHeat})
                       </span>
                       {pactSummary.totalHeat > 0 && (
                         <span style={{ fontSize: 10.5, fontWeight: 900, color: '#4ade80' }}>
@@ -236,7 +236,7 @@ export const RiftModal: React.FC<RiftModalProps> = ({
                   }}
                   style={{ width: '100%', padding: '13px 16px', fontSize: 15, marginTop: 'auto' }}
                 >
-                  🌀 WEJDŹ NA PIĘTRO #{floor}{pactSummary.totalHeat > 0 ? ` (🔥 ŻAR ${pactSummary.totalHeat})` : ''}
+                  🌀 WEJDŹ NA PIĘTRO #{floor}{pactSummary.totalHeat > 0 ? ` (🔥 GROZA ${pactSummary.totalHeat})` : ''}
                 </button>
               </>
             )}

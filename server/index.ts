@@ -558,7 +558,7 @@ function rollBoonRarity(): BoonRarity {
   return 'zwykly';
 }
 
-function offerElementalBoon(player: ServerPlayer, title = '⚡ OŁTARZ PATRONÓW ŻYWIOŁÓW') {
+function offerElementalBoon(player: ServerPlayer, title = '⚡ OŁTARZ ASPEKTÓW ŻYWIOŁÓW') {
   const ownedIds = new Set(player.elementalBoons.map((b) => b.id));
   const ownedPatrons = new Set<ElementalPatron>();
   for (const b of player.elementalBoons) {
@@ -591,13 +591,13 @@ function offerElementalBoon(player: ServerPlayer, title = '⚡ OŁTARZ PATRONÓW
   io.to(player.socketId).emit('hades:boon_offer', { title, choices });
 }
 
-function offerSkillEvolution(player: ServerPlayer, title = '🔨 KRYSZTAŁ MISTRZOSTWA (EWOLUCJA SKILLA)') {
+function offerSkillEvolution(player: ServerPlayer, title = '💎 KLEJNOT PRZEBUDZENIA (EWOLUCJA SKILLA)') {
   const classEvos = getEvolutionsForClass(player.classId).filter(
     (e) => !player.skillEvolutions.includes(e.id)
   );
   if (classEvos.length === 0) {
-    // Already owns all 3 class evolutions — offer Elemental/Duo Boon instead!
-    offerElementalBoon(player, '⚡ BONUS PATRONÓW (WSZYSTKIE EWOLUCJE ZDOBYTE)');
+    // Already owns all 3 class evolutions — offer Elemental/Fusion Relic instead!
+    offerElementalBoon(player, '⚡ RELIKT ŻYWIOŁÓW (WSZYSTKIE PRZEBUDZENIA ZDOBYTE)');
     return;
   }
   const choices = classEvos.map((e) => e.id);
@@ -695,11 +695,11 @@ function grantBranchPortalReward(room: GameRoom, kind: PortalRewardKind) {
   room.eliteVaultBonus = kind === 'elite_vault';
   if (kind === 'boon') {
     for (const p of room.players.values()) {
-      offerElementalBoon(p, '⚡ NAGRODA PORTALU: DAR ŻYWIOŁÓW');
+      offerElementalBoon(p, '⚡ NAGRODA PORTALU: RELIKT ŻYWIOŁÓW');
     }
   } else if (kind === 'evolution') {
     for (const p of room.players.values()) {
-      offerSkillEvolution(p, '🔨 NAGRODA PORTALU: KRYSZTAŁ MISTRZOSTWA');
+      offerSkillEvolution(p, '💎 NAGRODA PORTALU: KLEJNOT PRZEBUDZENIA');
     }
   } else if (kind === 'shards') {
     const locIdx = room.globalLocation;
@@ -715,16 +715,16 @@ function grantBranchPortalReward(room: GameRoom, kind: PortalRewardKind) {
       subtitle: '2× Szansa na Legendarny i Boski łup na tej mapie!',
     });
   } else if (kind === 'merchant' && room.mapData) {
-    // Guarantee Charon right near spawn!
+    // Guarantee Alchemist Varek right near spawn!
     room.merchant = {
-      id: `charon_${Date.now()}`,
+      id: `varek_${Date.now()}`,
       x: room.mapData.spawn.x + 4.8,
       z: room.mapData.spawn.z - 2.2,
     };
     io.to(room.code).emit('game:banner', {
       type: 'info',
-      title: '🛶 PRZYSTAŃ CHARONA!',
-      subtitle: 'Wędrowny Kupiec czeka tuż przy starcie — wydaj Esencję Chaosu [F]!',
+      title: '🧪 KRAM ALCHEMIKA VAREKA!',
+      subtitle: 'Wędrowny Alchemik czeka tuż przy starcie — wydaj Esencję Chaosu [F]!',
     });
   }
 }
@@ -2131,7 +2131,7 @@ function damageEnemy(
           title: `🔥 ${enemy.name.toUpperCase()} — FAZA ${nextPhase === 2 ? 'II' : 'III'}!`,
           subtitle:
             nextPhase === 2
-              ? 'Boss przyspiesza! Uwaga na Złoty Krąg Soak (stańcie razem!)'
+              ? 'Boss przyspiesza! Uwaga na Złoty Krąg Wspólnej Tarczy (stańcie razem!)'
               : 'OSTATECZNA FURIA BOSSA! Zrywajcie Łańcuchy i unikajcie ataków!',
         });
 
@@ -2148,7 +2148,7 @@ function damageEnemy(
           });
           pushCombatText(room, living[0].x, 3.2, living[0].z, '⛓️ ZERWIJ ŁAŃCUCH! ODBIEGNIJCIE!', 'magical', true, true);
         } else if (living.length >= 1) {
-          // Golden Soak Circle (group-share damage + +25 Fury if soaked!)
+          // Golden Shared-Shield Circle (group-share damage + +25 Fury if stacked!)
           const targetP = living[Math.floor(Math.random() * living.length)];
           const soakId = nextId('soak');
           room.telegraphs.set(soakId, {
@@ -2158,7 +2158,7 @@ function damageEnemy(
             z: targetP.z,
             radius: 4.5,
             color: '#fde047',
-            label: '☀️ KRĄG SOAK — WEJDŹCIE RAZEM!',
+            label: '☀️ KRĄG TARCZY — STAŃCIE RAZEM!',
             createdAt: now,
             triggerAt: now + 3200,
             ownerId: enemy.id,
@@ -4675,13 +4675,13 @@ function tickRoom(room: GameRoom) {
       if (inside.length >= Math.min(2, alivePlayers.length)) {
         const splitDmg = Math.round((tel.damage * 0.28 * trapMult) / Math.max(1, inside.length));
         for (const pl of inside) {
-          damagePlayer(room, pl, splitDmg, tel.damageType, now, { sourceLabel: '☀️ SOAK UDANY!' });
+          damagePlayer(room, pl, splitDmg, tel.damageType, now, { sourceLabel: '☀️ TARCZA UDANA!' });
           addFury(pl, 25);
-          pushCombatText(room, pl.x, 3.0, pl.z, '☀️ SOAK +25 FURII!', 'shield', true, true);
+          pushCombatText(room, pl.x, 3.0, pl.z, '☀️ KRĄG +25 FURII!', 'shield', true, true);
         }
       } else {
         for (const pl of alivePlayers) {
-          damagePlayer(room, pl, Math.round(tel.damage * trapMult), tel.damageType, now, { sourceLabel: '☀️ BRAK SOAKU!' });
+          damagePlayer(room, pl, Math.round(tel.damage * trapMult), tel.damageType, now, { sourceLabel: '☀️ ROZBITY KRĄG!' });
         }
       }
       room.telegraphs.delete(tid);
@@ -5636,7 +5636,7 @@ function handleBasicAttack(room: GameRoom, player: ServerPlayer, aimX: number, a
       color: '#fde047',
       casterId: player.id,
     });
-    pushCombatText(room, player.x, 3.0, player.z, '⚡ DASH-STRIKE!', dmgType, true, true);
+    pushCombatText(room, player.x, 3.0, player.z, '⚡ CIOS Z UNIKU!', dmgType, true, true);
   }
 
   // Fire Attack Boon (Żar Ostrza)
@@ -6388,8 +6388,8 @@ io.on('connection', (socket: Socket) => {
       type: summary.totalHeat > 0 ? 'warning' : 'info',
       title:
         summary.totalHeat > 0
-          ? `🔥 PAKT CHAOSU AKTYWNY (Żar: ${summary.totalHeat})`
-          : '🔥 PAKT CHAOSU WYŁĄCZONY',
+          ? `🔥 PIECZĘCIE WYZWANIA (Poziom Grozy: ${summary.totalHeat})`
+          : '🔥 PIECZĘCIE WYZWANIA WYŁĄCZONE',
       subtitle:
         summary.totalHeat > 0
           ? `Premia łupów: +${Math.round((summary.lootLuckMult - 1) * 100)}% • +${summary.xpBonusPct}% XP`
@@ -6450,22 +6450,22 @@ io.on('connection', (socket: Socket) => {
       p.hp = p.maxHp;
       p.mana = p.maxMana;
       applyBoundedShield(p, Math.round(p.maxHp * 0.3), 12000, now);
-      pushCombatText(room, p.x, 3.0, p.z, '🧪 ELIKSIR CHARONA! 100% HP!', 'heal', true, true);
+      pushCombatText(room, p.x, 3.0, p.z, '🧪 MIKSTURA VAREKA! 100% HP!', 'heal', true, true);
     } else if (def.id === 'elemental_boon') {
-      offerElementalBoon(p, '🛶 DAR PATRONÓW OD CHARONA');
+      offerElementalBoon(p, '🧪 RELIKT ŻYWIOŁÓW OD VAREKA');
     } else if (def.id === 'skill_evolution') {
-      offerSkillEvolution(p, '🛶 KRYSZTAŁ MISTRZOSTWA CHARONA');
+      offerSkillEvolution(p, '💎 KLEJNOT PRZEBUDZENIA VAREKA');
     } else if (def.id === 'mystery_chest') {
       spawnEquipmentDrop(room, p.x, p.z, Math.max(1, room.globalLocation), true, 2.6, p.classId);
-      pushCombatText(room, p.x, 3.0, p.z, '🎁 SKRZYNIA CHARONA!', 'magical', true, true);
+      pushCombatText(room, p.x, 3.0, p.z, '🎁 SKRZYNIA VAREKA!', 'magical', true, true);
     } else if (def.id === 'upgrade_boon') {
       const upgradable = p.elementalBoons.find((b) => b.rarity !== 'heroiczny');
       if (upgradable) {
         upgradable.rarity = upgradable.rarity === 'zwykly' ? 'epicki' : 'heroiczny';
         const bDef = ELEMENTAL_BOONS[upgradable.id];
-        pushCombatText(room, p.x, 3.2, p.z, `✨ ${bDef?.name || 'Dar'} ➔ ${BOON_RARITY_META[upgradable.rarity].label.toUpperCase()}!`, 'shield', true, true);
+        pushCombatText(room, p.x, 3.2, p.z, `✨ ${bDef?.name || 'Relikt'} ➔ ${BOON_RARITY_META[upgradable.rarity].label.toUpperCase()}!`, 'shield', true, true);
       } else {
-        offerElementalBoon(p, '✨ BONUS CHARONA (NOWY DAR)');
+        offerElementalBoon(p, '✨ BONUS VAREKA (NOWY RELIKT)');
       }
     }
     socket.emit('juice:merchant_buy', { itemId: def.id });

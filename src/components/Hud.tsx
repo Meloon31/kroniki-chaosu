@@ -850,7 +850,7 @@ export const Hud: React.FC<HudProps> = ({
                     color: '#fecdd3',
                   }}
                 >
-                  🔥 PAKT CHAOSU: ŻAR {snapshot?.pactHeat}
+                  🔥 PIECZĘCIE WYZWANIA: GROZA {snapshot?.pactHeat}
                   {snapshot?.pactTimerEndsAt && snapshot.pactTimerEndsAt > now
                     ? ` • ⏳ ${formatRiftTime(snapshot.pactTimerEndsAt - now)}`
                     : ''}
@@ -867,7 +867,7 @@ export const Hud: React.FC<HudProps> = ({
                     fontWeight: 900,
                     color: '#f5d0fe',
                   }}
-                  title="Esencja Chaosu — wydaj u Wędrownego Kupca Charona [F]"
+                  title="Esencja Chaosu — wydaj u Wędrownego Alchemika Vareka [F]"
                 >
                   🔮 {localPlayer.runEssence} Esencji
                 </span>
@@ -1901,7 +1901,7 @@ export const Hud: React.FC<HudProps> = ({
                 : `${profile.xp.toLocaleString()} / ${xpNeeded.toLocaleString()} XP`}
             </span>
             <span style={{ fontSize: 10, color: '#64748b', whiteSpace: 'nowrap' }}>
-              LPM: Kombo 1-2-3 • Spacja+LPM: Dash-Strike • T/5: Ultimate • E/F: Interakcja/Wskrześ
+              LPM: Kombo 1-2-3 • Spacja+LPM: Cios z Uniku • T/5: Ultimate • E/F: Interakcja/Wskrześ
             </span>
           </div>
         </div>

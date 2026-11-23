@@ -88,7 +88,7 @@ export const HadesOfferOverlay: React.FC<HadesOfferOverlayProps> = ({
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ fontSize: 24 }}>{duo.icon}</span>
                         <span style={{ fontSize: 10, fontWeight: 900, padding: '2px 7px', borderRadius: 6, background: '#fde047', color: '#111' }}>
-                          DUO [{hotkey}]
+                          FUZJA [{hotkey}]
                         </span>
                       </div>
                       <div style={{ fontSize: 14, fontWeight: 900, color: '#fde047' }}>{duo.name}</div>
@@ -155,7 +155,7 @@ export const HadesOfferOverlay: React.FC<HadesOfferOverlayProps> = ({
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span style={{ fontSize: 26 }}>{evo.icon}</span>
                       <span style={{ fontSize: 10, fontWeight: 900, padding: '2px 7px', borderRadius: 6, background: evo.color, color: '#111' }}>
-                        MISTRZOSTWO [{hotkey}]
+                        PRZEBUDZENIE [{hotkey}]
                       </span>
                     </div>
                     <div style={{ fontSize: 14.5, fontWeight: 900, color: evo.color }}>{evo.name}</div>

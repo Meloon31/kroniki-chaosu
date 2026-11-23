@@ -645,7 +645,7 @@ export class GameEngine {
 
     // Priority 2.5: Wandering Merchant (Charon) & Branching Reward Portals!
     if (snap.merchant && Math.hypot(local.x - snap.merchant.x, local.z - snap.merchant.z) <= 4.6) {
-      this.callbacks.onInteractHint('[F] 🛶 Kupiec Charon — Wydaj Esencję Chaosu na Dary i Kryształy!');
+      this.callbacks.onInteractHint('[F] 🧪 Alchemik Varek — Wydaj Esencję Chaosu na Relikty i Klejnoty!');
       return;
     }
     if (snap.branchPortals && snap.branchPortals.length > 0) {

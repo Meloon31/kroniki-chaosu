@@ -29,10 +29,10 @@ export const PATRON_META: Record<
   ElementalPatron,
   { name: string; icon: string; color: string; title: string }
 > = {
-  ogien: { name: 'Ogień', icon: '🔥', color: '#f97316', title: 'Patron Płomieni' },
-  mroz: { name: 'Mróz', icon: '❄️', color: '#38bdf8', title: 'Patron Zimy' },
-  blyskawica: { name: 'Błyskawica', icon: '⚡', color: '#fde047', title: 'Patron Burzy' },
-  cien: { name: 'Cień', icon: '🌑', color: '#c084fc', title: 'Patron Pustki' },
+  ogien: { name: 'Ogień', icon: '🔥', color: '#f97316', title: 'Aspekt Płomieni' },
+  mroz: { name: 'Mróz', icon: '❄️', color: '#38bdf8', title: 'Aspekt Zimy' },
+  blyskawica: { name: 'Błyskawica', icon: '⚡', color: '#fde047', title: 'Aspekt Burzy' },
+  cien: { name: 'Cień', icon: '🌑', color: '#c084fc', title: 'Aspekt Pustki' },
 };
 
 export const BOON_RARITY_META: Record<
@@ -150,7 +150,7 @@ export const ELEMENTAL_BOONS: Record<string, ElementalBoonDef> = {
     icon: '🌑',
     color: '#c084fc',
     description: (r) =>
-      `Atak po Uniku (Dash-Strike) zadaje +${Math.round(45 * BOON_RARITY_META[r].mult)}% obrażeń i ma +30% szansy na kryt.`,
+      `Cios z Uniku (Spacja + LPM) zadaje +${Math.round(45 * BOON_RARITY_META[r].mult)}% obrażeń i ma +30% szansy na kryt.`,
   },
   cien_attack: {
     id: 'cien_attack',
@@ -180,7 +180,7 @@ export const DUO_BOONS: Record<string, DuoBoonDef> = {
   duo_thermal_shock: {
     id: 'duo_thermal_shock',
     patrons: ['ogien', 'mroz'],
-    name: 'DUO: Szok Termiczny',
+    name: 'FUZJA: Szok Termiczny',
     icon: '🔥❄️',
     color: '#fb7185',
     description:
@@ -189,16 +189,16 @@ export const DUO_BOONS: Record<string, DuoBoonDef> = {
   duo_void_storm: {
     id: 'duo_void_storm',
     patrons: ['blyskawica', 'cien'],
-    name: 'DUO: Burza Pustki',
+    name: 'FUZJA: Burza Pustki',
     icon: '⚡🌑',
     color: '#e879f9',
     description:
-      'Ciosy w plecy oraz Dash-Strike zawsze wywołują łańcuch 3 fioletowych piorunów (65% DMG)!',
+      'Ciosy w plecy oraz Cios z Uniku zawsze wywołują łańcuch 3 fioletowych piorunów (65% DMG)!',
   },
   duo_plasma_flame: {
     id: 'duo_plasma_flame',
     patrons: ['ogien', 'blyskawica'],
-    name: 'DUO: Plazma Burzy',
+    name: 'FUZJA: Plazma Burzy',
     icon: '🔥⚡',
     color: '#fde047',
     description:
@@ -207,7 +207,7 @@ export const DUO_BOONS: Record<string, DuoBoonDef> = {
   duo_blood_blizzard: {
     id: 'duo_blood_blizzard',
     patrons: ['mroz', 'cien'],
-    name: 'DUO: Krwawa Zamieć',
+    name: 'FUZJA: Krwawa Zamieć',
     icon: '❄️🌑',
     color: '#38bdf8',
     description:
@@ -216,7 +216,7 @@ export const DUO_BOONS: Record<string, DuoBoonDef> = {
   duo_arctic_thunder: {
     id: 'duo_arctic_thunder',
     patrons: ['mroz', 'blyskawica'],
-    name: 'DUO: Arktyczny Grom',
+    name: 'FUZJA: Arktyczny Grom',
     icon: '❄️⚡',
     color: '#67e8f9',
     description:
@@ -225,11 +225,11 @@ export const DUO_BOONS: Record<string, DuoBoonDef> = {
   duo_ash_seal: {
     id: 'duo_ash_seal',
     patrons: ['ogien', 'cien'],
-    name: 'DUO: Pieczęć Popiołów',
+    name: 'FUZJA: Pieczęć Popiołów',
     icon: '🔥🌑',
     color: '#fb923c',
     description:
-      'Zderzenie wroga ze ścianą (Wall Slam) wywołuje podwójną eksplozję ognia i cienia (+100% DMG)!',
+      'Zderzenie wroga ze ścianą (Trzask o Ścianę) wywołuje podwójną eksplozję ognia i cienia (+100% DMG)!',
   },
 };
 
@@ -263,7 +263,7 @@ export const SKILL_EVOLUTIONS: Record<string, SkillEvolutionDef> = {
     name: 'Ostrze Tytana',
     icon: '⚔️',
     color: '#fbbf24',
-    description: '3. cios komba (Finisher) ma +45% zasięgu, +40% DMG i potężny Wall Slam!',
+    description: '3. cios komba (Finisher) ma +45% zasięgu, +40% DMG i potężny Trzask o Ścianę!',
   },
   evo_woj_charge: {
     id: 'evo_woj_charge',
@@ -315,7 +315,7 @@ export const SKILL_EVOLUTIONS: Record<string, SkillEvolutionDef> = {
     name: 'Huragan Ostrzy',
     icon: '🍃',
     color: '#4ade80',
-    description: 'Ostrze Wiatru [3] ma ogromny odrzut (Wall Slam!) i zadaje +35% DMG!',
+    description: 'Ostrze Wiatru [3] ma ogromny odrzut (Trzask o Ścianę!) i zadaje +35% DMG!',
   },
   evo_elf_trap: {
     id: 'evo_elf_trap',
@@ -323,7 +323,7 @@ export const SKILL_EVOLUTIONS: Record<string, SkillEvolutionDef> = {
     name: 'Zabójczy Odskok',
     icon: '💥',
     color: '#fde047',
-    description: 'Salwa w Odskoku [2] i Dash-Strike mają +40% szansy na trafienie krytyczne!',
+    description: 'Salwa w Odskoku [2] i Cios z Uniku mają +40% szansy na trafienie krytyczne!',
   },
 
   // KRASNOLUD
@@ -333,7 +333,7 @@ export const SKILL_EVOLUTIONS: Record<string, SkillEvolutionDef> = {
     name: 'Młot Sejsmiczny',
     icon: '🔨',
     color: '#f59e0b',
-    description: 'Uderzenie Młotem [1] ma +50% odrzutu (Wall Slam!) i bije podwójną falą!',
+    description: 'Uderzenie Młotem [1] ma +50% odrzutu (Trzask o Ścianę!) i bije podwójną falą!',
   },
   evo_kras_quake: {
     id: 'evo_kras_quake',
@@ -530,17 +530,17 @@ export const PORTAL_REWARD_META: Record<
   },
   boon: {
     label: 'Ołtarz Żywiołów',
-    shortLabel: '⚡ Dar Żywiołu',
+    shortLabel: '⚡ Relikt Żywiołu',
     icon: '⚡',
     color: '#fde047',
-    desc: 'Wybór 1 z 3 Darów Żywiołów lub potężnego DUO-Daru!',
+    desc: 'Wybór 1 z 3 Reliktów Żywiołów lub potężnej Fuzji dwóch żywiołów!',
   },
   evolution: {
-    label: 'Kuźnia Mistrzostwa',
-    shortLabel: '🔨 Kryształ Mistrz.',
-    icon: '🔨',
+    label: 'Kuźnia Przebudzenia',
+    shortLabel: '💎 Klejnot Przebudz.',
+    icon: '💎',
     color: '#f97316',
-    desc: 'Wybór 1 z 3 Modyfikatorów Umiejętności dla Twojej klasy!',
+    desc: 'Wybór 1 z 3 Przebudzeń Umiejętności dla Twojej klasy!',
   },
   elite_vault: {
     label: 'Elitarny Skarbiec',
@@ -550,11 +550,11 @@ export const PORTAL_REWARD_META: Record<
     desc: 'Trudniejsi wrogowie, ale podwójna szansa na Legendarny/Boski łup!',
   },
   merchant: {
-    label: 'Przystań Charona',
-    shortLabel: '🛶 Kupiec Charon',
-    icon: '🛶',
+    label: 'Kram Alchemika Vareka',
+    shortLabel: '🧪 Kupiec Varek',
+    icon: '🧪',
     color: '#c084fc',
-    desc: 'Gwarantowany Wędrowny Kupiec z Darami i Kryształem Mistrzostwa!',
+    desc: 'Gwarantowany Wędrowny Alchemik Varek z Reliktami i Klejnotem Przebudzenia!',
   },
 };
 
@@ -570,7 +570,7 @@ export interface CharonShopItemDef {
 export const CHARON_SHOP_ITEMS: CharonShopItemDef[] = [
   {
     id: 'elixir',
-    name: 'Eliksir Przewoźnika',
+    name: 'Mikstura Odnowy Vareka',
     icon: '🧪',
     cost: 40,
     color: '#4ade80',
@@ -578,23 +578,23 @@ export const CHARON_SHOP_ITEMS: CharonShopItemDef[] = [
   },
   {
     id: 'elemental_boon',
-    name: 'Pieczęć Patrona',
+    name: 'Pieczęć Żywiołów',
     icon: '⚡',
     cost: 75,
     color: '#fde047',
-    description: 'Otwiera wybór 1 z 3 Darów Żywiołów (lub DUO-Daru)!',
+    description: 'Otwiera wybór 1 z 3 Reliktów Żywiołów (lub Fuzji dwóch żywiołów)!',
   },
   {
     id: 'skill_evolution',
-    name: 'Kryształ Mistrzostwa',
-    icon: '🔨',
+    name: 'Klejnot Przebudzenia',
+    icon: '💎',
     cost: 110,
     color: '#f97316',
-    description: 'Wybierz 1 z 3 unikalnych modyfikacji umiejętności Twojej klasy!',
+    description: 'Wybierz 1 z 3 unikalnych przebudzeń umiejętności Twojej klasy!',
   },
   {
     id: 'mystery_chest',
-    name: 'Tajemnicza Skrzynia Charona',
+    name: 'Zapomniana Skrzynia Vareka',
     icon: '🎁',
     cost: 90,
     color: '#c084fc',
@@ -602,10 +602,10 @@ export const CHARON_SHOP_ITEMS: CharonShopItemDef[] = [
   },
   {
     id: 'upgrade_boon',
-    name: 'Wzmocnienie Daru',
+    name: 'Wzmocnienie Reliktu',
     icon: '✨',
     cost: 65,
     color: '#fb7185',
-    description: 'Podnosi rzadkość losowego posiadanego Daru Żywiołu (Zwykły ➔ Epicki ➔ Heroiczny)!',
+    description: 'Podnosi rzadkość losowego posiadanego Reliktu Żywiołu (Zwykły ➔ Epicki ➔ Heroiczny)!',
   },
 ];
