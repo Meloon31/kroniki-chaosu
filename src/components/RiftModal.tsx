@@ -10,6 +10,7 @@ import {
   RiftCategory,
   RiftLeaderboardMap,
 } from '../../shared/rift';
+import { getPactRewardSummary, PACT_CURSES } from '../../shared/hades';
 import { ACT_THEMES } from '../../shared/world';
 import type { PlayerProfile, RoomSummary } from '../../shared/types';
 
@@ -17,6 +18,8 @@ interface RiftModalProps {
   profile: PlayerProfile;
   room: RoomSummary | null;
   leaderboard: RiftLeaderboardMap;
+  activePactCurses?: string[];
+  onTogglePactCurse?: (curseId: string) => void;
   onStartRift: (floor: number) => void;
   onRefreshLeaderboard: () => void;
   onClose: () => void;
@@ -28,10 +31,13 @@ export const RiftModal: React.FC<RiftModalProps> = ({
   profile,
   room,
   leaderboard,
+  activePactCurses = [],
+  onTogglePactCurse,
   onStartRift,
   onRefreshLeaderboard,
   onClose,
 }) => {
+  const pactSummary = getPactRewardSummary(activePactCurses);
   const unlocked =
     profile.sandboxUnlockAll ||
     (profile.defeatedActBosses || []).includes(4) ||
@@ -167,6 +173,61 @@ export const RiftModal: React.FC<RiftModalProps> = ({
                   Kategoria party: <strong style={{ color: '#7dd3fc' }}>{room ? `${room.members.length} os.` : 'Solo'}</strong>
                 </div>
 
+                {/* Pact of Chaos (Heat System à la Hades) */}
+                {onTogglePactCurse && (
+                  <div
+                    style={{
+                      background: 'rgba(136, 19, 55, 0.22)',
+                      border: '1.5px solid rgba(251, 113, 133, 0.45)',
+                      borderRadius: 11,
+                      padding: 9,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <span style={{ fontSize: 11.5, fontWeight: 900, color: '#fde047' }}>
+                        🔥 PAKT CHAOSU (Żar: {pactSummary.totalHeat})
+                      </span>
+                      {pactSummary.totalHeat > 0 && (
+                        <span style={{ fontSize: 10.5, fontWeight: 900, color: '#4ade80' }}>
+                          +{Math.round((pactSummary.lootLuckMult - 1) * 100)}% Drop • +{pactSummary.xpBonusPct}% XP
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
+                      {PACT_CURSES.map((c) => {
+                        const on = activePactCurses.includes(c.id);
+                        return (
+                          <button
+                            key={c.id}
+                            onClick={() => onTogglePactCurse(c.id)}
+                            title={c.description}
+                            style={{
+                              padding: '5px 7px',
+                              borderRadius: 8,
+                              border: `1.5px solid ${on ? c.color : 'rgba(255,255,255,0.12)'}`,
+                              background: on ? `${c.color}2e` : 'rgba(15, 18, 34, 0.72)',
+                              color: on ? '#fff' : '#94a3b8',
+                              fontSize: 10,
+                              fontWeight: 800,
+                              textAlign: 'left',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                          >
+                            <span>
+                              {c.icon} {c.name}
+                            </span>
+                            <span style={{ color: c.color }}>+{c.heat}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 <button
                   className="mmo-play-cta"
                   onClick={() => {
@@ -175,7 +236,7 @@ export const RiftModal: React.FC<RiftModalProps> = ({
                   }}
                   style={{ width: '100%', padding: '13px 16px', fontSize: 15, marginTop: 'auto' }}
                 >
-                  🌀 WEJDŹ NA PIĘTRO #{floor}
+                  🌀 WEJDŹ NA PIĘTRO #{floor}{pactSummary.totalHeat > 0 ? ` (🔥 ŻAR ${pactSummary.totalHeat})` : ''}
                 </button>
               </>
             )}

@@ -1,3 +1,5 @@
+import type { BoonRarity, PortalRewardKind } from './hades.js';
+
 export type ClassId = 'wojownik' | 'czarnoksieznik' | 'elf' | 'krasnolud' | 'wrozka';
 
 export type Rarity = 'zwykly' | 'normalny' | 'mityczny' | 'legendarny' | 'boski' | 'niesmiertelny';
@@ -184,6 +186,13 @@ export interface NetPlayerState {
   equippedAura?: string | null;
   equippedTrail?: string | null;
   activeBoons?: BoonId[];
+  // Hades-style Combat Pack: 3-hit combo, Gniew Chaosu (Ultimate), Essence, Elemental/Duo Boons, Evolutions
+  comboStep?: number; // 1 | 2 | 3
+  fury?: number; // 0..100
+  runEssence?: number;
+  elementalBoons?: Array<{ id: string; rarity: BoonRarity }>;
+  duoBoons?: string[];
+  skillEvolutions?: string[];
   stats: ComputedStats;
 }
 
@@ -222,10 +231,14 @@ export interface EnemyState {
   maxHp: number;
   shield: number;
   maxShield: number;
-  // Stagger Bar for Mini-Bosses & Bosses + Warlock Curse Primer + Camp DPS Dummy!
+  // Stagger Bar for Mini-Bosses & Bosses + Warlock Curse Primer + Camp DPS Dummy + Elite Armor + Boss Phases!
   stagger?: number;
   maxStagger?: number;
   staggerBrokenUntil?: number;
+  eliteArmor?: number;
+  maxEliteArmor?: number;
+  bossPhase?: 1 | 2 | 3;
+  phaseInvulnUntil?: number;
   cursedUntil?: number;
   dummyDps?: number;
   dummyMaxCrit?: number;
@@ -253,7 +266,7 @@ export interface EnemyState {
 
 export interface TelegraphZone {
   id: string;
-  shape: 'circle' | 'line' | 'ring' | 'beam' | 'cone' | 'arena_chaos';
+  shape: 'circle' | 'line' | 'ring' | 'beam' | 'cone' | 'arena_chaos' | 'soak';
   x: number;
   z: number;
   radius: number;
@@ -480,7 +493,18 @@ export interface SkillVfxEvent {
     | 'chest_open'
     | 'secret_break'
     | 'puzzle_solve'
-    | 'level_up';
+    | 'level_up'
+    | 'wall_slam'
+    | 'dash_strike'
+    | 'ultimate'
+    | 'team_ultimate'
+    | 'armor_break'
+    | 'boss_phase'
+    | 'lightning_chain'
+    | 'frost_nova'
+    | 'fire_trail'
+    | 'soak_resolve'
+    | 'tether_break';
   x: number;
   z: number;
   tx?: number;
@@ -538,6 +562,32 @@ export interface MvpCard {
   statLabel: string;
 }
 
+export interface BossTetherState {
+  id: string;
+  playerAId: string;
+  playerBId: string;
+  breakDist: number;
+  explodesAt: number;
+}
+
+export interface WanderingMerchantState {
+  id: string;
+  x: number;
+  z: number;
+  purchasedByMe?: string[];
+}
+
+export interface BranchPortalOption {
+  id: string;
+  x: number;
+  z: number;
+  rewardKind: PortalRewardKind;
+  label: string;
+  icon: string;
+  color: string;
+  voters: string[];
+}
+
 export interface WorldSnapshot {
   tick: number;
   serverTime: number;
@@ -548,6 +598,12 @@ export interface WorldSnapshot {
   partySize: number;
   partyBondXpPct?: number;
   partyBondMfPct?: number;
+  activePactCurses?: string[];
+  pactHeat?: number;
+  pactTimerEndsAt?: number;
+  activeTethers?: BossTetherState[];
+  merchant?: WanderingMerchantState | null;
+  branchPortals?: BranchPortalOption[];
   players: NetPlayerState[];
   enemies: EnemyState[];
   telegraphs: TelegraphZone[];

@@ -73,7 +73,25 @@ import {
   RiftLeaderboardEntry,
   RiftLeaderboardMap,
 } from '../shared/rift.js';
+import {
+  BOON_RARITY_META,
+  BoonRarity,
+  CHARON_SHOP_ITEMS,
+  CLASS_ULTIMATES,
+  DUO_BOON_LIST,
+  DUO_BOONS,
+  ELEMENTAL_BOON_LIST,
+  ELEMENTAL_BOONS,
+  ElementalPatron,
+  getEvolutionsForClass,
+  getPactRewardSummary,
+  PORTAL_REWARD_META,
+  PortalRewardKind,
+  SKILL_EVOLUTIONS,
+} from '../shared/hades.js';
 import type {
+  BossTetherState,
+  BranchPortalOption,
   ClassId,
   ComputedStats,
   DamageType,
@@ -93,6 +111,7 @@ import type {
   SkillVfxEvent,
   TelegraphZone,
   TradeSessionState,
+  WanderingMerchantState,
   WorldSnapshot,
 } from '../shared/types.js';
 
@@ -206,6 +225,21 @@ interface ServerPlayer extends NetPlayerState {
   pendingBoonChoices?: BoonId[];
   flameAuraNextTick: number;
   titanBarrierNextTick: number;
+  // Hades Combat Pack state
+  comboStep: number;
+  comboStepExpiresAt: number;
+  attackCounter: number;
+  fury: number; // 0..100
+  lastUltimateAt: number;
+  teamUltBuffUntil: number;
+  stormOverloadUntil: number;
+  runEssence: number;
+  elementalBoons: Array<{ id: string; rarity: BoonRarity }>;
+  duoBoons: string[];
+  skillEvolutions: string[];
+  pendingElementalChoices?: Array<{ kind: 'elemental' | 'duo'; id: string; rarity?: BoonRarity }>;
+  pendingEvolutionChoices?: string[];
+  charonPurchasedIds: string[];
 }
 
 interface ServerEnemy extends EnemyState {
@@ -276,6 +310,14 @@ interface GameRoom {
   comboExpiresAt: number;
   nextMeteorAt: number;
   nextEnvTrapAt: number;
+  // Hades Systems: Pact of Chaos, Boss Tethers, Wandering Merchant, Branching Portals
+  activePactCurses: string[];
+  pactTimerEndsAt: number;
+  pactEnraged: boolean;
+  eliteVaultBonus: boolean;
+  activeTethers: BossTetherState[];
+  merchant: { id: string; x: number; z: number } | null;
+  branchPortals: BranchPortalOption[];
   trades: Map<string, TradeSessionState>;
   pendingCombatTexts: FloatingCombatText[];
   pendingVfx: SkillVfxEvent[];
@@ -485,6 +527,206 @@ function buildMvpCards(room: GameRoom): MvpCard[] {
       statLabel: topLuck.matchBestLootName || 'Bogate łupy z wyprawy',
     },
   ];
+}
+
+// =========================================================
+// HADES COMBAT PACK HELPERS (BOONS, DUO, EVOLUTIONS, KNOCKBACK/WALL SLAM, PORTALS)
+// =========================================================
+function getBoonMult(player: ServerPlayer, boonId: string): number {
+  const found = player.elementalBoons.find((b) => b.id === boonId);
+  return found ? BOON_RARITY_META[found.rarity].mult : 0;
+}
+
+function hasDuo(player: ServerPlayer, duoId: string): boolean {
+  return player.duoBoons.includes(duoId);
+}
+
+function hasEvo(player: ServerPlayer, evoId: string): boolean {
+  return player.skillEvolutions.includes(evoId);
+}
+
+function addFury(player: ServerPlayer, amount: number) {
+  if (amount <= 0) return;
+  const fireMult = getBoonMult(player, 'ogien_skill') > 0 ? 1.15 : 1.0;
+  player.fury = Math.min(100, Math.round((player.fury + amount * fireMult) * 10) / 10);
+}
+
+function rollBoonRarity(): BoonRarity {
+  const r = Math.random();
+  if (r < 0.14) return 'heroiczny';
+  if (r < 0.46) return 'epicki';
+  return 'zwykly';
+}
+
+function offerElementalBoon(player: ServerPlayer, title = '⚡ OŁTARZ PATRONÓW ŻYWIOŁÓW') {
+  const ownedIds = new Set(player.elementalBoons.map((b) => b.id));
+  const ownedPatrons = new Set<ElementalPatron>();
+  for (const b of player.elementalBoons) {
+    const def = ELEMENTAL_BOONS[b.id];
+    if (def) ownedPatrons.add(def.patron);
+  }
+
+  const eligibleDuos = DUO_BOON_LIST.filter(
+    (d) =>
+      !player.duoBoons.includes(d.id) &&
+      ownedPatrons.has(d.patrons[0]) &&
+      ownedPatrons.has(d.patrons[1])
+  );
+
+  const choices: Array<{ kind: 'elemental' | 'duo'; id: string; rarity?: BoonRarity }> = [];
+  if (eligibleDuos.length > 0 && Math.random() < 0.72) {
+    const pickDuo = eligibleDuos[Math.floor(Math.random() * eligibleDuos.length)];
+    choices.push({ kind: 'duo', id: pickDuo.id });
+  }
+
+  const pool = ELEMENTAL_BOON_LIST.filter((b) => !ownedIds.has(b.id));
+  const shuffled = [...(pool.length >= 2 ? pool : ELEMENTAL_BOON_LIST)].sort(() => Math.random() - 0.5);
+  for (const b of shuffled) {
+    if (choices.length >= 3) break;
+    if (choices.some((c) => c.id === b.id)) continue;
+    choices.push({ kind: 'elemental', id: b.id, rarity: rollBoonRarity() });
+  }
+
+  player.pendingElementalChoices = choices;
+  io.to(player.socketId).emit('hades:boon_offer', { title, choices });
+}
+
+function offerSkillEvolution(player: ServerPlayer, title = '🔨 KRYSZTAŁ MISTRZOSTWA (EWOLUCJA SKILLA)') {
+  const classEvos = getEvolutionsForClass(player.classId).filter(
+    (e) => !player.skillEvolutions.includes(e.id)
+  );
+  if (classEvos.length === 0) {
+    // Already owns all 3 class evolutions — offer Elemental/Duo Boon instead!
+    offerElementalBoon(player, '⚡ BONUS PATRONÓW (WSZYSTKIE EWOLUCJE ZDOBYTE)');
+    return;
+  }
+  const choices = classEvos.map((e) => e.id);
+  player.pendingEvolutionChoices = choices;
+  io.to(player.socketId).emit('hades:evolution_offer', { title, choices });
+}
+
+function applyKnockbackWithWallSlam(
+  room: GameRoom,
+  attacker: ServerPlayer,
+  enemy: ServerEnemy,
+  dirX: number,
+  dirZ: number,
+  force: number,
+  now: number
+) {
+  if (!enemy.alive || !room.mapData) return;
+  if (enemy.tier === 'boss' || enemy.tier === 'miniboss' || enemy.tier === 'dummy' || enemy.tier === 'barrel' || enemy.tier === 'root_trap') return;
+  // Hades Armor Bar rule: elites with intact armor are immune to knockback!
+  if ((enemy.eliteArmor || 0) > 0) return;
+
+  const len = Math.hypot(dirX, dirZ) || 1;
+  const nx = dirX / len;
+  const nz = dirZ / len;
+  const targetX = enemy.x + nx * force;
+  const targetZ = enemy.z + nz * force;
+  const moved = moveWithWallSweep(
+    enemy.x,
+    enemy.z,
+    targetX,
+    targetZ,
+    enemy.radius,
+    room.mapData.walls,
+    getSolvedGateIds(room.mapData),
+    getRevealedSecretIds(room.mapData)
+  );
+
+  const intendedDist = force;
+  const actualDist = Math.hypot(moved.x - enemy.x, moved.z - enemy.z);
+  enemy.x = moved.x;
+  enemy.z = moved.z;
+
+  // Hit a wall if stopped significantly short of knockback distance!
+  if (intendedDist >= 1.8 && actualDist < intendedDist * 0.68) {
+    const ashMult = hasDuo(attacker, 'duo_ash_seal') ? 2.0 : 1.0;
+    const slamDmg = Math.max(
+      25,
+      Math.round((enemy.maxHp * 0.16 + Math.max(attacker.stats.ad, attacker.stats.ap) * 1.4) * ashMult)
+    );
+    enemy.stunnedUntil = Math.max(enemy.stunnedUntil, now + 1250);
+    pushVfx(room, { kind: 'wall_slam', x: enemy.x, z: enemy.z, radius: 3.4, color: '#fb923c', casterId: attacker.id });
+    pushCombatText(
+      room,
+      enemy.x,
+      3.1,
+      enemy.z,
+      '💥 TRZASK O ŚCIANĘ!',
+      'physical',
+      true,
+      true,
+      `+${slamDmg}`
+    );
+    io.to(attacker.socketId).emit('juice:wall_slam');
+    damageEnemy(room, attacker, enemy, slamDmg, 'physical', now, false, false);
+  }
+}
+
+function spawnBranchingPortals(room: GameRoom) {
+  if (!room.mapData || room.isCamp || room.branchPortals.length > 0) return;
+  const ex = room.mapData.exitPortal.x;
+  const ez = room.mapData.exitPortal.z;
+  const allKinds: PortalRewardKind[] = ['boon', 'evolution', 'shards', 'elite_vault', 'merchant'];
+  const picked = [...allKinds].sort(() => Math.random() - 0.5).slice(0, 3);
+  const offsets = [
+    { dx: -5.4, dz: 1.8 },
+    { dx: 0, dz: 0 },
+    { dx: 5.4, dz: 1.8 },
+  ];
+  room.branchPortals = picked.map((kind, i) => {
+    const meta = PORTAL_REWARD_META[kind];
+    return {
+      id: `bportal_${i}_${kind}`,
+      x: ex + offsets[i].dx,
+      z: ez + offsets[i].dz,
+      rewardKind: kind,
+      label: meta.shortLabel,
+      icon: meta.icon,
+      color: meta.color,
+      voters: [],
+    };
+  });
+}
+
+function grantBranchPortalReward(room: GameRoom, kind: PortalRewardKind) {
+  room.eliteVaultBonus = kind === 'elite_vault';
+  if (kind === 'boon') {
+    for (const p of room.players.values()) {
+      offerElementalBoon(p, '⚡ NAGRODA PORTALU: DAR ŻYWIOŁÓW');
+    }
+  } else if (kind === 'evolution') {
+    for (const p of room.players.values()) {
+      offerSkillEvolution(p, '🔨 NAGRODA PORTALU: KRYSZTAŁ MISTRZOSTWA');
+    }
+  } else if (kind === 'shards') {
+    const locIdx = room.globalLocation;
+    const rarity: Rarity = locIdx >= 61 ? 'boski' : locIdx >= 31 ? 'legendarny' : 'mityczny';
+    const amt = locIdx >= 61 ? 2 : 3;
+    for (const p of room.players.values()) {
+      io.to(p.socketId).emit('loot:granted', { shardDrop: { rarity, amount: amt } });
+    }
+  } else if (kind === 'elite_vault') {
+    io.to(room.code).emit('game:banner', {
+      type: 'warning',
+      title: '💀 ELITARNY SKARBIEC AKTYWNY!',
+      subtitle: '2× Szansa na Legendarny i Boski łup na tej mapie!',
+    });
+  } else if (kind === 'merchant' && room.mapData) {
+    // Guarantee Charon right near spawn!
+    room.merchant = {
+      id: `charon_${Date.now()}`,
+      x: room.mapData.spawn.x + 4.8,
+      z: room.mapData.spawn.z - 2.2,
+    };
+    io.to(room.code).emit('game:banner', {
+      type: 'info',
+      title: '🛶 PRZYSTAŃ CHARONA!',
+      subtitle: 'Wędrowny Kupiec czeka tuż przy starcie — wydaj Esencję Chaosu [F]!',
+    });
+  }
 }
 
 function completeCursedAltar(room: GameRoom, now: number) {
@@ -857,6 +1099,12 @@ function initializeLocation(room: GameRoom, globalLocation: number, riftFloor = 
   room.comboExpiresAt = 0;
   room.nextMeteorAt = Date.now() + 4500;
   room.nextEnvTrapAt = Date.now() + 5200;
+  room.activeTethers = [];
+  room.branchPortals = [];
+  room.merchant = null;
+  room.pactEnraged = false;
+  room.pactTimerEndsAt =
+    !isCamp && room.activePactCurses.includes('chaos_timer') ? Date.now() + 240000 : 0;
 
   const partySize = Math.max(1, room.players.size);
 
@@ -925,6 +1173,12 @@ function initializeLocation(room: GameRoom, globalLocation: number, riftFloor = 
       p.slowedUntil = 0;
       p.poisonUntil = 0;
       p.animState = 'idle';
+      p.fury = 100; // Full Ultimate ready in Camp so players can test on Training Dummy!
+      p.elementalBoons = [];
+      p.duoBoons = [];
+      p.skillEvolutions = [];
+      p.runEssence = 0;
+      p.charonPurchasedIds = [];
       pIdx++;
     }
 
@@ -1405,6 +1659,9 @@ function initializeLocation(room: GameRoom, globalLocation: number, riftFloor = 
   }
 
   const enemyXpPool = totalXpPool * 0.8;
+  const hasFastFoes = room.activePactCurses.includes('fast_foes');
+  const hasEmpoweredBoss = room.activePactCurses.includes('empowered_boss');
+  const hasArmoredHordes = room.activePactCurses.includes('armored_hordes');
   let totalWeight = 0;
   for (const e of spawnedEnemies) {
     totalWeight += e.tier === 'boss' ? 14 : e.tier === 'miniboss' ? 9 : e.tier === 'elite' ? 2.2 : 1;
@@ -1412,7 +1669,32 @@ function initializeLocation(room: GameRoom, globalLocation: number, riftFloor = 
   for (const e of spawnedEnemies) {
     const w = e.tier === 'boss' ? 14 : e.tier === 'miniboss' ? 9 : e.tier === 'elite' ? 2.2 : 1;
     e.xpReward = Math.max(8, Math.round((w / Math.max(1, totalWeight)) * enemyXpPool));
+    if (hasFastFoes && e.speed > 0) {
+      e.speed = Number((e.speed * 1.2).toFixed(2));
+    }
+    if (e.tier === 'elite') {
+      const arm = Math.round(e.maxHp * 0.42 * (hasArmoredHordes ? 1.5 : 1.0));
+      e.eliteArmor = arm;
+      e.maxEliteArmor = arm;
+    }
+    if (e.tier === 'boss') {
+      e.bossPhase = 1;
+      if (hasEmpoweredBoss) {
+        e.hp = Math.round(e.hp * 1.25);
+        e.maxHp = Math.round(e.maxHp * 1.25);
+      }
+    }
     room.enemies.set(e.id, e);
+  }
+
+  // 60% chance to spawn Wandering Merchant (Charon) in a side room!
+  const sideRoom = map.rooms.find((r) => r.kind === 'shrine' || (r.kind === 'combat' && r.index >= 2));
+  if (sideRoom && Math.random() < 0.6) {
+    room.merchant = {
+      id: nextId('charon'),
+      x: sideRoom.cx + 3.2,
+      z: sideRoom.cz - 3.2,
+    };
   }
 
   room.totalEnemies = spawnedEnemies.length;
@@ -1437,6 +1719,9 @@ function initializeLocation(room: GameRoom, globalLocation: number, riftFloor = 
     p.animState = 'idle';
     p.activeBoons = [];
     p.pendingBoonChoices = undefined;
+    p.pendingElementalChoices = undefined;
+    p.pendingEvolutionChoices = undefined;
+    p.charonPurchasedIds = [];
     p.flameAuraNextTick = 0;
     p.titanBarrierNextTick = 0;
     // Reset per-location MVP stats
@@ -1527,12 +1812,15 @@ function damagePlayer(
     underGearMult = Math.min(2.0, options.bossRequiredPower / Math.max(1, player.stats.combatPower));
   }
 
-  const baseHit = rawDamage * underGearMult * (1 - defMitigation) * (1 - dr);
+  const pactEnrageMult = room.pactEnraged ? 1.4 : 1.0;
+  const baseHit = rawDamage * pactEnrageMult * underGearMult * (1 - defMitigation) * (1 - dr);
   const hpPctBonus = options?.extraMaxHpPct ? player.maxHp * (options.extraMaxHpPct / 100) : 0;
   let dmg = Math.max(1, Math.round(baseHit + hpPctBonus));
 
   // Track total mitigated/taken damage for Tank MVP card ("Ściana Nie Do Przejścia")
   player.matchDamageTaken += Math.round(rawDamage * (defMitigation + dr)) + dmg;
+  // Gain Gniew Chaosu (Fury) on taking damage!
+  addFury(player, 4.5);
 
   if (player.shield > 0) {
     const absorbed = Math.min(player.shield, dmg);
@@ -1599,6 +1887,7 @@ function damageEnemy(
 ): number {
   if (!enemy.alive) return 0;
   if (enemy.burrowUntil && now < enemy.burrowUntil) return 0;
+  if (enemy.phaseInvulnUntil && now < enemy.phaseInvulnUntil) return 0;
 
   // Strict Line-of-Sight check: NEVER allow hitting mobs or bosses through solid walls from another room!
   if (room.mapData && enemy.tier !== 'root_trap') {
@@ -1617,9 +1906,40 @@ function damageEnemy(
     dmg *= 1.12;
   }
 
+  // Backstab (+20% W PLECY! + extra with Kosa Cienia!)
+  let isBackstab = false;
+  if (enemy.tier !== 'barrel' && enemy.tier !== 'root_trap' && enemy.tier !== 'dummy') {
+    const fx = Math.sin(enemy.rotY || 0);
+    const fz = Math.cos(enemy.rotY || 0);
+    const toAx = attacker.x - enemy.x;
+    const toAz = attacker.z - enemy.z;
+    const toLen = Math.hypot(toAx, toAz) || 1;
+    const dot = (fx * toAx + fz * toAz) / toLen;
+    if (dot < -0.25) {
+      isBackstab = true;
+      const shadowMult = getBoonMult(attacker, 'cien_attack');
+      dmg *= 1.2 + shadowMult * 0.25;
+    }
+  }
+
   // Perfect Dodge 3s buff (+25% damage!)
   if (attacker.perfectDodgeBuffUntil && now < attacker.perfectDodgeBuffUntil) {
     dmg *= 1.25;
+  }
+
+  // Team Ultimate Resonance buff (+30% damage!)
+  if (attacker.teamUltBuffUntil && now < attacker.teamUltBuffUntil) {
+    dmg *= 1.3;
+  }
+
+  // Frost Skill Boon (+damage vs slowed) & Duo Thermal Shock!
+  const isSlowed = now < enemy.slowedUntil;
+  if (isSlowed) {
+    const frostSkillMult = getBoonMult(attacker, 'mroz_skill');
+    if (frostSkillMult > 0) dmg *= 1 + 0.14 * frostSkillMult;
+    if (hasDuo(attacker, 'duo_thermal_shock')) {
+      dmg *= 1.35;
+    }
   }
 
   // Cursed Altar 3-min party buff (+15% AD/AP!)
@@ -1669,7 +1989,8 @@ function damageEnemy(
   }
 
   const hasCritFury = attacker.activeBoons.includes('crit_fury');
-  const effCritChance = attacker.stats.critChance + (hasCritFury ? 28 : 0);
+  const stormCrit = now < attacker.stormOverloadUntil ? Math.round(12 * getBoonMult(attacker, 'blyskawica_skill')) : 0;
+  const effCritChance = attacker.stats.critChance + (hasCritFury ? 28 : 0) + stormCrit;
   const effCritDmg = attacker.stats.critDamage + (hasCritFury ? 55 : 0) + (combatOpts?.bonusCritDmgPct ?? 0);
   const isCrit =
     enemy.tier !== 'barrel' &&
@@ -1679,6 +2000,27 @@ function damageEnemy(
   }
 
   dmg = Math.max(1, Math.round(dmg * (0.94 + Math.random() * 0.12)));
+
+  // Build Gniew Chaosu (Ultimate Fury 0..100) on dealing damage!
+  if (enemy.tier !== 'barrel') {
+    addFury(attacker, isCrit ? 4.2 : 2.6);
+  }
+
+  // Hades-style Elite Armor Bar: absorbs damage first (immune to stun/knockback until broken!)
+  if ((enemy.eliteArmor || 0) > 0) {
+    const armorMult = isCrit && hasDuo(attacker, 'duo_blood_blizzard') ? 2.0 : 1.0;
+    const armorHit = Math.round(dmg * armorMult);
+    enemy.eliteArmor = Math.max(0, (enemy.eliteArmor || 0) - armorHit);
+    if (enemy.eliteArmor <= 0) {
+      enemy.stunnedUntil = Math.max(enemy.stunnedUntil, now + 1500);
+      pushVfx(room, { kind: 'armor_break', x: enemy.x, z: enemy.z, radius: 3.6, color: '#fde047', casterId: attacker.id });
+      pushCombatText(room, enemy.x, 3.4, enemy.z, '🛡️ PANCERZ ROZBITY!', 'physical', true, true, 'OGŁUSZONY!');
+      io.to(attacker.socketId).emit('juice:armor_break');
+    } else {
+      pushCombatText(room, enemy.x, 2.5, enemy.z, `🛡️ ${armorHit}`, 'shield', isCrit, false);
+      return armorHit;
+    }
+  }
 
   // Apply Stagger Bar damage on Bosses, Mini-Bosses & Camp Dummy!
   if (
@@ -1766,11 +2108,106 @@ function damageEnemy(
 
   if (dmg > 0) {
     enemy.hp = Math.max(0, enemy.hp - dmg);
+
+    // Boss 2-3 Phase Transitions at 66% HP (FAZA II) & 33% HP (FAZA III) with Raid Mechanics!
+    if (enemy.tier === 'boss' && enemy.hp > 0) {
+      const hpRatio = enemy.hp / Math.max(1, enemy.maxHp);
+      const curPhase = enemy.bossPhase || 1;
+      const nextPhase: 1 | 2 | 3 = hpRatio <= 0.33 ? 3 : hpRatio <= 0.66 ? 2 : 1;
+      if (nextPhase > curPhase) {
+        enemy.bossPhase = nextPhase;
+        enemy.phaseInvulnUntil = now + 1600;
+        enemy.castingAbility = undefined;
+        pushVfx(room, {
+          kind: 'boss_phase',
+          x: enemy.x,
+          z: enemy.z,
+          radius: 9.5,
+          color: nextPhase === 3 ? '#f43f5e' : '#f97316',
+        });
+        io.to(room.code).emit('juice:boss_phase', { phase: nextPhase });
+        io.to(room.code).emit('game:banner', {
+          type: 'boss',
+          title: `🔥 ${enemy.name.toUpperCase()} — FAZA ${nextPhase === 2 ? 'II' : 'III'}!`,
+          subtitle:
+            nextPhase === 2
+              ? 'Boss przyspiesza! Uwaga na Złoty Krąg Soak (stańcie razem!)'
+              : 'OSTATECZNA FURIA BOSSA! Zrywajcie Łańcuchy i unikajcie ataków!',
+        });
+
+        // Spawn MMO Raid Signature Mechanic on Phase Transition!
+        const living = Array.from(room.players.values()).filter((pl) => pl.alive);
+        if (living.length >= 2 && nextPhase === 3) {
+          // Breakable Tether between 2 teammates!
+          room.activeTethers.push({
+            id: nextId('tether'),
+            playerAId: living[0].id,
+            playerBId: living[1].id,
+            breakDist: 9.5,
+            explodesAt: now + 4200,
+          });
+          pushCombatText(room, living[0].x, 3.2, living[0].z, '⛓️ ZERWIJ ŁAŃCUCH! ODBIEGNIJCIE!', 'magical', true, true);
+        } else if (living.length >= 1) {
+          // Golden Soak Circle (group-share damage + +25 Fury if soaked!)
+          const targetP = living[Math.floor(Math.random() * living.length)];
+          const soakId = nextId('soak');
+          room.telegraphs.set(soakId, {
+            id: soakId,
+            shape: 'soak',
+            x: targetP.x,
+            z: targetP.z,
+            radius: 4.5,
+            color: '#fde047',
+            label: '☀️ KRĄG SOAK — WEJDŹCIE RAZEM!',
+            createdAt: now,
+            triggerAt: now + 3200,
+            ownerId: enemy.id,
+            abilityId: 'raid_soak',
+            resolved: false,
+            damage: Math.round(enemy.damage * 1.8),
+            damageType: 'magical',
+          });
+        }
+      }
+    }
+
     if (allowBoonProcs && enemy.tier !== 'barrel') {
       // Vampiric Strikes Boon: heal 10% of damage dealt!
       if (attacker.activeBoons.includes('vampiric_strikes') && attacker.alive && attacker.hp < attacker.maxHp) {
         const vampHeal = Math.max(2, Math.min(attacker.maxHp - attacker.hp, Math.round(dmg * 0.1)));
         attacker.hp += vampHeal;
+      }
+      // Duo Krwawa Zamieć: crits heal 4% Max HP!
+      if (isCrit && hasDuo(attacker, 'duo_blood_blizzard') && attacker.alive) {
+        const h = Math.max(4, Math.round(attacker.maxHp * 0.04));
+        attacker.hp = Math.min(attacker.maxHp, attacker.hp + h);
+      }
+      // Frost Attack Boon (Kryształowe Cięcie): Crits trigger Frost Nova AOE!
+      const frostCritMult = getBoonMult(attacker, 'mroz_attack');
+      if (isCrit && frostCritMult > 0) {
+        pushVfx(room, { kind: 'frost_nova', x: enemy.x, z: enemy.z, radius: 4.6, color: '#38bdf8', casterId: attacker.id });
+        for (const other of room.enemies.values()) {
+          if (!other.alive || other.tier === 'root_trap' || other.tier === 'barrel') continue;
+          if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 4.6) {
+            other.slowedUntil = Math.max(other.slowedUntil, now + 3200);
+            if (other.id !== enemy.id) {
+              damageEnemy(room, attacker, other, Math.round(dmg * 0.35 * frostCritMult), 'magical', now, false, false);
+            }
+          }
+        }
+      }
+      // Duo Burza Pustki: Backstab always chains purple lightning to 3 nearby enemies!
+      if (isBackstab && hasDuo(attacker, 'duo_void_storm')) {
+        let jumps = 0;
+        for (const other of room.enemies.values()) {
+          if (!other.alive || other.id === enemy.id || other.tier === 'root_trap' || other.tier === 'barrel') continue;
+          if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 7.5) {
+            jumps++;
+            pushVfx(room, { kind: 'lightning_chain', x: enemy.x, z: enemy.z, tx: other.x, tz: other.z, color: '#e879f9' });
+            damageEnemy(room, attacker, other, Math.round(dmg * 0.65), 'magical', now, false, false);
+            if (jumps >= 3) break;
+          }
+        }
       }
       // Chain Lightning Boon: 35% chance to arc lightning to nearby enemies!
       if (attacker.activeBoons.includes('chain_lightning') && Math.random() < 0.35) {
@@ -1779,7 +2216,7 @@ function damageEnemy(
           if (!other.alive || other.id === enemy.id || other.tier === 'root_trap') continue;
           if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 6.8) {
             jumps++;
-            pushVfx(room, { kind: 'wind_blade', x: enemy.x, z: enemy.z, tx: other.x, tz: other.z, color: '#a855f7' });
+            pushVfx(room, { kind: 'lightning_chain', x: enemy.x, z: enemy.z, tx: other.x, tz: other.z, color: '#a855f7' });
             damageEnemy(room, attacker, other, Math.round(dmg * 0.55), 'magical', now, false, false);
             if (jumps >= 2) break;
           }
@@ -1800,7 +2237,8 @@ function damageEnemy(
       isCrit ? `${dmg}!` : `${dmg}`,
       damageType,
       isCrit,
-      false
+      false,
+      isBackstab ? '🗡️ W PLECY!' : undefined
     );
   }
 
@@ -1825,7 +2263,9 @@ function spawnEquipmentDrop(
   _classAffinity?: ClassId
 ) {
   const isHC = isHardcoreLocation(room.globalLocation);
-  const rarity = rollDropRarity(Math.random, guaranteeDrop, luckBonus, isHC);
+  const pactLuck = getPactRewardSummary(room.activePactCurses).lootLuckMult;
+  const vaultLuck = room.eliteVaultBonus ? 1.85 : 1.0;
+  const rarity = rollDropRarity(Math.random, guaranteeDrop, luckBonus * pactLuck * vaultLuck, isHC);
   if (!rarity) return;
 
   // Equal 20% drop chance for each of the 5 hero classes (Wojownik, Czarnoksiężnik, Elf, Krasnolud, Wróżka)!
@@ -1905,6 +2345,31 @@ function handleEnemyDeath(
   }
 
   if (enemy.tier === 'summon') return;
+
+  // Grant Esencja Chaosu (in-run Charon currency) + Fury to all party members!
+  const baseEssence =
+    enemy.tier === 'boss' ? 85 : enemy.tier === 'miniboss' ? 45 : enemy.tier === 'elite' ? 18 : 6;
+  for (const pl of room.players.values()) {
+    const essMult = getBoonMult(pl, 'cien_skill') > 0 ? 1.25 : 1.0;
+    pl.runEssence += Math.round(baseEssence * essMult);
+    addFury(pl, enemy.tier === 'boss' ? 25 : enemy.tier === 'elite' ? 8 : 3);
+  }
+  // Kosa Cienia: heal 3% HP on kill!
+  if (getBoonMult(killer, 'cien_attack') > 0 && killer.alive) {
+    killer.hp = Math.min(killer.maxHp, killer.hp + Math.max(4, Math.round(killer.maxHp * 0.03)));
+  }
+  // Piętno Pustki: killed enemy explodes in shadow AoE!
+  const voidSealMult = getBoonMult(killer, 'cien_skill');
+  if (voidSealMult > 0) {
+    const burstDmg = Math.round(Math.max(killer.stats.ad, killer.stats.ap) * 0.9 * voidSealMult);
+    pushVfx(room, { kind: 'shadow_orb', x: enemy.x, z: enemy.z, radius: 4.5, color: '#e879f9', casterId: killer.id });
+    for (const other of room.enemies.values()) {
+      if (!other.alive || other.id === enemy.id || other.tier === 'root_trap' || other.tier === 'barrel') continue;
+      if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 4.5) {
+        damageEnemy(room, killer, other, burstDmg, 'magical', now, false, false, { x: enemy.x, z: enemy.z });
+      }
+    }
+  }
 
   const loc = room.mapData?.location ?? getLocationDef(room.globalLocation);
   const mutDef = LOCATION_MUTATORS[room.mutatorId];
@@ -4202,6 +4667,27 @@ function tickRoom(room: GameRoom) {
 
     if (now < tel.triggerAt) continue;
 
+    // MMO Raid Soak Circle: splits heavy damage across all teammates inside + grants +25 Fury if soaked!
+    if (tel.shape === 'soak') {
+      const inside = alivePlayers.filter((pl) => Math.hypot(pl.x - tel.x, pl.z - tel.z) <= tel.radius);
+      const trapMult = room.activePactCurses.includes('deadly_traps') ? 1.35 : 1.0;
+      pushVfx(room, { kind: 'soak_resolve', x: tel.x, z: tel.z, radius: tel.radius, color: '#fde047' });
+      if (inside.length >= Math.min(2, alivePlayers.length)) {
+        const splitDmg = Math.round((tel.damage * 0.28 * trapMult) / Math.max(1, inside.length));
+        for (const pl of inside) {
+          damagePlayer(room, pl, splitDmg, tel.damageType, now, { sourceLabel: '☀️ SOAK UDANY!' });
+          addFury(pl, 25);
+          pushCombatText(room, pl.x, 3.0, pl.z, '☀️ SOAK +25 FURII!', 'shield', true, true);
+        }
+      } else {
+        for (const pl of alivePlayers) {
+          damagePlayer(room, pl, Math.round(tel.damage * trapMult), tel.damageType, now, { sourceLabel: '☀️ BRAK SOAKU!' });
+        }
+      }
+      room.telegraphs.delete(tid);
+      continue;
+    }
+
     if (tel.duration && tel.expiresAt) {
       if (now >= tel.expiresAt) {
         room.telegraphs.delete(tid);
@@ -4396,8 +4882,63 @@ function tickRoom(room: GameRoom) {
       ? room.bossDefeated
       : enemiesRemaining <= Math.floor(room.totalEnemies * 0.45);
 
+  // Spawn 3 Hades Branching Portals when exit unlocks!
+  if (exitUnlocked && !room.isCamp && room.branchPortals.length === 0) {
+    spawnBranchingPortals(room);
+  }
+
+  // Update Branching Portal proximity votes!
+  if (room.branchPortals.length > 0) {
+    for (const bp of room.branchPortals) {
+      bp.voters = [];
+      for (const pl of alivePlayers) {
+        if (Math.hypot(pl.x - bp.x, pl.z - bp.z) <= 3.1) {
+          bp.voters.push(pl.id);
+        }
+      }
+    }
+  }
+
+  // Tick MMO Raid Breakable Boss Tethers!
+  if (room.activeTethers.length > 0) {
+    const remainingTethers: BossTetherState[] = [];
+    for (const teth of room.activeTethers) {
+      const pA = room.players.get(teth.playerAId);
+      const pB = room.players.get(teth.playerBId);
+      if (!pA || !pB || !pA.alive || !pB.alive) continue;
+      const distAB = Math.hypot(pA.x - pB.x, pA.z - pB.z);
+      if (distAB >= teth.breakDist) {
+        pushVfx(room, { kind: 'tether_break', x: (pA.x + pB.x) / 2, z: (pA.z + pB.z) / 2, radius: 4.5, color: '#38bdf8' });
+        pushCombatText(room, pA.x, 3.2, pA.z, '⛓️ ŁAŃCUCH ZERWANY!', 'shield', true, true);
+        addFury(pA, 20);
+        addFury(pB, 20);
+        continue;
+      }
+      if (now >= teth.explodesAt) {
+        const trapMult = room.activePactCurses.includes('deadly_traps') ? 1.35 : 1.0;
+        const burst = Math.round(Math.max(pA.maxHp, pB.maxHp) * 0.28 * trapMult);
+        damagePlayer(room, pA, burst, 'magical', now, { sourceLabel: '⛓️ WYBUCH ŁAŃCUCHA!' });
+        damagePlayer(room, pB, burst, 'magical', now, { sourceLabel: '⛓️ WYBUCH ŁAŃCUCHA!' });
+        continue;
+      }
+      remainingTethers.push(teth);
+    }
+    room.activeTethers = remainingTethers;
+  }
+
+  // Check Pact of Chaos 4-min Timer (Klepsydra Zagłady)
+  if (!room.pactEnraged && room.pactTimerEndsAt > 0 && now >= room.pactTimerEndsAt) {
+    room.pactEnraged = true;
+    io.to(room.code).emit('game:banner', {
+      type: 'warning',
+      title: '⏳ KLEPSYDRA ZAGŁADY WYBIEGŁA!',
+      subtitle: 'Wrogowie wpadają w szał (+40% obrażeń)!',
+    });
+  }
+
   const partyBond = getPartyBondBonuses(room.players.size);
   const comboBon = getComboBonuses(room.comboCount);
+  const pactSummary = getPactRewardSummary(room.activePactCurses);
 
   const snapshot: WorldSnapshot = {
     tick: room.tick,
@@ -4409,6 +4950,12 @@ function tickRoom(room: GameRoom) {
     partySize: room.players.size,
     partyBondXpPct: partyBond.xpPct,
     partyBondMfPct: partyBond.mfPct,
+    activePactCurses: room.activePactCurses,
+    pactHeat: pactSummary.totalHeat,
+    pactTimerEndsAt: room.pactTimerEndsAt || undefined,
+    activeTethers: room.activeTethers,
+    merchant: room.merchant ? { id: room.merchant.id, x: room.merchant.x, z: room.merchant.z } : null,
+    branchPortals: room.branchPortals,
     players: Array.from(room.players.values()).map((p) => ({
       id: p.id,
       name: p.name,
@@ -4447,6 +4994,12 @@ function tickRoom(room: GameRoom) {
       equippedAura: p.equippedAura,
       equippedTrail: p.equippedTrail,
       activeBoons: p.activeBoons,
+      comboStep: p.comboStep,
+      fury: p.fury,
+      runEssence: p.runEssence,
+      elementalBoons: p.elementalBoons,
+      duoBoons: p.duoBoons,
+      skillEvolutions: p.skillEvolutions,
       stats: p.stats,
     })),
     enemies: Array.from(room.enemies.values())
@@ -4470,6 +5023,10 @@ function tickRoom(room: GameRoom) {
         stagger: e.stagger,
         maxStagger: e.maxStagger,
         staggerBrokenUntil: e.staggerBrokenUntil,
+        eliteArmor: e.eliteArmor,
+        maxEliteArmor: e.maxEliteArmor,
+        bossPhase: e.bossPhase,
+        phaseInvulnUntil: e.phaseInvulnUntil,
         cursedUntil: e.cursedUntil,
         dummyDps: e.dummyDps,
         dummyMaxCrit: e.dummyMaxCrit,
@@ -4747,14 +5304,23 @@ function handleSkillCast(
 
     case 'deszcz_meteorow': {
       const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 2.75) * rankMult;
-      pushVfx(room, { kind: 'meteor', x: targetX, z: targetZ, radius: skillDef.radius, color: '#b91c1c', casterId: player.id });
-      checkCrackedWallHit(targetX, targetZ, skillDef.radius);
-      for (const e of room.enemies.values()) {
-        if (!e.alive) continue;
-        if (Math.hypot(e.x - targetX, e.z - targetZ) <= skillDef.radius + e.radius) {
-          damageEnemy(room, player, e, dmg, 'magical', now, true, true, undefined, { staggerDmg: 16 });
-          e.cursedUntil = now + 6500;
-          e.cursedBy = player.id;
+      const impacts = hasEvo(player, 'evo_czar_meteor')
+        ? [
+            { x: targetX, z: targetZ, r: skillDef.radius, mult: 1.0 },
+            { x: targetX + 3.2, z: targetZ - 2.4, r: skillDef.radius * 0.72, mult: 0.65 },
+            { x: targetX - 3.0, z: targetZ + 2.6, r: skillDef.radius * 0.72, mult: 0.65 },
+          ]
+        : [{ x: targetX, z: targetZ, r: skillDef.radius, mult: 1.0 }];
+      for (const imp of impacts) {
+        pushVfx(room, { kind: 'meteor', x: imp.x, z: imp.z, radius: imp.r, color: '#b91c1c', casterId: player.id });
+        checkCrackedWallHit(imp.x, imp.z, imp.r);
+        for (const e of room.enemies.values()) {
+          if (!e.alive) continue;
+          if (Math.hypot(e.x - imp.x, e.z - imp.z) <= imp.r + e.radius) {
+            damageEnemy(room, player, e, dmg * imp.mult, 'magical', now, true, true, undefined, { staggerDmg: 16 });
+            e.cursedUntil = now + 6500;
+            e.cursedBy = player.id;
+          }
         }
       }
       break;
@@ -4762,6 +5328,8 @@ function handleSkillCast(
 
     case 'wyssanie_duszy': {
       const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 1.65) * rankMult;
+      const hasReaper = hasEvo(player, 'evo_czar_reaper');
+      if (hasReaper) addFury(player, 25);
       pushVfx(room, { kind: 'soul_drain', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: skillDef.radius, color: '#9333ea', casterId: player.id });
       let totalDealt = 0;
       for (const e of room.enemies.values()) {
@@ -4773,8 +5341,8 @@ function handleSkillCast(
         }
       }
       if (totalDealt > 0) {
-        const maxCapHeal = Math.round(player.maxHp * 0.18);
-        const heal = Math.min(player.maxHp - player.hp, maxCapHeal, Math.round(totalDealt * 0.16));
+        const maxCapHeal = Math.round(player.maxHp * (hasReaper ? 0.27 : 0.18));
+        const heal = Math.min(player.maxHp - player.hp, maxCapHeal, Math.round(totalDealt * (hasReaper ? 0.24 : 0.16)));
         if (heal > 0) {
           player.hp += heal;
           player.matchHealingSupport += heal;
@@ -4823,7 +5391,8 @@ function handleSkillCast(
     }
 
     case 'ostrze_wiatru': {
-      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.05) + player.stats.ap * (skillDef.damageScaleAp ?? 1.05)) * rankMult;
+      const hasHur = hasEvo(player, 'evo_elf_wind');
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.05) + player.stats.ap * (skillDef.damageScaleAp ?? 1.05)) * rankMult * (hasHur ? 1.35 : 1.0);
       player.hasteUntil = now + 3000;
       pushVfx(room, { kind: 'wind_blade', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: skillDef.radius, color: '#22a8b8', casterId: player.id });
       checkCrackedWallHit(targetX, targetZ, skillDef.radius);
@@ -4835,19 +5404,22 @@ function handleSkillCast(
         const perp = Math.abs(rx * dirZ - rz * dirX);
         if (proj >= 0 && proj <= skillDef.range && perp <= 3.0 + e.radius) {
           damageEnemy(room, player, e, dmg, 'hybrid', now, true, true, undefined, applyElfDwarfComboOpts(e, 12));
+          applyKnockbackWithWallSlam(room, player, e, dirX, dirZ, hasHur ? 5.2 : 3.2, now);
         }
       }
       break;
     }
 
     case 'uderzenie_mlotem': {
-      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.35) + player.stats.def * (skillDef.damageScaleDef ?? 0.85)) * rankMult;
-      pushVfx(room, { kind: 'hammer_slam', x: player.x, z: player.z, radius: skillDef.radius, color: '#b45309', casterId: player.id });
+      const hasSeismic = hasEvo(player, 'evo_kras_seismic');
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.35) + player.stats.def * (skillDef.damageScaleDef ?? 0.85)) * rankMult * (hasSeismic ? 1.25 : 1.0);
+      pushVfx(room, { kind: 'hammer_slam', x: player.x, z: player.z, radius: skillDef.radius * (hasSeismic ? 1.2 : 1.0), color: '#b45309', casterId: player.id });
       checkCrackedWallHit(player.x, player.z, skillDef.radius);
       for (const e of room.enemies.values()) {
         if (!e.alive) continue;
-        if (Math.hypot(e.x - player.x, e.z - player.z) <= skillDef.radius + e.radius) {
-          damageEnemy(room, player, e, dmg, 'physical', now, true, true, undefined, { staggerDmg: 34 });
+        if (Math.hypot(e.x - player.x, e.z - player.z) <= skillDef.radius * (hasSeismic ? 1.2 : 1.0) + e.radius) {
+          damageEnemy(room, player, e, dmg, 'physical', now, true, true, undefined, { staggerDmg: hasSeismic ? 46 : 34 });
+          applyKnockbackWithWallSlam(room, player, e, e.x - player.x, e.z - player.z, hasSeismic ? 5.6 : 3.6, now);
           e.tauntedBy = player.id;
           e.tauntedUntil = now + 5200;
           pushCombatText(room, e.x, 3.2, e.z, 'PROWOKACJA!', 'physical', false, true);
@@ -4857,25 +5429,39 @@ function handleSkillCast(
     }
 
     case 'kamienna_skora': {
+      const hasColossus = hasEvo(player, 'evo_kras_colossus');
       player.stoneSkinUntil = now + 4500;
-      const rawShield = (player.stats.def * 1.2 + player.maxHp * 0.14) * rankMult;
+      const rawShield = (player.stats.def * 1.2 + player.maxHp * 0.14) * rankMult * (hasColossus ? 1.3 : 1.0);
       const applied = applyBoundedShield(player, rawShield, 5500, now);
       player.matchHealingSupport += applied;
       pushVfx(room, { kind: 'stone_skin', x: player.x, z: player.z, radius: 2.8, color: '#78716c', casterId: player.id });
       pushCombatText(room, player.x, 2.8, player.z, `KAMIENNA SKÓRA +${applied}`, 'shield', false, true);
+      if (hasColossus) {
+        const waveDmg = player.stats.def * 1.8;
+        for (const e of room.enemies.values()) {
+          if (!e.alive) continue;
+          if (Math.hypot(e.x - player.x, e.z - player.z) <= 5.5 + e.radius) {
+            damageEnemy(room, player, e, waveDmg, 'physical', now, false, false);
+            applyKnockbackWithWallSlam(room, player, e, e.x - player.x, e.z - player.z, 3.2, now);
+          }
+        }
+      }
       break;
     }
 
     case 'trzesienie_ziemi': {
+      const hasTectonic = hasEvo(player, 'evo_kras_quake');
+      const effRad = skillDef.radius * (hasTectonic ? 1.35 : 1.0);
       const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.55) + player.stats.def * (skillDef.damageScaleDef ?? 1.05)) * rankMult;
-      pushVfx(room, { kind: 'earthquake', x: player.x, z: player.z, radius: skillDef.radius, color: '#9a3412', casterId: player.id });
-      checkCrackedWallHit(player.x, player.z, skillDef.radius);
+      pushVfx(room, { kind: 'earthquake', x: player.x, z: player.z, radius: effRad, color: '#9a3412', casterId: player.id });
+      checkCrackedWallHit(player.x, player.z, effRad);
       for (const e of room.enemies.values()) {
         if (!e.alive) continue;
-        if (Math.hypot(e.x - player.x, e.z - player.z) <= skillDef.radius + e.radius) {
-          damageEnemy(room, player, e, dmg, 'physical', now, true, true, undefined, { staggerDmg: 42 });
+        if (Math.hypot(e.x - player.x, e.z - player.z) <= effRad + e.radius) {
+          damageEnemy(room, player, e, dmg, 'physical', now, true, true, undefined, { staggerDmg: hasTectonic ? 68 : 42 });
+          applyKnockbackWithWallSlam(room, player, e, e.x - player.x, e.z - player.z, 3.5, now);
           e.slowedUntil = now + 3800;
-          if (e.tier !== 'boss' && e.tier !== 'miniboss') e.stunnedUntil = now + 1500;
+          if (e.tier !== 'boss' && e.tier !== 'miniboss' && (e.eliteArmor || 0) <= 0) e.stunnedUntil = now + 1500;
         }
       }
       break;
@@ -4938,6 +5524,26 @@ function handleSkillCast(
       break;
     }
   }
+
+  // Trigger Elemental Skill Boons after any skill cast!
+  const fireSkillMult = getBoonMult(player, 'ogien_skill');
+  if (fireSkillMult > 0) {
+    const waveDmg = Math.max(player.stats.ad, player.stats.ap) * 0.55 * fireSkillMult;
+    pushVfx(room, { kind: 'fire_trail', x: player.x, z: player.z, radius: 5.2, color: '#f97316', casterId: player.id });
+    for (const e of room.enemies.values()) {
+      if (!e.alive || e.tier === 'root_trap') continue;
+      if (Math.hypot(e.x - player.x, e.z - player.z) <= 5.2 + e.radius) {
+        damageEnemy(room, player, e, waveDmg, 'magical', now, false, false);
+      }
+    }
+  }
+  const frostSkillMult = getBoonMult(player, 'mroz_skill');
+  if (frostSkillMult > 0) {
+    applyBoundedShield(player, Math.round(player.maxHp * 0.06 * frostSkillMult), 4500, now);
+  }
+  if (getBoonMult(player, 'blyskawica_skill') > 0) {
+    player.stormOverloadUntil = now + 4000;
+  }
 }
 
 function handleBasicAttack(room: GameRoom, player: ServerPlayer, aimX: number, aimZ: number) {
@@ -4948,11 +5554,25 @@ function handleBasicAttack(room: GameRoom, player: ServerPlayer, aimX: number, a
   const cls = CLASSES[player.classId];
   const frenzyAspd = room.mutatorId === 'blood_frenzy' ? 1.28 : 1.0;
   const comboAspd = 1 + Math.min(0.4, room.comboCount * 0.02);
+  const stormAspd = now < player.stormOverloadUntil ? 1 + 0.14 * getBoonMult(player, 'blyskawica_skill') : 1.0;
   // Co-op Synergy: Fairy Light Barrier grants +15% Attack Speed to every shielded ally!
   const fairyBarrierAspd =
     player.lightBarrierUntil && now < player.lightBarrierUntil && player.shield > 0 ? 1.15 : 1.0;
+
+  // 3-Hit Hades Basic Combo Step (1 -> 2 -> 3 Finisher within 1.45s!)
+  const nextStep = now <= player.comboStepExpiresAt ? (player.comboStep % 3) + 1 : 1;
+  player.comboStep = nextStep;
+  player.comboStepExpiresAt = now + 1450;
+  player.attackCounter = (player.attackCounter || 0) + 1;
+
+  // Dash-Strike (Spacja + LPM within 480ms of dash!)
+  const isDashStrike = now - player.dashStartedAt <= 480;
+  const isFinisher = nextStep === 3;
+
+  const stepCdFactor = nextStep === 2 ? 0.88 : isFinisher ? 1.12 : 1.0;
   const cdMs = Math.round(
-    (cls.baseAttackCooldown * 1000) / Math.max(0.5, player.stats.attackSpeed * frenzyAspd * comboAspd * fairyBarrierAspd)
+    (cls.baseAttackCooldown * 1000 * stepCdFactor) /
+      Math.max(0.5, player.stats.attackSpeed * frenzyAspd * comboAspd * fairyBarrierAspd * stormAspd)
   );
   player.cooldowns.basic = now + cdMs;
   player.animState = 'attack';
@@ -4994,15 +5614,95 @@ function handleBasicAttack(room: GameRoom, player: ServerPlayer, aimX: number, a
     dmgType = 'hybrid';
   }
 
+  // Apply 3-Hit Combo Step multiplier & Dash-Strike bonus!
+  if (nextStep === 2) dmg *= 1.1;
+  else if (isFinisher) {
+    dmg *= hasEvo(player, 'evo_woj_titan') ? 1.88 : 1.48;
+  }
+
+  let bonusCritPct = 0;
+  if (isDashStrike) {
+    const shadowDashMult = getBoonMult(player, 'cien_dash');
+    dmg *= 1.32 + shadowDashMult * 0.45;
+    if (shadowDashMult > 0) bonusCritPct += 30;
+    if (hasEvo(player, 'evo_elf_trap')) bonusCritPct += 40;
+    pushVfx(room, {
+      kind: 'dash_strike',
+      x: player.x + dirX * 1.6,
+      z: player.z + dirZ * 1.6,
+      tx: aimX,
+      tz: aimZ,
+      radius: 2.8,
+      color: '#fde047',
+      casterId: player.id,
+    });
+    pushCombatText(room, player.x, 3.0, player.z, '⚡ DASH-STRIKE!', dmgType, true, true);
+  }
+
+  // Fire Attack Boon (Żar Ostrza)
+  const fireAtkMult = getBoonMult(player, 'ogien_attack');
+  if (fireAtkMult > 0) {
+    dmg *= 1 + 0.18 * fireAtkMult;
+  }
+
+  const triggerLightningChain = (sourceEnemy: ServerEnemy, baseDmg: number) => {
+    const boltMult = getBoonMult(player, 'blyskawica_attack');
+    const isVoidStorm = isDashStrike && hasDuo(player, 'duo_void_storm');
+    const isPlasma = isFinisher && hasDuo(player, 'duo_plasma_flame');
+    if ((boltMult > 0 && player.attackCounter % 2 === 0) || isVoidStorm || isPlasma) {
+      let jumps = 0;
+      const maxJumps = isVoidStorm || isPlasma ? 3 : 2;
+      const arcMult = isVoidStorm ? 0.65 : isPlasma ? 0.72 : 0.42 * boltMult;
+      for (const other of room.enemies.values()) {
+        if (!other.alive || other.id === sourceEnemy.id || other.tier === 'root_trap' || other.tier === 'barrel') continue;
+        if (Math.hypot(other.x - sourceEnemy.x, other.z - sourceEnemy.z) <= 7.4) {
+          jumps++;
+          const arcticMult = now < other.slowedUntil && hasDuo(player, 'duo_arctic_thunder') ? 1.4 : 1.0;
+          pushVfx(room, {
+            kind: 'lightning_chain',
+            x: sourceEnemy.x,
+            z: sourceEnemy.z,
+            tx: other.x,
+            tz: other.z,
+            color: isVoidStorm ? '#e879f9' : isPlasma ? '#f97316' : '#fde047',
+          });
+          damageEnemy(room, player, other, Math.round(baseDmg * arcMult * arcticMult), 'magical', now, false, false);
+          if (jumps >= maxJumps) break;
+        }
+      }
+    }
+  };
+
   const isMelee = player.classId === 'wojownik' || player.classId === 'krasnolud';
   if (isMelee) {
-    const cx = player.x + dirX * 1.9;
-    const cz = player.z + dirZ * 1.9;
-    pushVfx(room, { kind: 'slash', x: cx, z: cz, tx: aimX, tz: aimZ, radius: 2.3, color: cls.primaryColor, casterId: player.id });
+    const titanBonus = isFinisher && hasEvo(player, 'evo_woj_titan') ? 1.45 : 1.0;
+    const hitRadius = (isFinisher ? 3.1 : isDashStrike ? 2.8 : 2.3) * titanBonus;
+    const cx = player.x + dirX * (isFinisher ? 2.2 : 1.9);
+    const cz = player.z + dirZ * (isFinisher ? 2.2 : 1.9);
+    pushVfx(room, {
+      kind: 'slash',
+      x: cx,
+      z: cz,
+      tx: aimX,
+      tz: aimZ,
+      radius: hitRadius,
+      color: isFinisher ? '#fde047' : cls.primaryColor,
+      casterId: player.id,
+    });
     for (const e of room.enemies.values()) {
       if (!e.alive) continue;
-      if (Math.hypot(e.x - cx, e.z - cz) <= 2.3 + e.radius) {
-        damageEnemy(room, player, e, dmg, dmgType, now);
+      if (Math.hypot(e.x - cx, e.z - cz) <= hitRadius + e.radius) {
+        const dealt = damageEnemy(room, player, e, dmg, dmgType, now, true, true, undefined, {
+          staggerDmg: isFinisher ? 11 : 4,
+          forceCrit: bonusCritPct >= 100 || (bonusCritPct > 0 && Math.random() * 100 < bonusCritPct),
+        });
+        if (dealt > 0) {
+          triggerLightningChain(e, dealt);
+          if (isFinisher || isDashStrike) {
+            const kbForce = isFinisher ? (hasEvo(player, 'evo_woj_titan') ? 4.8 : 3.2) : 2.2;
+            applyKnockbackWithWallSlam(room, player, e, dirX, dirZ, kbForce, now);
+          }
+        }
       }
     }
   } else {
@@ -5029,12 +5729,42 @@ function handleBasicAttack(room: GameRoom, player: ServerPlayer, aimX: number, a
       z: player.z,
       tx: endX,
       tz: endZ,
-      radius: 1.0,
-      color: cls.primaryColor,
+      radius: isFinisher ? 1.5 : 1.0,
+      color: isFinisher ? '#fde047' : cls.primaryColor,
       casterId: player.id,
     });
     if (hitEnemy) {
-      damageEnemy(room, player, hitEnemy, dmg, dmgType, now);
+      const dealt = damageEnemy(room, player, hitEnemy, dmg, dmgType, now, true, true, undefined, {
+        staggerDmg: isFinisher ? 9 : 3,
+        forceCrit: bonusCritPct > 0 && Math.random() * 100 < bonusCritPct,
+      });
+      if (dealt > 0) {
+        triggerLightningChain(hitEnemy, dealt);
+        if (isFinisher) {
+          applyKnockbackWithWallSlam(room, player, hitEnemy, dirX, dirZ, 2.8, now);
+        }
+        // Elf Ricochet / Fairy Prism / Ranged 3rd-hit split to 2nd enemy!
+        if (
+          hasEvo(player, 'evo_elf_ricochet') ||
+          (isFinisher && (player.classId === 'elf' || hasEvo(player, 'evo_wro_prism')))
+        ) {
+          for (const other of room.enemies.values()) {
+            if (!other.alive || other.id === hitEnemy.id || other.tier === 'root_trap' || other.tier === 'barrel') continue;
+            if (Math.hypot(other.x - hitEnemy.x, other.z - hitEnemy.z) <= 6.8) {
+              pushVfx(room, {
+                kind: player.classId === 'elf' ? 'magic_arrow' : 'radiant_bolt',
+                x: hitEnemy.x,
+                z: hitEnemy.z,
+                tx: other.x,
+                tz: other.z,
+                color: '#4ade80',
+              });
+              damageEnemy(room, player, other, Math.round(dmg * 0.72), dmgType, now, true, false);
+              break;
+            }
+          }
+        }
+      }
     }
   }
 }
@@ -5115,6 +5845,18 @@ io.on('connection', (socket: Socket) => {
     activeBoons: [],
     flameAuraNextTick: 0,
     titanBarrierNextTick: 0,
+    comboStep: 0,
+    comboStepExpiresAt: 0,
+    attackCounter: 0,
+    fury: 0,
+    lastUltimateAt: 0,
+    teamUltBuffUntil: 0,
+    stormOverloadUntil: 0,
+    runEssence: 0,
+    elementalBoons: [],
+    duoBoons: [],
+    skillEvolutions: [],
+    charonPurchasedIds: [],
   });
 
   socket.on('rift:get_leaderboard', (ack) => {
@@ -5165,6 +5907,13 @@ io.on('connection', (socket: Socket) => {
       comboExpiresAt: 0,
       nextMeteorAt: 0,
       nextEnvTrapAt: 0,
+      activePactCurses: [],
+      pactTimerEndsAt: 0,
+      pactEnraged: false,
+      eliteVaultBonus: false,
+      activeTethers: [],
+      merchant: null,
+      branchPortals: [],
       trades: new Map(),
       pendingCombatTexts: [],
       pendingVfx: [],
@@ -5420,7 +6169,8 @@ io.on('connection', (socket: Socket) => {
     if (now < p.potionReadyAt || p.hp >= p.maxHp) return;
 
     p.potionReadyAt = now + 16000;
-    const heal = Math.min(p.maxHp - p.hp, Math.round(p.maxHp * 0.32));
+    const bloodTaxMult = room.activePactCurses.includes('blood_tax') ? 0.7 : 1.0;
+    const heal = Math.min(p.maxHp - p.hp, Math.round(p.maxHp * 0.32 * bloodTaxMult));
     p.hp += heal;
     pushVfx(room, { kind: 'potion_heal', x: p.x, z: p.z, radius: 2.2, color: '#22c55e', casterId: p.id });
     pushCombatText(room, p.x, 2.7, p.z, `🧪 +${heal}`, 'heal', false, true);
@@ -5489,6 +6239,236 @@ io.on('connection', (socket: Socket) => {
     } else {
       pushCombatText(room, p.x, 2.3, p.z, 'UNIK!', 'shield', false, true);
     }
+
+    // Hades Elemental Dash Boons!
+    const fireDashMult = getBoonMult(p, 'ogien_dash');
+    if (fireDashMult > 0) {
+      const fdmg = Math.round(Math.max(p.stats.ad, p.stats.ap) * 0.55 * fireDashMult);
+      pushVfx(room, { kind: 'fire_trail', x: oldX, z: oldZ, radius: 4.0, color: '#f97316', casterId: p.id });
+      for (const e of room.enemies.values()) {
+        if (!e.alive || e.tier === 'root_trap') continue;
+        if (Math.hypot(e.x - oldX, e.z - oldZ) <= 4.0 + e.radius) {
+          damageEnemy(room, p, e, fdmg, 'magical', now, false, false);
+        }
+      }
+    }
+    const frostDashMult = getBoonMult(p, 'mroz_dash');
+    if (frostDashMult > 0) {
+      const cdmg = Math.round(Math.max(p.stats.ad, p.stats.ap) * 0.45 * frostDashMult);
+      pushVfx(room, { kind: 'frost_nova', x: p.x, z: p.z, radius: 4.4, color: '#38bdf8', casterId: p.id });
+      for (const e of room.enemies.values()) {
+        if (!e.alive || e.tier === 'root_trap') continue;
+        if (Math.hypot(e.x - p.x, e.z - p.z) <= 4.4 + e.radius) {
+          e.slowedUntil = Math.max(e.slowedUntil, now + 3500);
+          damageEnemy(room, p, e, cdmg, 'magical', now, false, false);
+        }
+      }
+    }
+    const boltDashMult = getBoonMult(p, 'blyskawica_dash');
+    if (boltDashMult > 0) {
+      p.cooldowns.dash = now + Math.round((p.cooldowns.dash - now) * 0.8);
+      let nearest: ServerEnemy | null = null;
+      let bestD = 9.0;
+      for (const e of room.enemies.values()) {
+        if (!e.alive || e.tier === 'root_trap' || e.tier === 'barrel') continue;
+        const d = Math.hypot(e.x - p.x, e.z - p.z);
+        if (d < bestD) {
+          bestD = d;
+          nearest = e;
+        }
+      }
+      if (nearest) {
+        const bdmg = Math.round(Math.max(p.stats.ad, p.stats.ap) * 0.6 * boltDashMult);
+        pushVfx(room, { kind: 'lightning_chain', x: p.x, z: p.z, tx: nearest.x, tz: nearest.z, color: '#fde047' });
+        damageEnemy(room, p, nearest, bdmg, 'magical', now, true, false);
+      }
+    }
+  });
+
+  // =========================================================
+  // HADES COMBAT PACK SOCKET HANDLERS (ULTIMATE, PACT, BOONS, EVOLUTIONS, CHARON)
+  // =========================================================
+  socket.on('player:ultimate', () => {
+    const code = socketToRoom.get(socket.id);
+    if (!code) return;
+    const room = rooms.get(code);
+    const p = room?.players.get(socket.id);
+    if (!room || !p || !p.alive || p.fury < 50) return;
+
+    const now = Date.now();
+    const isFull = p.fury >= 100;
+    p.fury = isFull ? 0 : Math.max(0, p.fury - 50);
+    p.lastUltimateAt = now;
+    p.invulnUntil = Math.max(p.invulnUntil, now + (isFull ? 1600 : 850));
+
+    const ultDef = CLASS_ULTIMATES[p.classId];
+    const powerScale = isFull ? 1.85 : 1.0;
+
+    // Check Co-op Team Ultimate Resonance (another ally used Ultimate within 3.5s!)
+    const teamPartner = Array.from(room.players.values()).find(
+      (al) => al.id !== p.id && now - al.lastUltimateAt <= 3500
+    );
+
+    const ultRad = isFull ? 11.5 : 8.0;
+    pushVfx(room, {
+      kind: teamPartner ? 'team_ultimate' : 'ultimate',
+      x: p.x,
+      z: p.z,
+      radius: ultRad,
+      color: ultDef.color,
+      casterId: p.id,
+    });
+    io.to(room.code).emit('juice:ultimate', { isTeam: !!teamPartner, isFull });
+    pushCombatText(
+      room,
+      p.x,
+      3.6,
+      p.z,
+      `${ultDef.icon} ${ultDef.name}${isFull ? ' (100%!)' : ''}`,
+      'magical',
+      true,
+      true
+    );
+
+    const baseStat = Math.max(p.stats.ad, p.stats.ap, (p.stats.ad + p.stats.ap) * 0.6);
+    const ultDmg = Math.round(baseStat * 3.8 * powerScale * (teamPartner ? 1.35 : 1.0));
+
+    if (p.classId === 'wrozka') {
+      for (const al of room.players.values()) {
+        if (!al.alive) continue;
+        const healAmt = Math.round(al.maxHp * (isFull ? 0.85 : 0.45));
+        al.hp = Math.min(al.maxHp, al.hp + healAmt);
+        const shAmt = applyBoundedShield(al, Math.round(al.maxHp * (isFull ? 0.55 : 0.3)), 8000, now);
+        al.lightBarrierUntil = now + 8000;
+        p.matchHealingSupport += healAmt + shAmt;
+        pushCombatText(room, al.x, 3.0, al.z, `🌟 +${healAmt} HP & TARCZA!`, 'heal', true, true);
+      }
+    }
+
+    for (const e of room.enemies.values()) {
+      if (!e.alive || e.tier === 'root_trap') continue;
+      if (Math.hypot(e.x - p.x, e.z - p.z) <= ultRad + e.radius) {
+        damageEnemy(room, p, e, ultDmg, p.classId === 'czarnoksieznik' || p.classId === 'wrozka' ? 'magical' : 'physical', now, true, true, undefined, {
+          staggerDmg: isFull ? 65 : 32,
+          forceCrit: p.classId === 'elf',
+        });
+        if (p.classId === 'czarnoksieznik') {
+          e.cursedUntil = now + 8000;
+          e.cursedBy = p.id;
+        }
+        if (p.classId === 'wojownik' || p.classId === 'krasnolud') {
+          applyKnockbackWithWallSlam(room, p, e, e.x - p.x, e.z - p.z, isFull ? 6.5 : 4.0, now);
+        }
+      }
+    }
+
+    if (teamPartner) {
+      for (const al of room.players.values()) {
+        if (!al.alive) continue;
+        al.teamUltBuffUntil = now + 6000;
+        applyBoundedShield(al, Math.round(al.maxHp * 0.35), 6000, now);
+      }
+      io.to(room.code).emit('game:banner', {
+        type: 'boski',
+        title: '🌟 WSPÓLNY ULTIMATE DRUŻYNY!',
+        subtitle: `${p.name} + ${teamPartner.name} wywołali Rezonans Chaosu (+30% DMG & Tarcza dla wszystkich na 6s)!`,
+      });
+    }
+  });
+
+  socket.on('pact:set_curses', (payload: { curses?: string[] }) => {
+    const code = socketToRoom.get(socket.id);
+    if (!code) return;
+    const room = rooms.get(code);
+    if (!room) return;
+    const list = Array.isArray(payload?.curses) ? payload.curses.filter((c) => typeof c === 'string') : [];
+    room.activePactCurses = Array.from(new Set(list)).slice(0, 6);
+    const summary = getPactRewardSummary(room.activePactCurses);
+    io.to(room.code).emit('game:banner', {
+      type: summary.totalHeat > 0 ? 'warning' : 'info',
+      title:
+        summary.totalHeat > 0
+          ? `🔥 PAKT CHAOSU AKTYWNY (Żar: ${summary.totalHeat})`
+          : '🔥 PAKT CHAOSU WYŁĄCZONY',
+      subtitle:
+        summary.totalHeat > 0
+          ? `Premia łupów: +${Math.round((summary.lootLuckMult - 1) * 100)}% • +${summary.xpBonusPct}% XP`
+          : 'Standardowe zasady wyprawy.',
+    });
+  });
+
+  socket.on('hades:choose_boon', (payload: { kind: 'elemental' | 'duo'; id: string }) => {
+    const code = socketToRoom.get(socket.id);
+    if (!code) return;
+    const room = rooms.get(code);
+    const p = room?.players.get(socket.id);
+    if (!room || !p || !p.pendingElementalChoices) return;
+    const pick = p.pendingElementalChoices.find((c) => c.kind === payload.kind && c.id === payload.id);
+    if (!pick) return;
+
+    if (pick.kind === 'duo' && DUO_BOONS[pick.id]) {
+      if (!p.duoBoons.includes(pick.id)) p.duoBoons.push(pick.id);
+      pushCombatText(room, p.x, 3.3, p.z, `${DUO_BOONS[pick.id].icon} ${DUO_BOONS[pick.id].name}!`, 'magical', true, true);
+    } else if (pick.kind === 'elemental' && ELEMENTAL_BOONS[pick.id]) {
+      const existing = p.elementalBoons.find((b) => b.id === pick.id);
+      const rarity: BoonRarity = pick.rarity || 'zwykly';
+      if (existing) existing.rarity = rarity;
+      else p.elementalBoons.push({ id: pick.id, rarity });
+      pushCombatText(room, p.x, 3.2, p.z, `${ELEMENTAL_BOONS[pick.id].icon} ${ELEMENTAL_BOONS[pick.id].name}!`, 'shield', true, true);
+    }
+    p.pendingElementalChoices = undefined;
+  });
+
+  socket.on('hades:choose_evolution', (payload: { id: string }) => {
+    const code = socketToRoom.get(socket.id);
+    if (!code) return;
+    const room = rooms.get(code);
+    const p = room?.players.get(socket.id);
+    if (!room || !p || !p.pendingEvolutionChoices) return;
+    if (!p.pendingEvolutionChoices.includes(payload.id) || !SKILL_EVOLUTIONS[payload.id]) return;
+    if (!p.skillEvolutions.includes(payload.id)) p.skillEvolutions.push(payload.id);
+    p.pendingEvolutionChoices = undefined;
+    const def = SKILL_EVOLUTIONS[payload.id];
+    pushCombatText(room, p.x, 3.3, p.z, `${def.icon} ${def.name}!`, 'physical', true, true);
+  });
+
+  socket.on('charon:buy', (payload: { itemId: string }) => {
+    const code = socketToRoom.get(socket.id);
+    if (!code) return;
+    const room = rooms.get(code);
+    const p = room?.players.get(socket.id);
+    if (!room || !p || !room.merchant) return;
+    const def = CHARON_SHOP_ITEMS.find((i) => i.id === payload.itemId);
+    if (!def) return;
+    if (p.charonPurchasedIds.includes(def.id) || p.runEssence < def.cost) return;
+
+    p.runEssence -= def.cost;
+    p.charonPurchasedIds.push(def.id);
+    const now = Date.now();
+
+    if (def.id === 'elixir') {
+      p.hp = p.maxHp;
+      p.mana = p.maxMana;
+      applyBoundedShield(p, Math.round(p.maxHp * 0.3), 12000, now);
+      pushCombatText(room, p.x, 3.0, p.z, '🧪 ELIKSIR CHARONA! 100% HP!', 'heal', true, true);
+    } else if (def.id === 'elemental_boon') {
+      offerElementalBoon(p, '🛶 DAR PATRONÓW OD CHARONA');
+    } else if (def.id === 'skill_evolution') {
+      offerSkillEvolution(p, '🛶 KRYSZTAŁ MISTRZOSTWA CHARONA');
+    } else if (def.id === 'mystery_chest') {
+      spawnEquipmentDrop(room, p.x, p.z, Math.max(1, room.globalLocation), true, 2.6, p.classId);
+      pushCombatText(room, p.x, 3.0, p.z, '🎁 SKRZYNIA CHARONA!', 'magical', true, true);
+    } else if (def.id === 'upgrade_boon') {
+      const upgradable = p.elementalBoons.find((b) => b.rarity !== 'heroiczny');
+      if (upgradable) {
+        upgradable.rarity = upgradable.rarity === 'zwykly' ? 'epicki' : 'heroiczny';
+        const bDef = ELEMENTAL_BOONS[upgradable.id];
+        pushCombatText(room, p.x, 3.2, p.z, `✨ ${bDef?.name || 'Dar'} ➔ ${BOON_RARITY_META[upgradable.rarity].label.toUpperCase()}!`, 'shield', true, true);
+      } else {
+        offerElementalBoon(p, '✨ BONUS CHARONA (NOWY DAR)');
+      }
+    }
+    socket.emit('juice:merchant_buy', { itemId: def.id });
   });
 
   socket.on('loot:pickup', (payload: { lootId: string }) => {
@@ -5530,6 +6510,32 @@ io.on('connection', (socket: Socket) => {
       for (const st of map.campStations) {
         if (Math.hypot(p.x - st.x, p.z - st.z) <= 4.4) {
           socket.emit('camp:station_interact', { kind: st.kind });
+          return;
+        }
+      }
+    }
+
+    // Wandering Merchant (Charon) interaction!
+    if (room.merchant && Math.hypot(p.x - room.merchant.x, p.z - room.merchant.z) <= 4.6) {
+      socket.emit('charon:open', {
+        runEssence: p.runEssence,
+        purchasedIds: p.charonPurchasedIds,
+      });
+      return;
+    }
+
+    // Branching Hades Reward Portals interaction!
+    if (room.branchPortals.length > 0) {
+      for (const bp of room.branchPortals) {
+        if (Math.hypot(p.x - bp.x, p.z - bp.z) <= 3.8) {
+          const chosenKind = bp.rewardKind;
+          if (room.riftFloor > 0) {
+            initializeLocation(room, 60, room.riftFloor + 1);
+          } else {
+            const nextLoc = Math.min(TOTAL_LOCATIONS, room.globalLocation + 1);
+            initializeLocation(room, nextLoc, 0);
+          }
+          grantBranchPortalReward(room, chosenKind);
           return;
         }
       }

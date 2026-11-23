@@ -214,6 +214,34 @@ class SoundEngine {
       this.playTone(f, f * 1.06, 0.085, 'triangle', 0.22, i * 0.065)
     );
   }
+
+  public playWallSlam() {
+    this.playTone(130, 42, 0.22, 'sawtooth', 0.3);
+    this.playNoise(0.18, 0.32, 320);
+  }
+
+  public playArmorBreak() {
+    this.playTone(980, 320, 0.16, 'square', 0.22);
+    this.playNoise(0.16, 0.28, 1800, 0.02);
+    this.playTone(1480, 740, 0.18, 'triangle', 0.2, 0.04);
+  }
+
+  public playUltimate(isTeam = false) {
+    this.playTone(180, 60, 0.52, 'sawtooth', 0.28);
+    const notes = isTeam ? [440, 554, 659, 880, 1108, 1318] : [330, 494, 659, 988];
+    notes.forEach((f, i) => this.playTone(f, f * 1.04, 0.34, 'triangle', 0.24, i * 0.055));
+    this.playNoise(0.32, 0.26, 600, 0.05);
+  }
+
+  public playBossPhase() {
+    this.playTone(150, 52, 0.65, 'sawtooth', 0.3);
+    this.playTone(220, 440, 0.42, 'triangle', 0.22, 0.12);
+    this.playNoise(0.35, 0.24, 420, 0.06);
+  }
+
+  public playMerchantBuy() {
+    [659, 987, 1318].forEach((f, i) => this.playTone(f, f, 0.18, 'sine', 0.2, i * 0.06));
+  }
 }
 
 export const soundEngine = new SoundEngine();

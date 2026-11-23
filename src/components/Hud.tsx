@@ -4,6 +4,7 @@ import { getDailyBlessing, getDailyFeaturedLocation } from '../../shared/bountie
 import { getTotalGuildShards, GuildState, isGuildAct } from '../../shared/guilds';
 import { RARITY_META } from '../../shared/items';
 import { CHAOS_BOONS, LOCATION_MUTATORS } from '../../shared/mutators';
+import { CLASS_ULTIMATES, DUO_BOONS, ELEMENTAL_BOONS, SKILL_EVOLUTIONS } from '../../shared/hades';
 import { formatRiftTime } from '../../shared/rift';
 import { getLocationDef } from '../../shared/world';
 import type {
@@ -56,6 +57,7 @@ interface HudProps {
   onOpenPanel: (panel: ActivePanel) => void;
   onCastSkill: (slot: 'active1' | 'active2' | 'active3') => void;
   onUsePotion: () => void;
+  onCastUltimate?: () => void;
   onRequestTrade: (targetId: string) => void;
   onSendEmote?: (text: string) => void;
   onEnterCamp?: () => void;
@@ -82,6 +84,7 @@ export const Hud: React.FC<HudProps> = ({
   onOpenPanel,
   onCastSkill,
   onUsePotion,
+  onCastUltimate,
   onRequestTrade,
   onSendEmote,
   onEnterCamp,
@@ -157,11 +160,28 @@ export const Hud: React.FC<HudProps> = ({
       );
     }
 
-    // Exit Portal
-    ctx.fillStyle = snapshot.exitUnlocked ? '#22d3ee' : '#64748b';
-    ctx.beginPath();
-    ctx.arc(toX(mapData.exitPortal.x), toY(mapData.exitPortal.z), 4.2, 0, Math.PI * 2);
-    ctx.fill();
+    // Exit Portal & Branching Hades Portals
+    if (snapshot.branchPortals && snapshot.branchPortals.length > 0) {
+      for (const bp of snapshot.branchPortals) {
+        ctx.fillStyle = bp.color || '#22d3ee';
+        ctx.beginPath();
+        ctx.arc(toX(bp.x), toY(bp.z), 4.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      ctx.fillStyle = snapshot.exitUnlocked ? '#22d3ee' : '#64748b';
+      ctx.beginPath();
+      ctx.arc(toX(mapData.exitPortal.x), toY(mapData.exitPortal.z), 4.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Wandering Merchant (Charon)
+    if (snapshot.merchant) {
+      ctx.fillStyle = '#e879f9';
+      ctx.beginPath();
+      ctx.arc(toX(snapshot.merchant.x), toY(snapshot.merchant.z), 4.1, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     // Unopened Chests
     for (const ch of snapshot.chests) {
@@ -818,6 +838,40 @@ export const Hud: React.FC<HudProps> = ({
                   ✨ {localPlayer.altarBuffLabel} ({Math.ceil(((localPlayer.altarBuffUntil || 0) - now) / 1000)}s)
                 </span>
               )}
+              {(snapshot?.pactHeat || 0) > 0 && (
+                <span
+                  style={{
+                    padding: '2px 9px',
+                    borderRadius: 999,
+                    background: 'rgba(190, 18, 60, 0.45)',
+                    border: '1.5px solid #fb7185',
+                    fontSize: 10.5,
+                    fontWeight: 900,
+                    color: '#fecdd3',
+                  }}
+                >
+                  🔥 PAKT CHAOSU: ŻAR {snapshot?.pactHeat}
+                  {snapshot?.pactTimerEndsAt && snapshot.pactTimerEndsAt > now
+                    ? ` • ⏳ ${formatRiftTime(snapshot.pactTimerEndsAt - now)}`
+                    : ''}
+                </span>
+              )}
+              {(localPlayer.runEssence || 0) > 0 && (
+                <span
+                  style={{
+                    padding: '2px 9px',
+                    borderRadius: 999,
+                    background: 'rgba(88, 28, 135, 0.48)',
+                    border: '1.5px solid #e879f9',
+                    fontSize: 10.5,
+                    fontWeight: 900,
+                    color: '#f5d0fe',
+                  }}
+                  title="Esencja Chaosu — wydaj u Wędrownego Kupca Charona [F]"
+                >
+                  🔮 {localPlayer.runEssence} Esencji
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -842,6 +896,21 @@ export const Hud: React.FC<HudProps> = ({
               <span className="comic-title" style={{ fontSize: 20, color: '#fde047' }}>
                 {activeBoss.tier === 'boss' ? '👑 ' : '💀 '}
                 {activeBoss.name}
+                {activeBoss.tier === 'boss' && (activeBoss.bossPhase || 1) > 1 && (
+                  <span
+                    style={{
+                      marginLeft: 8,
+                      fontSize: 12,
+                      background: activeBoss.bossPhase === 3 ? '#e11d48' : '#ea580c',
+                      color: '#fff',
+                      padding: '1px 7px',
+                      borderRadius: 7,
+                      verticalAlign: 'middle',
+                    }}
+                  >
+                    FAZA {activeBoss.bossPhase === 3 ? 'III' : 'II'}
+                  </span>
+                )}
               </span>
               <span style={{ fontSize: 12, fontWeight: 900, color: '#fecdd3' }}>
                 {activeBoss.hp.toLocaleString()} / {activeBoss.maxHp.toLocaleString()} HP
@@ -1067,8 +1136,12 @@ export const Hud: React.FC<HudProps> = ({
         </div>
       )}
 
-      {/* ACTIVE CHAOS BOONS BAR (Just above bottom action bar) */}
-      {localPlayer && localPlayer.activeBoons && localPlayer.activeBoons.length > 0 && (
+      {/* ACTIVE CHAOS / ELEMENTAL / DUO BOONS & EVOLUTIONS BAR */}
+      {localPlayer &&
+        ((localPlayer.activeBoons && localPlayer.activeBoons.length > 0) ||
+          (localPlayer.elementalBoons && localPlayer.elementalBoons.length > 0) ||
+          (localPlayer.duoBoons && localPlayer.duoBoons.length > 0) ||
+          (localPlayer.skillEvolutions && localPlayer.skillEvolutions.length > 0)) && (
         <div
           style={{
             position: 'absolute',
@@ -1077,10 +1150,76 @@ export const Hud: React.FC<HudProps> = ({
             transform: 'translateX(-50%)',
             display: 'flex',
             gap: 6,
+            flexWrap: 'wrap',
+            justifyContent: 'center',
+            maxWidth: '90vw',
             pointerEvents: 'auto',
           }}
         >
-          {localPlayer.activeBoons.map((bid) => {
+          {(localPlayer.duoBoons || []).map((did) => {
+            const d = DUO_BOONS[did];
+            if (!d) return null;
+            return (
+              <div
+                key={did}
+                title={`${d.name}: ${d.description}`}
+                style={{
+                  padding: '3px 10px',
+                  borderRadius: 999,
+                  background: 'linear-gradient(90deg, rgba(126,34,206,0.92), rgba(180,83,9,0.92))',
+                  border: '2px solid #fde047',
+                  fontSize: 11,
+                  fontWeight: 900,
+                  color: '#fef08a',
+                }}
+              >
+                {d.icon} {d.name}
+              </div>
+            );
+          })}
+          {(localPlayer.skillEvolutions || []).map((eid) => {
+            const ev = SKILL_EVOLUTIONS[eid];
+            if (!ev) return null;
+            return (
+              <div
+                key={eid}
+                title={`Ewolucja: ${ev.name} — ${ev.description}`}
+                style={{
+                  padding: '3px 10px',
+                  borderRadius: 999,
+                  background: 'rgba(16, 18, 34, 0.92)',
+                  border: `2px solid ${ev.color}`,
+                  fontSize: 11,
+                  fontWeight: 900,
+                  color: ev.color,
+                }}
+              >
+                {ev.icon} {ev.name}
+              </div>
+            );
+          })}
+          {(localPlayer.elementalBoons || []).map((eb) => {
+            const def = ELEMENTAL_BOONS[eb.id];
+            if (!def) return null;
+            return (
+              <div
+                key={eb.id}
+                title={`${def.name} (${eb.rarity}): ${def.description(eb.rarity)}`}
+                style={{
+                  padding: '3px 10px',
+                  borderRadius: 999,
+                  background: 'rgba(16, 18, 34, 0.9)',
+                  border: `2px solid ${def.color}`,
+                  fontSize: 11,
+                  fontWeight: 900,
+                  color: def.color,
+                }}
+              >
+                {def.icon} {def.name}
+              </div>
+            );
+          })}
+          {(localPlayer.activeBoons || []).map((bid) => {
             const b = CHAOS_BOONS[bid];
             if (!b) return null;
             return (
@@ -1490,6 +1629,66 @@ export const Hud: React.FC<HudProps> = ({
                 );
               })()}
 
+              {/* Gniew Chaosu — Ultimate [T / 5] (50% Quick / 100% Full + Co-op Team Resonance!) */}
+              {(() => {
+                const fury = Math.round(localPlayer?.fury || 0);
+                const ult = CLASS_ULTIMATES[profile.classId];
+                const ready50 = fury >= 50;
+                const ready100 = fury >= 100;
+                return (
+                  <button
+                    onClick={() => onCastUltimate?.()}
+                    disabled={!ready50}
+                    title={`${ult.icon} ULTIMATE: ${ult.name} [T / 5] — ${ult.shortDesc} (50% = Szybki, 100% = Pełny, 2× w 3.5s = WSPÓLNY ULTIMATE!)`}
+                    className={`comic-btn ${ready100 ? 'boski-shimmer' : ''}`}
+                    style={{
+                      position: 'relative',
+                      width: 66,
+                      height: 58,
+                      flexDirection: 'column',
+                      background: ready100
+                        ? `linear-gradient(135deg, ${ult.color}, #f59e0b)`
+                        : ready50
+                          ? ult.color
+                          : '#1e2238',
+                      borderColor: ready100 ? '#fde047' : ready50 ? '#fbbf24' : '#334155',
+                      color: '#fff',
+                      padding: 2,
+                      overflow: 'hidden',
+                      opacity: ready50 ? 1 : 0.72,
+                    }}
+                  >
+                    <div
+                      style={{
+                        position: 'absolute',
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        height: `${fury}%`,
+                        background: ready100 ? 'rgba(254, 240, 138, 0.25)' : 'rgba(251, 191, 36, 0.28)',
+                        pointerEvents: 'none',
+                      }}
+                    />
+                    <span style={{ fontSize: 19, lineHeight: 1, zIndex: 1 }}>{ult.icon}</span>
+                    <span style={{ fontSize: 9.5, fontWeight: 900, textShadow: '1px 1px 0 #111', zIndex: 1 }}>
+                      {ready100 ? '🔥 MAX!' : `${fury}%`}
+                    </span>
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: 2,
+                        right: 4,
+                        fontSize: 9,
+                        fontWeight: 900,
+                        color: '#fef08a',
+                      }}
+                    >
+                      T/5
+                    </span>
+                  </button>
+                );
+              })()}
+
               {/* 2 Passive Icons */}
               <div style={{ display: 'flex', gap: 5, marginLeft: 4 }}>
                 {cls.passives.map((ps, idx) => {
@@ -1702,7 +1901,7 @@ export const Hud: React.FC<HudProps> = ({
                 : `${profile.xp.toLocaleString()} / ${xpNeeded.toLocaleString()} XP`}
             </span>
             <span style={{ fontSize: 10, color: '#64748b', whiteSpace: 'nowrap' }}>
-              WASD: Ruch • LPM: Atak • Spacja: Perf. Unik • E/F: Interakcja/Wskrześ
+              LPM: Kombo 1-2-3 • Spacja+LPM: Dash-Strike • T/5: Ultimate • E/F: Interakcja/Wskrześ
             </span>
           </div>
         </div>

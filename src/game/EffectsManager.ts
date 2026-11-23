@@ -1491,6 +1491,110 @@ export class EffectsManager {
         break;
       }
 
+      case 'lightning_chain': {
+        const tx = ev.tx ?? ev.x;
+        const tz = ev.tz ?? ev.z;
+        const col = ev.color || '#fde047';
+        const dx = tx - ev.x;
+        const dz = tz - ev.z;
+        const len = Math.max(0.5, Math.hypot(dx, dz));
+        const boltMat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.92 });
+        const bolt = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.08, 0.14, len, 6),
+          boltMat
+        );
+        bolt.position.set((ev.x + tx) / 2, 1.35, (ev.z + tz) / 2);
+        bolt.rotation.z = Math.PI / 2;
+        bolt.rotation.y = -Math.atan2(dz, dx);
+        this.scene.add(bolt);
+        this.transientEffects.push({
+          mesh: bolt,
+          createdAt: performance.now(),
+          durationMs: 220,
+          onUpdate: (t) => {
+            boltMat.opacity = (1 - t) * 0.92;
+          },
+        });
+        this.addExpandingRing(tx, tz, 1.6, col, 260, 0.65, 0.15);
+        break;
+      }
+
+      case 'wall_slam':
+      case 'armor_break': {
+        const col = ev.color || (ev.kind === 'wall_slam' ? '#fb923c' : '#fde047');
+        this.addExpandingRing(ev.x, ev.z, Math.max(3.2, radius), col, 380, 0.78, 0.18);
+        this.spawnParticles({
+          kind: 'shard',
+          x: ev.x,
+          y: 1.1,
+          z: ev.z,
+          count: 16,
+          color: col,
+          speedMin: 3.0,
+          speedMax: 7.2,
+          upMin: 2.8,
+          upMax: 6.4,
+          durationMs: 480,
+          opacity: 0.92,
+        });
+        break;
+      }
+
+      case 'ultimate':
+      case 'team_ultimate':
+      case 'boss_phase': {
+        const col = ev.color || (ev.kind === 'team_ultimate' ? '#fde047' : '#f43f5e');
+        const bigR = Math.max(7.5, radius);
+        this.addRunicBurst(ev.x, ev.z, bigR, col, 780, 0.82, 3.0);
+        this.addExpandingRing(ev.x, ev.z, bigR, col, 640, 0.76, 0.28);
+        this.addExpandingRing(ev.x, ev.z, bigR * 0.65, '#ffffff', 460, 0.62, 0.22);
+        this.spawnParticles({
+          kind: 'star',
+          x: ev.x,
+          y: 1.4,
+          z: ev.z,
+          count: ev.kind === 'team_ultimate' ? 28 : 20,
+          color: col,
+          speedMin: 3.5,
+          speedMax: 9.5,
+          upMin: 3.2,
+          upMax: 8.5,
+          durationMs: 760,
+          opacity: 0.95,
+        });
+        break;
+      }
+
+      case 'frost_nova':
+      case 'fire_trail':
+      case 'dash_strike':
+      case 'soak_resolve':
+      case 'tether_break': {
+        const col =
+          ev.color ||
+          (ev.kind === 'frost_nova'
+            ? '#38bdf8'
+            : ev.kind === 'fire_trail'
+              ? '#f97316'
+              : '#fde047');
+        this.addExpandingRing(ev.x, ev.z, Math.max(2.6, radius), col, 420, 0.7, 0.2);
+        this.spawnParticles({
+          kind: ev.kind === 'frost_nova' ? 'shard' : 'spark',
+          x: ev.x,
+          y: 0.8,
+          z: ev.z,
+          count: 14,
+          color: col,
+          speedMin: 2.0,
+          speedMax: 5.8,
+          upMin: 2.0,
+          upMax: 5.0,
+          durationMs: 460,
+          opacity: 0.88,
+        });
+        break;
+      }
+
       default: {
         // Chest open, secret break, puzzle solve, stone skin, summon, level up
         const col = ev.color || '#fbbf24';
@@ -1604,6 +1708,21 @@ export class EffectsManager {
           fill.rotation.x = -Math.PI / 2;
           fill.position.y = 0.11;
           group.add(ring, fill);
+
+          if (tel.shape === 'soak') {
+            const pillar = new THREE.Mesh(
+              new THREE.CylinderGeometry(tel.radius * 0.92, tel.radius * 0.92, 3.8, 24, 1, true),
+              new THREE.MeshBasicMaterial({
+                color: '#fde047',
+                transparent: true,
+                opacity: 0.24,
+                side: THREE.DoubleSide,
+                depthWrite: false,
+              })
+            );
+            pillar.position.y = 1.9;
+            group.add(pillar);
+          }
 
           // 3D Spinning Sand Tornado Funnel for Azirath & Khepri's Burza Piaskowa!
           if (tel.abilityId === 'burza_piaskowa') {

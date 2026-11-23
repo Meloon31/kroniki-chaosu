@@ -56,6 +56,7 @@ export interface EngineCallbacks {
   onSkill: (slot: 'active1' | 'active2' | 'active3', aimX: number, aimZ: number) => void;
   onDash: (dirX: number, dirZ: number) => void;
   onPotion: () => void;
+  onUltimate?: () => void;
   onInteract: () => void;
   onReviveHold?: () => void;
   onAutoPickupLoot: (lootId: string) => void;
@@ -87,10 +88,15 @@ export class GameEngine {
 
   private playerRigs = new Map<string, CharacterRig>();
   private enemyRigs = new Map<string, EnemyRig>();
+  private charonGroup: THREE.Group | null = null;
+  private branchPortalGroup = new THREE.Group();
+  private branchPortalKey = '';
+  private tetherGroup = new THREE.Group();
   private aimReticle: THREE.Group;
 
-  // Input state
+  // Input state + Hades 150ms Input Buffer & Animation Cancel
   private keys = new Set<string>();
+  private bufferedAction: { kind: 'attack' | 'skill' | 'ultimate'; slot?: 'active1' | 'active2' | 'active3'; expiresAt: number } | null = null;
   private mouseNdc = new THREE.Vector2(0, 0);
   private aimWorld = new THREE.Vector3(0, 0, 0);
   private mouseDown = false;
@@ -180,6 +186,8 @@ export class GameEngine {
     this.scene.add(this.rimLight.target);
 
     this.effects = new EffectsManager(this.scene);
+    this.scene.add(this.branchPortalGroup);
+    this.scene.add(this.tetherGroup);
 
     // Subtle atmospheric floating motes (dust / sand / spores / ash per Act)
     const moteCount = 90;
@@ -432,15 +440,23 @@ export class GameEngine {
     this.keys.add(k);
 
     if (k === '1' || k === 'q') {
+      this.bufferedAction = { kind: 'skill', slot: 'active1', expiresAt: performance.now() + 150 };
       this.callbacks.onSkill('active1', this.aimWorld.x, this.aimWorld.z);
     } else if (k === '2' || k === 'e') {
+      this.bufferedAction = { kind: 'skill', slot: 'active2', expiresAt: performance.now() + 150 };
       this.callbacks.onSkill('active2', this.aimWorld.x, this.aimWorld.z);
-    } else if (k === '3' || k === 'r') {
+    } else if (k === '3') {
+      this.bufferedAction = { kind: 'skill', slot: 'active3', expiresAt: performance.now() + 150 };
       this.callbacks.onSkill('active3', this.aimWorld.x, this.aimWorld.z);
     } else if (k === '4' || k === 'v') {
       this.callbacks.onPotion();
+    } else if (k === '5' || k === 't') {
+      this.bufferedAction = { kind: 'ultimate', expiresAt: performance.now() + 150 };
+      this.callbacks.onUltimate?.();
     } else if (k === ' ' || k === 'shift') {
       e.preventDefault();
+      // Hades Animation Cancel: Dash cancels any buffered attack/skill immediately!
+      this.bufferedAction = null;
       const local = this.latestSnapshot?.players.find((p) => p.id === this.localPlayerId);
       if (local) {
         this.effects.spawnFootstepDust(local.x, local.z, this.getActDustColor(), true);
@@ -472,8 +488,10 @@ export class GameEngine {
     this.onMouseMove(e);
     if (e.button === 0) {
       this.mouseDown = true;
+      this.bufferedAction = { kind: 'attack', expiresAt: performance.now() + 150 };
       this.callbacks.onAttack(this.aimWorld.x, this.aimWorld.z);
     } else if (e.button === 2) {
+      this.bufferedAction = { kind: 'skill', slot: 'active3', expiresAt: performance.now() + 150 };
       this.callbacks.onSkill('active3', this.aimWorld.x, this.aimWorld.z);
     }
   };
@@ -625,6 +643,20 @@ export class GameEngine {
       }
     }
 
+    // Priority 2.5: Wandering Merchant (Charon) & Branching Reward Portals!
+    if (snap.merchant && Math.hypot(local.x - snap.merchant.x, local.z - snap.merchant.z) <= 4.6) {
+      this.callbacks.onInteractHint('[F] 🛶 Kupiec Charon — Wydaj Esencję Chaosu na Dary i Kryształy!');
+      return;
+    }
+    if (snap.branchPortals && snap.branchPortals.length > 0) {
+      for (const bp of snap.branchPortals) {
+        if (Math.hypot(local.x - bp.x, local.z - bp.z) <= 3.8) {
+          this.callbacks.onInteractHint(`[F] Wybierz Portal: ${bp.label} (${bp.voters.length}/${snap.partySize} głosów)`);
+          return;
+        }
+      }
+    }
+
     for (const ch of snap.chests) {
       if (!ch.opened && Math.hypot(local.x - ch.x, local.z - ch.z) <= 4.2) {
         this.callbacks.onInteractHint('[F] Otwórz Zamkniętą Skrzynię (Zagadka Logiczna)');
@@ -718,6 +750,20 @@ export class GameEngine {
         this.updateAimWorld();
         this.callbacks.onAttack(this.aimWorld.x, this.aimWorld.z);
       }
+      // Flush 150ms Hades Input Buffer cleanly!
+      if (this.bufferedAction) {
+        if (nowMs <= this.bufferedAction.expiresAt) {
+          this.updateAimWorld();
+          if (this.bufferedAction.kind === 'attack') {
+            this.callbacks.onAttack(this.aimWorld.x, this.aimWorld.z);
+          } else if (this.bufferedAction.kind === 'skill' && this.bufferedAction.slot) {
+            this.callbacks.onSkill(this.bufferedAction.slot, this.aimWorld.x, this.aimWorld.z);
+          } else if (this.bufferedAction.kind === 'ultimate') {
+            this.callbacks.onUltimate?.();
+          }
+        }
+        this.bufferedAction = null;
+      }
       // Hold [E] or [F] near a downed ally to revive!
       if ((this.keys.has('f') || this.keys.has('e')) && this.callbacks.onReviveHold && this.latestSnapshot) {
         const local = this.latestSnapshot.players.find((pl) => pl.id === this.localPlayerId);
@@ -741,6 +787,7 @@ export class GameEngine {
     const nowWall = Date.now();
 
     if (snap) {
+      this.syncHadesWorldObjects(snap);
       const lerpAlpha = Math.min(1, rawDt * 14);
 
       for (const p of snap.players) {
@@ -842,6 +889,102 @@ export class GameEngine {
       this.renderer.render(this.scene, this.camera);
     }
   };
+
+  private syncHadesWorldObjects(snap: WorldSnapshot) {
+    // 1. Wandering Merchant (Charon) 3D hooded ferryman + glowing lantern
+    if (snap.merchant) {
+      if (!this.charonGroup) {
+        const g = new THREE.Group();
+        const cloak = new THREE.Mesh(
+          new THREE.ConeGeometry(0.95, 2.5, 10),
+          new THREE.MeshToonMaterial({ color: '#4c1d95' })
+        );
+        cloak.position.y = 1.25;
+        const hood = new THREE.Mesh(
+          new THREE.SphereGeometry(0.55, 10, 10),
+          new THREE.MeshToonMaterial({ color: '#3b0764' })
+        );
+        hood.position.y = 2.45;
+        const lantern = new THREE.Mesh(
+          new THREE.OctahedronGeometry(0.32, 0),
+          new THREE.MeshBasicMaterial({ color: '#fde047' })
+        );
+        lantern.position.set(0.85, 2.0, 0.4);
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(1.4, 1.75, 24),
+          new THREE.MeshBasicMaterial({ color: '#c084fc', transparent: true, opacity: 0.65, side: THREE.DoubleSide })
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.08;
+        g.add(cloak, hood, lantern, ring);
+        this.charonGroup = g;
+        this.scene.add(g);
+      }
+      this.charonGroup.visible = true;
+      this.charonGroup.position.set(snap.merchant.x, 0, snap.merchant.z);
+      this.charonGroup.rotation.y = this.elapsedSec * 0.55;
+    } else if (this.charonGroup) {
+      this.charonGroup.visible = false;
+    }
+
+    // 2. Branching Reward Portals (3 color-coded Hades portals near exit)
+    const bpList = snap.branchPortals || [];
+    const nextKey = bpList.map((b) => `${b.id}:${b.x}:${b.z}`).join('|');
+    if (nextKey !== this.branchPortalKey) {
+      this.branchPortalKey = nextKey;
+      while (this.branchPortalGroup.children.length > 0) {
+        this.branchPortalGroup.remove(this.branchPortalGroup.children[0]);
+      }
+      for (const bp of bpList) {
+        const pg = new THREE.Group();
+        pg.position.set(bp.x, 0, bp.z);
+        const torus = new THREE.Mesh(
+          new THREE.TorusGeometry(1.55, 0.22, 8, 24),
+          new THREE.MeshBasicMaterial({ color: bp.color })
+        );
+        torus.position.y = 1.85;
+        const core = new THREE.Mesh(
+          new THREE.CircleGeometry(1.38, 20),
+          new THREE.MeshBasicMaterial({ color: bp.color, transparent: true, opacity: 0.34, side: THREE.DoubleSide })
+        );
+        core.position.y = 1.85;
+        const baseRing = new THREE.Mesh(
+          new THREE.RingGeometry(1.6, 2.05, 24),
+          new THREE.MeshBasicMaterial({ color: bp.color, transparent: true, opacity: 0.65, side: THREE.DoubleSide })
+        );
+        baseRing.rotation.x = -Math.PI / 2;
+        baseRing.position.y = 0.08;
+        pg.add(torus, core, baseRing);
+        this.branchPortalGroup.add(pg);
+      }
+    }
+    for (const child of this.branchPortalGroup.children) {
+      child.rotation.y = this.elapsedSec * 0.85;
+    }
+
+    // 3. Boss Breakable Tether Laser Beams
+    while (this.tetherGroup.children.length > 0) {
+      this.tetherGroup.remove(this.tetherGroup.children[0]);
+    }
+    if (snap.activeTethers && snap.activeTethers.length > 0) {
+      for (const teth of snap.activeTethers) {
+        const pA = snap.players.find((pl) => pl.id === teth.playerAId);
+        const pB = snap.players.find((pl) => pl.id === teth.playerBId);
+        if (!pA || !pB) continue;
+        const dx = pB.x - pA.x;
+        const dz = pB.z - pA.z;
+        const len = Math.max(0.2, Math.hypot(dx, dz));
+        const beam = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.12, 0.12, len, 6),
+          new THREE.MeshBasicMaterial({ color: len >= teth.breakDist * 0.78 ? '#38bdf8' : '#f43f5e', transparent: true, opacity: 0.9 })
+        );
+        beam.position.set((pA.x + pB.x) / 2, 1.3, (pA.z + pB.z) / 2);
+        beam.rotation.z = Math.PI / 2;
+        beam.rotation.y = -Math.atan2(dz, dx);
+        this.tetherGroup.add(beam);
+      }
+    }
+  }
 
   public destroy() {
     this.destroyed = true;

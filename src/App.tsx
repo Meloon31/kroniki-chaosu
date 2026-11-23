@@ -52,6 +52,7 @@ import {
 } from '../shared/guilds';
 import { createStarterRunes, createStarterRuneShards, RUNE_MAX_LEVEL, RUNES } from '../shared/runes';
 import { BoonId, CHAOS_BOONS } from '../shared/mutators';
+import type { BoonRarity } from '../shared/hades';
 import { computePlayerStats } from '../shared/stats';
 import type {
   ActNumber,
@@ -75,8 +76,10 @@ import { soundEngine } from './audio/soundEngine';
 import { musicEngine, MusicTrackInfo } from './audio/musicEngine';
 import { BlacksmithModal } from './components/BlacksmithModal';
 import { BountiesModal, BountiesTab } from './components/BountiesModal';
+import { CharonModal } from './components/CharonModal';
 import { ChestPuzzleModal } from './components/ChestPuzzleModal';
 import { GuildModal } from './components/GuildModal';
+import { HadesOfferOverlay, HadesOfferState } from './components/HadesOfferOverlay';
 import { ActivePanel, Hud } from './components/Hud';
 import { InventoryModal } from './components/InventoryModal';
 import { LobbyScreen } from './components/LobbyScreen';
@@ -248,6 +251,11 @@ export function App() {
   const [bountiesInitialTab, setBountiesInitialTab] = useState<BountiesTab>('daily');
   const [activeChest, setActiveChest] = useState<LockedChestState | null>(null);
   const [boonOffer, setBoonOffer] = useState<{ title: string; choices: BoonId[] } | null>(null);
+  const [hadesOffer, setHadesOffer] = useState<HadesOfferState | null>(null);
+  const [charonOpen, setCharonOpen] = useState<{ runEssence: number; purchasedIds: string[] } | null>(null);
+  const [activePactCurses, setActivePactCurses] = useState<string[]>([]);
+  const activePactCursesRef = useRef<string[]>(activePactCurses);
+  activePactCursesRef.current = activePactCurses;
   const [victorySummary, setVictorySummary] = useState<VictorySummaryData | null>(null);
   const [activeTrade, setActiveTrade] = useState<TradeSessionState | null>(null);
   const [incomingTrade, setIncomingTrade] = useState<TradeSessionState | null>(null);
@@ -410,19 +418,32 @@ export function App() {
     [pushToast]
   );
 
-  // Quick hotkeys [Z], [X], [C] to pick a Chaos Boon without stopping movement!
+  // Quick hotkeys [Z], [X], [C] to pick a Chaos Boon OR Hades Elemental/Evolution Card!
   useEffect(() => {
-    if (!boonOffer) return;
+    if (!boonOffer && !hadesOffer) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       const k = e.key.toLowerCase();
-      if (k === 'z' && boonOffer.choices[0]) handleChooseBoon(boonOffer.choices[0]);
-      else if (k === 'x' && boonOffer.choices[1]) handleChooseBoon(boonOffer.choices[1]);
-      else if (k === 'c' && boonOffer.choices[2]) handleChooseBoon(boonOffer.choices[2]);
+      const idx = k === 'z' ? 0 : k === 'x' ? 1 : k === 'c' ? 2 : -1;
+      if (idx < 0) return;
+      if (hadesOffer) {
+        if (hadesOffer.mode === 'elemental' && hadesOffer.choices[idx]) {
+          const ch = hadesOffer.choices[idx];
+          socketRef.current?.emit('hades:choose_boon', { kind: ch.kind, id: ch.id });
+          soundEngine.playRuneUpgrade();
+          setHadesOffer(null);
+        } else if (hadesOffer.mode === 'evolution' && hadesOffer.choices[idx]) {
+          socketRef.current?.emit('hades:choose_evolution', { id: hadesOffer.choices[idx] });
+          soundEngine.playRuneUpgrade();
+          setHadesOffer(null);
+        }
+      } else if (boonOffer && boonOffer.choices[idx]) {
+        handleChooseBoon(boonOffer.choices[idx]);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [boonOffer, handleChooseBoon]);
+  }, [boonOffer, hadesOffer, handleChooseBoon]);
 
   // Bind dynamic Act music engine & track listener
   useEffect(() => {
@@ -930,6 +951,55 @@ export function App() {
       soundEngine.playLevelUp();
     });
 
+    sock.on(
+      'hades:boon_offer',
+      (payload: { title: string; choices: Array<{ kind: 'elemental' | 'duo'; id: string; rarity?: BoonRarity }> }) => {
+        setCharonOpen(null);
+        setHadesOffer({ mode: 'elemental', title: payload.title, choices: payload.choices });
+        soundEngine.playLevelUp();
+      }
+    );
+
+    sock.on('hades:evolution_offer', (payload: { title: string; choices: string[] }) => {
+      setCharonOpen(null);
+      setHadesOffer({ mode: 'evolution', title: payload.title, choices: payload.choices });
+      soundEngine.playLevelUp();
+    });
+
+    sock.on('charon:open', (payload: { runEssence: number; purchasedIds: string[] }) => {
+      setCharonOpen(payload);
+      soundEngine.playPuzzleTick();
+    });
+
+    sock.on('juice:wall_slam', () => {
+      soundEngine.playWallSlam();
+      engineRef.current?.addScreenShake(0.32);
+    });
+
+    sock.on('juice:armor_break', () => {
+      soundEngine.playArmorBreak();
+      engineRef.current?.triggerHitStop(55);
+      engineRef.current?.addScreenShake(0.28);
+    });
+
+    sock.on('juice:ultimate', (payload: { isTeam?: boolean }) => {
+      soundEngine.playUltimate(!!payload?.isTeam);
+      engineRef.current?.triggerHitStop(85);
+      engineRef.current?.addScreenShake(payload?.isTeam ? 0.65 : 0.45);
+    });
+
+    sock.on('juice:boss_phase', () => {
+      soundEngine.playBossPhase();
+      engineRef.current?.addScreenShake(0.45);
+    });
+
+    sock.on('juice:merchant_buy', (payload: { itemId: string }) => {
+      soundEngine.playMerchantBuy();
+      setCharonOpen((prev) =>
+        prev ? { ...prev, purchasedIds: [...prev.purchasedIds, payload.itemId] } : null
+      );
+    });
+
     sock.on('game:banner', (payload: { type: BannerMessage['type']; title: string; subtitle?: string }) => {
       showBanner(payload.type, payload.title, payload.subtitle, 4200);
     });
@@ -1010,6 +1080,9 @@ export function App() {
       onPotion: () => {
         socketRef.current?.emit('player:potion');
       },
+      onUltimate: () => {
+        socketRef.current?.emit('player:ultimate');
+      },
       onInteract: () => {
         socketRef.current?.emit('world:interact');
       },
@@ -1045,8 +1118,8 @@ export function App() {
 
   // Block game input when any modal is open
   useEffect(() => {
-    engineRef.current?.setUiBlocked(Boolean(activePanel || activeChest || activeTrade));
-  }, [activePanel, activeChest, activeTrade]);
+    engineRef.current?.setUiBlocked(Boolean(activePanel || activeChest || activeTrade || charonOpen));
+  }, [activePanel, activeChest, activeTrade, charonOpen]);
 
   // Panel hotkeys (I, K, B, U, M, Escape)
   useEffect(() => {
@@ -1129,10 +1202,22 @@ export function App() {
     );
   };
 
+  const handleTogglePactCurse = (curseId: string) => {
+    setActivePactCurses((prev) => {
+      const next = prev.includes(curseId) ? prev.filter((id) => id !== curseId) : [...prev, curseId];
+      if (roomRef.current) {
+        socketRef.current?.emit('pact:set_curses', { curses: next });
+      }
+      return next;
+    });
+  };
+
   const handleStartRift = (floor: number) => {
     setErrorMsg(null);
     setActivePanel(null);
+    const curses = activePactCursesRef.current;
     if (roomRef.current) {
+      if (curses.length > 0) socketRef.current?.emit('pact:set_curses', { curses });
       socketRef.current?.emit('rift:start', { floor });
       return;
     }
@@ -1144,6 +1229,7 @@ export function App() {
           setErrorMsg(res.error || 'Nie udało się otworzyć Szczeliny Chaosu');
         } else if (res.summary) {
           setRoom(res.summary);
+          if (curses.length > 0) socketRef.current?.emit('pact:set_curses', { curses });
           socketRef.current?.emit('rift:start', { floor });
         }
       }
@@ -1915,6 +2001,7 @@ export function App() {
               }}
               onCastSkill={(slot) => engineRef.current?.castSkillFromHud(slot)}
               onUsePotion={() => socketRef.current?.emit('player:potion')}
+              onCastUltimate={() => socketRef.current?.emit('player:ultimate')}
               onRequestTrade={(targetId) => {
                 socketRef.current?.emit('trade:request', { targetId });
               }}
@@ -2044,6 +2131,35 @@ export function App() {
                 </div>
               </div>
             </div>
+          )}
+
+          {/* Hades-Style Elemental / Duo Boon & Skill Evolution 1-of-3 Overlay */}
+          {hadesOffer && (
+            <HadesOfferOverlay
+              offer={hadesOffer}
+              onPickElemental={(kind, id) => {
+                socketRef.current?.emit('hades:choose_boon', { kind, id });
+                soundEngine.playRuneUpgrade();
+                setHadesOffer(null);
+              }}
+              onPickEvolution={(id) => {
+                socketRef.current?.emit('hades:choose_evolution', { id });
+                soundEngine.playRuneUpgrade();
+                setHadesOffer(null);
+              }}
+            />
+          )}
+
+          {/* Wandering Merchant (Charon) In-Run Shop Modal */}
+          {charonOpen && (
+            <CharonModal
+              runEssence={
+                snapshot?.players.find((pl) => pl.id === localPlayerId)?.runEssence ?? charonOpen.runEssence
+              }
+              purchasedIds={charonOpen.purchasedIds}
+              onBuy={(itemId) => socketRef.current?.emit('charon:buy', { itemId })}
+              onClose={() => setCharonOpen(null)}
+            />
           )}
 
           {/* Incoming Trade Invite Prompt */}
@@ -2435,6 +2551,8 @@ export function App() {
           profile={profile}
           room={room}
           leaderboard={riftLeaderboard}
+          activePactCurses={activePactCurses}
+          onTogglePactCurse={handleTogglePactCurse}
           onStartRift={handleStartRift}
           onRefreshLeaderboard={() => socketRef.current?.emit('rift:get_leaderboard')}
           onClose={() => setActivePanel(null)}
