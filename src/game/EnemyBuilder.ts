@@ -7,9 +7,12 @@ import {
   createMonsterFaceTexture,
   createPlushLathe,
   createSoftBladeGeometry,
+  createSoftStarGeometry,
   createSoftWingGeometry,
   createTaperedCurveGeometry,
   createToonMaterial,
+  getBiomeOutlineColor,
+  getOutlineMaterial,
 } from './ComicMaterials';
 
 export interface EnemyRig {
@@ -28,6 +31,8 @@ export interface EnemyRig {
   rightLeg?: THREE.Object3D;
   spiderLegs?: THREE.Object3D[];
   tauntRing: THREE.Mesh;
+  staggerStarsGroup: THREE.Group;
+  curseRing: THREE.Mesh;
   tier: EnemyState['tier'];
   bossId?: EnemyState['bossId'];
   archetype: string;
@@ -97,57 +102,189 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
   let rightLeg: THREE.Object3D | undefined;
   let spiderLegs: THREE.Object3D[] | undefined;
 
-  if (enemy.tier === 'barrel') {
+  if (enemy.tier === 'dummy') {
     // =========================================================
-    // TACTICAL EXPLOSIVE POWDER BARREL (Plush Cartoon Keg w/ Glowing Fuse!)
+    // CAMP 3D TRAINING DUMMY (Plush Straw & Armor Bullseye Dummy!)
     // =========================================================
-    const barrelBody = createComicMesh(
+    const base = createComicMesh(new THREE.CylinderGeometry(0.7, 0.9, 0.3, 18), '#6b4226', 0.026);
+    base.position.y = 0.15;
+    const post = createComicMesh(new THREE.CapsuleGeometry(0.14, 1.85, 8, 12), '#854d1e', 0.024);
+    post.position.y = 1.05;
+    const crossBar = createComicMesh(new THREE.CapsuleGeometry(0.11, 1.45, 8, 12), '#854d1e', 0.022);
+    crossBar.rotation.z = Math.PI / 2;
+    crossBar.position.y = 1.55;
+    const strawTorso = createComicMesh(
       createPlushLathe(
         [
-          [0.01, 0],
-          [0.56, 0.04],
-          [0.7, 0.42],
-          [0.72, 0.78],
-          [0.58, 1.24],
-          [0.01, 1.28],
+          [0.01, 0.72],
+          [0.54, 0.88],
+          [0.62, 1.38],
+          [0.52, 1.82],
+          [0.01, 1.92],
         ],
         22
       ),
-      '#dc2626',
-      0.032,
-      { emissive: '#991b1b', emissiveIntensity: 0.14 }
+      '#e3b868',
+      0.032
     );
-    for (const hy of [0.26, 0.98]) {
-      const hoop = createComicMesh(new THREE.TorusGeometry(0.65, 0.065, 10, 22), '#334155', 0.02);
-      hoop.rotation.x = Math.PI / 2;
-      hoop.position.y = hy;
-      body.add(hoop);
-    }
-    const warnOrb = createComicMesh(new THREE.SphereGeometry(0.2, 12, 10), '#fde047', 0.018);
-    warnOrb.scale.set(1, 1, 0.45);
-    warnOrb.position.set(0, 0.64, 0.68);
-    const fuse = createComicMesh(
-      createTaperedCurveGeometry(
-        [
-          [0, 1.26, 0],
-          [0.08, 1.5, 0.05],
-          [0.24, 1.56, 0.14],
-        ],
-        0.045,
-        0.028,
-        10,
-        8
-      ),
-      '#e2d5b8',
-      0.015
-    );
-    const spark = createComicMesh(new THREE.SphereGeometry(0.14, 12, 10), '#fb923c', 0.014, {
-      emissive: '#f97316',
-      emissiveIntensity: 0.44,
+    const bullseyeOut = createComicMesh(new THREE.TorusGeometry(0.38, 0.09, 10, 22), '#ef4444', 0.018);
+    bullseyeOut.position.set(0, 1.38, 0.56);
+    const bullseyeIn = createComicMesh(new THREE.SphereGeometry(0.18, 14, 12), '#fef08a', 0.016, {
+      emissive: '#f59e0b',
+      emissiveIntensity: 0.25,
     });
-    spark.position.set(0.24, 1.56, 0.14);
-    flameMesh = spark;
-    body.add(barrelBody, warnOrb, fuse, spark);
+    bullseyeIn.scale.set(1, 1, 0.45);
+    bullseyeIn.position.set(0, 1.38, 0.6);
+    const head = createComicMesh(new THREE.SphereGeometry(0.42, 20, 16), '#ebd094', 0.028);
+    head.position.y = 2.28;
+    const helm = createComicMesh(
+      new THREE.SphereGeometry(0.46, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.52),
+      '#64748b',
+      0.024
+    );
+    helm.position.y = 2.34;
+    body.add(base, post, crossBar, strawTorso, bullseyeOut, bullseyeIn, head, helm);
+  } else if (enemy.tier === 'barrel') {
+    // =========================================================
+    // ACT-THEMED INTERACTIVE ENVIRONMENTAL HAZARDS!
+    // =========================================================
+    const hk = enemy.hazardKind || 'barrel';
+    if (hk === 'stalactite') {
+      // Act 1 Cracked Stalactite Rock Pillar
+      const spire = createComicMesh(
+        createPlushLathe(
+          [
+            [0.01, 0],
+            [0.78, 0.14],
+            [0.64, 0.95],
+            [0.34, 1.85],
+            [0.01, 2.25],
+          ],
+          18
+        ),
+        '#707c94',
+        0.034,
+        { emissive: '#f59e0b', emissiveIntensity: 0.16 }
+      );
+      const glowRing = createComicMesh(new THREE.TorusGeometry(0.56, 0.07, 8, 20), '#fbbf24', 0.016, {
+        emissive: '#f59e0b',
+        emissiveIntensity: 0.36,
+      });
+      glowRing.rotation.x = Math.PI / 2;
+      glowRing.position.y = 0.85;
+      body.add(spire, glowRing);
+    } else if (hk === 'sand_pillar') {
+      // Act 2 Unstable Carved Desert Sandstone Pillar
+      const col = createComicMesh(new THREE.CylinderGeometry(0.55, 0.72, 2.35, 16), '#d99a3d', 0.032, {
+        emissive: '#b45309',
+        emissiveIntensity: 0.14,
+      });
+      col.position.y = 1.18;
+      col.rotation.z = 0.12;
+      const band = createComicMesh(new THREE.TorusGeometry(0.62, 0.09, 10, 20), '#38bdf8', 0.018, {
+        emissive: '#0284c7',
+        emissiveIntensity: 0.32,
+      });
+      band.rotation.x = Math.PI / 2;
+      band.position.y = 1.3;
+      body.add(col, band);
+    } else if (hk === 'toxic_shroom') {
+      // Act 3 Exploding Toxic Forest Spore Mushroom!
+      const stem = createComicMesh(new THREE.CapsuleGeometry(0.26, 0.85, 8, 14), '#d9f99d', 0.024);
+      stem.position.y = 0.55;
+      const cap = createComicMesh(
+        new THREE.SphereGeometry(0.95, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.58),
+        '#84cc16',
+        0.03,
+        { emissive: '#65a30d', emissiveIntensity: 0.38 }
+      );
+      cap.position.y = 1.12;
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2;
+        const spot = createComicMesh(new THREE.SphereGeometry(0.16, 10, 8), '#c084fc', 0.014, {
+          emissive: '#9333ea',
+          emissiveIntensity: 0.38,
+        });
+        spot.position.set(Math.cos(a) * 0.54, 1.65, Math.sin(a) * 0.54);
+        body.add(spot);
+      }
+      flameMesh = cap;
+      body.add(stem, cap);
+    } else if (hk === 'chaos_crystal') {
+      // Act 4+ Unstable Pulsing Chaos Crystal!
+      const cry = createComicMesh(
+        createPlushLathe(
+          [
+            [0.01, 0],
+            [0.68, 0.35],
+            [0.74, 1.1],
+            [0.32, 1.95],
+            [0.01, 2.3],
+          ],
+          18
+        ),
+        '#f43f5e',
+        0.034,
+        { emissive: '#e11d48', emissiveIntensity: 0.44 }
+      );
+      const ring = createComicMesh(new THREE.TorusGeometry(0.88, 0.08, 10, 24), '#fb7185', 0.018, {
+        emissive: '#e11d48',
+        emissiveIntensity: 0.4,
+      });
+      ring.rotation.x = Math.PI / 2 - 0.3;
+      ring.position.y = 1.15;
+      flameMesh = cry;
+      body.add(cry, ring);
+    } else {
+      // Act 1 Powder Barrel Keg w/ Glowing Fuse!
+      const barrelBody = createComicMesh(
+        createPlushLathe(
+          [
+            [0.01, 0],
+            [0.56, 0.04],
+            [0.7, 0.42],
+            [0.72, 0.78],
+            [0.58, 1.24],
+            [0.01, 1.28],
+          ],
+          22
+        ),
+        '#dc2626',
+        0.032,
+        { emissive: '#991b1b', emissiveIntensity: 0.14 }
+      );
+      for (const hy of [0.26, 0.98]) {
+        const hoop = createComicMesh(new THREE.TorusGeometry(0.65, 0.065, 10, 22), '#334155', 0.02);
+        hoop.rotation.x = Math.PI / 2;
+        hoop.position.y = hy;
+        body.add(hoop);
+      }
+      const warnOrb = createComicMesh(new THREE.SphereGeometry(0.2, 12, 10), '#fde047', 0.018);
+      warnOrb.scale.set(1, 1, 0.45);
+      warnOrb.position.set(0, 0.64, 0.68);
+      const fuse = createComicMesh(
+        createTaperedCurveGeometry(
+          [
+            [0, 1.26, 0],
+            [0.08, 1.5, 0.05],
+            [0.24, 1.56, 0.14],
+          ],
+          0.045,
+          0.028,
+          10,
+          8
+        ),
+        '#e2d5b8',
+        0.015
+      );
+      const spark = createComicMesh(new THREE.SphereGeometry(0.14, 12, 10), '#fb923c', 0.014, {
+        emissive: '#f97316',
+        emissiveIntensity: 0.44,
+      });
+      spark.position.set(0.24, 1.56, 0.14);
+      flameMesh = spark;
+      body.add(barrelBody, warnOrb, fuse, spark);
+    }
   } else if (enemy.tier === 'totem') {
     // =========================================================
     // SHIELD TOTEM (Carved Plush Arcane Idol w/ Floating Shield Crystal!)
@@ -2054,16 +2191,55 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
   root.add(hpBarFill);
 
   const flashMats: Array<{ mat: THREE.MeshToonMaterial; origHex: number; origInt: number }> = [];
+  const biomeInk = getBiomeOutlineColor(enemy.act);
   body.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
-    if (mesh.isMesh && mesh.material instanceof THREE.MeshToonMaterial) {
+    if (!mesh.isMesh) return;
+    if (mesh.material instanceof THREE.MeshToonMaterial) {
       flashMats.push({
         mat: mesh.material,
         origHex: mesh.material.emissive.getHex(),
         origInt: mesh.material.emissiveIntensity,
       });
+    } else if (mesh.material instanceof THREE.ShaderMaterial && mesh.material.uniforms?.uThickness) {
+      // Biome-tinted comic outlines (deep navy / warm umber / forest green / crimson-plum!)
+      const thick = Number(mesh.material.uniforms.uThickness.value) || 0.032;
+      mesh.material = getOutlineMaterial(thick, biomeInk);
     }
   });
+
+  // Spinning Comic Stagger-Broken Stars Ring above Boss / Mini-Boss head!
+  const staggerStarsGroup = new THREE.Group();
+  staggerStarsGroup.position.y = enemy.tier === 'boss' ? 6.4 : enemy.tier === 'miniboss' ? 4.4 : 2.6;
+  staggerStarsGroup.visible = false;
+  const starGeo = createSoftStarGeometry(0.26, 0.12, 5, 0.06);
+  for (let s = 0; s < 4; s++) {
+    const a = (s / 4) * Math.PI * 2;
+    const star = createComicMesh(starGeo, '#fde047', 0.016, {
+      emissive: '#f59e0b',
+      emissiveIntensity: 0.46,
+    });
+    const r = enemy.tier === 'boss' ? 1.45 : 0.95;
+    star.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+    staggerStarsGroup.add(star);
+  }
+  root.add(staggerStarsGroup);
+
+  // Violet Warlock Curse Primer Ring (signals Warrior Co-op Detonation "WYBUCH CIENIA!")
+  const curseRing = new THREE.Mesh(
+    new THREE.RingGeometry(enemy.radius * 0.72, enemy.radius * 0.96, 28),
+    new THREE.MeshBasicMaterial({
+      color: '#c084fc',
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.78,
+      depthWrite: false,
+    })
+  );
+  curseRing.rotation.x = -Math.PI / 2;
+  curseRing.position.y = 0.09;
+  curseRing.visible = false;
+  root.add(curseRing);
 
   return {
     root,
@@ -2081,6 +2257,8 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     rightLeg,
     spiderLegs,
     tauntRing,
+    staggerStarsGroup,
+    curseRing,
     tier: enemy.tier,
     bossId: enemy.bossId,
     archetype: enemy.archetype,
@@ -3318,6 +3496,27 @@ export function updateEnemyRig(
     rig.body.scale.x *= 1.12;
     rig.body.scale.y *= 0.88;
     rig.body.scale.z *= 1.12;
+    if (rig.tier === 'dummy') {
+      rig.body.rotation.z = Math.sin(elapsedSec * 36) * 0.24;
+    }
+  } else if (rig.tier === 'dummy') {
+    rig.body.rotation.z *= 0.84;
+  }
+
+  // Spinning Stagger-Broken Stars above Boss / Mini-Boss when stunned!
+  const isStaggerBroken = !!(state.staggerBrokenUntil && state.staggerBrokenUntil > nowMs);
+  rig.staggerStarsGroup.visible = isStaggerBroken;
+  if (isStaggerBroken) {
+    rig.staggerStarsGroup.rotation.y = elapsedSec * 4.5;
+  }
+
+  // Violet Warlock Curse Primer Ring (visual indicator for Warrior Detonation!)
+  const isCursed = !!(state.cursedUntil && state.cursedUntil > nowMs);
+  rig.curseRing.visible = isCursed;
+  if (isCursed) {
+    rig.curseRing.rotation.z = -elapsedSec * 2.8;
+    const pulse = 1 + Math.sin(elapsedSec * 8) * 0.08;
+    rig.curseRing.scale.set(pulse, pulse, 1);
   }
 
   if (rig.orbitGroup) rig.orbitGroup.rotation.y = elapsedSec * 1.5;

@@ -1,4 +1,9 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { ACT_THEMES } from '../../shared/world';
 import type {
   ActNumber,
@@ -8,10 +13,37 @@ import type {
   WorldSnapshot,
 } from '../../shared/types';
 import { buildCharacterRig, CharacterRig, updateCharacterRig } from './CharacterBuilder';
-import { createSoftGlowSpriteTexture } from './ComicMaterials';
+import { createSoftGlowSpriteTexture, SHARED_WIND_UNIFORMS } from './ComicMaterials';
 import { buildEnemyRig, EnemyRig, updateEnemyRig } from './EnemyBuilder';
 import { EffectsManager } from './EffectsManager';
 import { BuiltMapHandles, buildWorldMap, syncWorldMapVisuals } from './MapBuilder';
+
+const SubtleVignetteShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uDarkness: { value: 0.24 },
+    uOffset: { value: 1.08 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float uDarkness;
+    uniform float uOffset;
+    varying vec2 vUv;
+    void main() {
+      vec4 texel = texture2D(tDiffuse, vUv);
+      vec2 uv = (vUv - vec2(0.5)) * vec2(uOffset);
+      float vig = clamp(1.0 - dot(uv, uv) * uDarkness, 0.72, 1.0);
+      gl_FragColor = vec4(texel.rgb * vig, texel.a);
+    }
+  `,
+};
 
 export interface ScreenFloatingText extends FloatingCombatText {
   screenX: number;
@@ -25,6 +57,7 @@ export interface EngineCallbacks {
   onDash: (dirX: number, dirZ: number) => void;
   onPotion: () => void;
   onInteract: () => void;
+  onReviveHold?: () => void;
   onAutoPickupLoot: (lootId: string) => void;
   onFloatingTexts: (texts: ScreenFloatingText[]) => void;
   onInteractHint: (hint: string | null) => void;
@@ -36,6 +69,8 @@ export class GameEngine {
   private localPlayerId: string;
 
   private renderer: THREE.WebGLRenderer;
+  private composer: EffectComposer | null = null;
+  private bloomPass: UnrealBloomPass | null = null;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private sunLight: THREE.DirectionalLight;
@@ -102,6 +137,21 @@ export class GameEngine {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
+
+    // Selective Eye-Friendly Post-Processing: High-Threshold Bloom + Subtle Comic Vignette + ACES Output!
+    try {
+      const comp = new EffectComposer(this.renderer);
+      comp.addPass(new RenderPass(this.scene, this.camera));
+      const bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.24, 0.34, 0.88);
+      comp.addPass(bloom);
+      comp.addPass(new ShaderPass(SubtleVignetteShader));
+      comp.addPass(new OutputPass());
+      this.composer = comp;
+      this.bloomPass = bloom;
+    } catch {
+      this.composer = null;
+      this.bloomPass = null;
+    }
 
     // Warm plush 3-point storybook cartoon lighting: Bright Hemisphere + Golden Sun + Pastel Rim
     this.hemiLight = new THREE.HemisphereLight('#e2ebff', '#4b3b63', 0.9);
@@ -371,6 +421,8 @@ export class GameEngine {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
+    if (this.composer) this.composer.setSize(w, h);
+    if (this.bloomPass) this.bloomPass.setSize(w, h);
   };
 
   private onKeyDown = (e: KeyboardEvent) => {
@@ -473,14 +525,56 @@ export class GameEngine {
   private updateAmbientMotes(dt: number) {
     const attr = this.ambientMotes.geometry.getAttribute('position') as THREE.BufferAttribute;
     const arr = attr.array as Float32Array;
+    const act = this.currentAct;
     for (let i = 0; i < arr.length; i += 3) {
-      arr[i] += this.ambientMoteVel[i] * dt;
-      arr[i + 1] += this.ambientMoteVel[i + 1] * dt;
-      arr[i + 2] += this.ambientMoteVel[i + 2] * dt;
-      if (arr[i + 1] > 9.5) {
-        arr[i] = (Math.random() - 0.5) * 44;
-        arr[i + 1] = 0.5;
-        arr[i + 2] = (Math.random() - 0.5) * 44;
+      if (act === 2) {
+        // Act 2 (Pustynia): fine desert sand dust sweeping horizontally low near the ground!
+        arr[i] += (2.8 + Math.abs(this.ambientMoteVel[i])) * dt;
+        arr[i + 1] += Math.sin(this.elapsedSec * 2.2 + i) * 0.15 * dt;
+        arr[i + 2] += 0.9 * dt;
+        if (arr[i] > 22 || arr[i + 1] > 3.2) {
+          arr[i] = -22;
+          arr[i + 1] = 0.25 + Math.random() * 2.4;
+          arr[i + 2] = (Math.random() - 0.5) * 44;
+        }
+      } else if (act === 3 || act === 9) {
+        // Act 3 (Przeklęty Las) & Act 9: bioluminescent fireflies swaying gently!
+        arr[i] += Math.sin(this.elapsedSec * 1.8 + i) * 0.85 * dt;
+        arr[i + 1] += Math.cos(this.elapsedSec * 1.4 + i) * 0.42 * dt;
+        arr[i + 2] += Math.cos(this.elapsedSec * 1.6 + i) * 0.85 * dt;
+        if (arr[i + 1] < 0.5 || arr[i + 1] > 7.5) {
+          arr[i + 1] = 1.2 + Math.random() * 4.5;
+        }
+      } else if (act === 4 || act === 6) {
+        // Act 4 (Cytadela) & Act 6: rising volcanic ash & glowing chaos embers!
+        arr[i] += this.ambientMoteVel[i] * 1.3 * dt;
+        arr[i + 1] += (1.1 + this.ambientMoteVel[i + 1] * 2.2) * dt;
+        arr[i + 2] += this.ambientMoteVel[i + 2] * 1.3 * dt;
+        if (arr[i + 1] > 10.5) {
+          arr[i] = (Math.random() - 0.5) * 44;
+          arr[i + 1] = 0.35;
+          arr[i + 2] = (Math.random() - 0.5) * 44;
+        }
+      } else if (act === 5) {
+        // Act 5 (Mróz): gently falling aurora snow crystals!
+        arr[i] += Math.sin(this.elapsedSec + i) * 0.7 * dt;
+        arr[i + 1] -= (0.9 + this.ambientMoteVel[i + 1]) * dt;
+        arr[i + 2] += 0.35 * dt;
+        if (arr[i + 1] < 0.2) {
+          arr[i] = (Math.random() - 0.5) * 44;
+          arr[i + 1] = 9.5;
+          arr[i + 2] = (Math.random() - 0.5) * 44;
+        }
+      } else {
+        // Act 1 (Podziemia) & others: warm torchlight dust motes drifting softly!
+        arr[i] += this.ambientMoteVel[i] * dt;
+        arr[i + 1] += this.ambientMoteVel[i + 1] * dt;
+        arr[i + 2] += this.ambientMoteVel[i + 2] * dt;
+        if (arr[i + 1] > 9.5) {
+          arr[i] = (Math.random() - 0.5) * 44;
+          arr[i + 1] = 0.5;
+          arr[i + 2] = (Math.random() - 0.5) * 44;
+        }
       }
     }
     attr.needsUpdate = true;
@@ -503,6 +597,31 @@ export class GameEngine {
       if (Math.hypot(local.x - drop.x, local.z - drop.z) <= 2.35) {
         this.pickedLootIds.add(drop.id);
         this.callbacks.onAutoPickupLoot(drop.id);
+      }
+    }
+
+    // Priority 1: Downed Teammate Revive Hint (hold [E] or [F]!)
+    for (const ally of snap.players) {
+      if (ally.id === local.id || ally.alive || !ally.downedUntil || ally.downedUntil <= nowMs) continue;
+      if (Math.hypot(local.x - ally.x, local.z - ally.z) <= 3.85) {
+        const pct = Math.round((ally.reviveProgress || 0) * 100);
+        const speedTxt = local.classId === 'wrozka' ? '1.5s (Wróżka!)' : '2.5s';
+        this.callbacks.onInteractHint(
+          pct > 0
+            ? `👼 Wskrzeszanie ${ally.name}... ${pct}% [Trzymaj E / F]`
+            : `🆘 [Przytrzymaj E lub F] Wskrześ ${ally.name} (${speedTxt})`
+        );
+        return;
+      }
+    }
+
+    // Priority 2: Interactive 3D Camp Stations!
+    if (map.isCamp && map.campStations) {
+      for (const st of map.campStations) {
+        if (Math.hypot(local.x - st.x, local.z - st.z) <= 4.4) {
+          this.callbacks.onInteractHint(st.label);
+          return;
+        }
       }
     }
 
@@ -547,7 +666,7 @@ export class GameEngine {
       }
     }
     if (snap.obelisk && snap.obelisk.state === 'idle' && Math.hypot(local.x - snap.obelisk.x, local.z - snap.obelisk.z) <= 4.6) {
-      this.callbacks.onInteractHint('[F] 🔮 Aktywuj Ołtarz Fal (3 Fale Wyzwania -> Skarb + Dar!)');
+      this.callbacks.onInteractHint('[F] 🔮 Aktywuj Przeklęty Ołtarz (30s Bariera -> Skrzynia + 3-min Buff!)');
       return;
     }
     if (Math.hypot(local.x - map.exitPortal.x, local.z - map.exitPortal.z) <= 5.0) {
@@ -571,7 +690,8 @@ export class GameEngine {
 
     if (this.hitStopRemaining > 0) {
       this.hitStopRemaining -= rawDt;
-      this.renderer.render(this.scene, this.camera);
+      if (this.composer) this.composer.render();
+      else this.renderer.render(this.scene, this.camera);
       return;
     }
 
@@ -583,6 +703,8 @@ export class GameEngine {
 
     const dt = rawDt * timeScale;
     this.elapsedSec += dt;
+    // Update shared GPU Vertex-Shader wind timer (zero CPU mesh work!)
+    SHARED_WIND_UNIFORMS.uWindTime.value = this.elapsedSec;
 
     if (!this.uiBlocked && nowMs - this.lastMoveEmitMs >= 48) {
       this.lastMoveEmitMs = nowMs;
@@ -595,6 +717,23 @@ export class GameEngine {
       if (this.mouseDown) {
         this.updateAimWorld();
         this.callbacks.onAttack(this.aimWorld.x, this.aimWorld.z);
+      }
+      // Hold [E] or [F] near a downed ally to revive!
+      if ((this.keys.has('f') || this.keys.has('e')) && this.callbacks.onReviveHold && this.latestSnapshot) {
+        const local = this.latestSnapshot.players.find((pl) => pl.id === this.localPlayerId);
+        if (local && local.alive) {
+          const hasNearbyDowned = this.latestSnapshot.players.some(
+            (al) =>
+              al.id !== local.id &&
+              !al.alive &&
+              !!al.downedUntil &&
+              al.downedUntil > Date.now() &&
+              Math.hypot(al.x - local.x, al.z - local.z) <= 3.85
+          );
+          if (hasNearbyDowned) {
+            this.callbacks.onReviveHold();
+          }
+        }
       }
     }
 
@@ -612,10 +751,34 @@ export class GameEngine {
         rig.root.rotation.y = p.rotY;
         updateCharacterRig(rig, p, this.elapsedSec, nowWall);
 
-        // Subtle comic footstep dust puffs while running
-        if (p.animState === 'run' && p.alive && nowMs - this.lastFootstepMs > 240) {
+        // Subtle comic footstep dust puffs + Prestige Cosmetic Running Trails!
+        if (p.animState === 'run' && p.alive && nowMs - this.lastFootstepMs > 180) {
           this.lastFootstepMs = nowMs;
           this.effects.spawnFootstepDust(rig.root.position.x, rig.root.position.z, this.getActDustColor());
+          if (p.equippedTrail) {
+            const trailColor =
+              p.equippedTrail === 'trail_flawless_quad'
+                ? `hsl(${Math.round((this.elapsedSec * 160) % 360)}, 92%, 62%)`
+                : p.equippedTrail === 'trail_gold_sparks'
+                  ? '#fde047'
+                  : '#c084fc';
+            this.effects.spawnParticles({
+              kind: 'star',
+              x: rig.root.position.x,
+              y: 0.35,
+              z: rig.root.position.z,
+              count: 2,
+              color: trailColor,
+              speedMin: 0.3,
+              speedMax: 1.2,
+              upMin: 0.6,
+              upMax: 1.8,
+              gravity: -0.4,
+              scale: 0.65,
+              durationMs: 460,
+              opacity: 0.85,
+            });
+          }
         }
 
         if (p.id === this.localPlayerId) {
@@ -673,7 +836,11 @@ export class GameEngine {
     this.rimLight.position.set(this.camTarget.x - 24, 18, this.camTarget.z - 28);
     this.rimLight.target.position.set(this.camTarget.x, 0, this.camTarget.z);
 
-    this.renderer.render(this.scene, this.camera);
+    if (this.composer) {
+      this.composer.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
   };
 
   public destroy() {
@@ -687,6 +854,7 @@ export class GameEngine {
     this.renderer.domElement.removeEventListener('mousedown', this.onMouseDown);
     this.renderer.domElement.removeEventListener('contextmenu', this.onContextMenu);
     this.renderer.domElement.removeEventListener('wheel', this.onWheel);
+    this.composer?.dispose();
     this.renderer.dispose();
     if (this.renderer.domElement.parentElement === this.container) {
       this.container.removeChild(this.renderer.domElement);

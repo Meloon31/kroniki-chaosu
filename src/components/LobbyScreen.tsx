@@ -9,6 +9,7 @@ import {
 import { CLASS_LIST, CLASSES } from '../../shared/classes';
 import { getTotalGuildShards, GuildState, isGuildActClearedToday } from '../../shared/guilds';
 import { getHardcoreUnlockProgress } from '../../shared/items';
+import { COSMETIC_REWARDS, getUnlockedCosmeticIds } from '../../shared/prestige';
 import type { BountiesTab } from './BountiesModal';
 import { computePlayerStats } from '../../shared/stats';
 import { ACT_THEMES, ALL_LOCATIONS, getLocationDef, isHardcoreAct } from '../../shared/world';
@@ -33,6 +34,9 @@ interface LobbyScreenProps {
   onToggleSandbox: () => void;
   onOpenBounties: (tab?: BountiesTab) => void;
   onOpenGuild: () => void;
+  onEnterCamp?: () => void;
+  onOpenRift?: () => void;
+  onOpenPrestige?: () => void;
 }
 
 const CLASS_ICONS: Record<ClassId, string> = {
@@ -63,6 +67,9 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   onToggleSandbox,
   onOpenBounties,
   onOpenGuild,
+  onEnterCamp,
+  onOpenRift,
+  onOpenPrestige,
 }) => {
   const [joinCode, setJoinCode] = useState(initialInviteCode);
   const [serverDraft, setServerDraft] = useState(serverUrl);
@@ -71,15 +78,15 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   const [rightTab, setRightTab] = useState<'expedition' | 'party'>(
     initialInviteCode ? 'party' : 'expedition'
   );
-  const [selectedAct, setSelectedAct] = useState<ActNumber>(
-    getLocationDef(room?.globalLocation ?? 1).act
-  );
-  const [selectedLoc, setSelectedLoc] = useState<number>(room?.globalLocation ?? 1);
+  const initialLocSafe = room && room.globalLocation > 0 ? room.globalLocation : 1;
+  const [selectedAct, setSelectedAct] = useState<ActNumber>(getLocationDef(initialLocSafe).act);
+  const [selectedLoc, setSelectedLoc] = useState<number>(initialLocSafe);
   const [copiedMode, setCopiedMode] = useState<'none' | 'code' | 'link'>('none');
 
   const selectedClass = CLASSES[profile.classId];
-  const activeGlobalLoc = room ? room.globalLocation : selectedLoc;
+  const activeGlobalLoc = room && room.globalLocation > 0 ? room.globalLocation : selectedLoc;
   const activeLocDef = getLocationDef(activeGlobalLoc);
+  const unlockedCosmeticsCount = getUnlockedCosmeticIds(profile).length;
   const actBoss = getMainBossByAct(selectedAct);
   const heroStats = computePlayerStats(
     profile.classId,
@@ -233,7 +240,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               </span>
             </div>
             <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, marginTop: 2 }}>
-              9 Aktów • Hardcore +20 • Gildie • 5 Klas Bohaterów
+              9 Aktów • Hardcore +20 • Obóz 3D • Szczelina Chaosu • Gildie
             </div>
           </div>
         </div>
@@ -720,10 +727,25 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                 <button
                   className="mmo-play-cta"
                   onClick={() => onStartGame(activeGlobalLoc)}
-                  style={{ width: '100%', padding: '15px 22px', fontSize: 18 }}
+                  style={{ width: '100%', padding: '14px 22px', fontSize: 17.5 }}
                 >
                   ▶ ROZPOCZNIJ WYPRAWĘ
                 </button>
+                {onEnterCamp && (
+                  <button
+                    className="comic-btn comic-btn-blue"
+                    disabled={!connected}
+                    onClick={onEnterCamp}
+                    style={{
+                      width: '100%',
+                      padding: '9px 16px',
+                      fontSize: 13.5,
+                      borderColor: '#38bdf8',
+                    }}
+                  >
+                    🏕️ WEJDŹ DO WSPÓLNEGO OBOZU 3D (Kowal • Manekin DPS • Portal)
+                  </button>
+                )}
                 <div
                   className="glass-pill"
                   style={{
@@ -771,10 +793,25 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                   className="mmo-play-cta"
                   disabled={!connected}
                   onClick={() => onCreateRoom(selectedLoc)}
-                  style={{ width: '100%', padding: '15px 22px', fontSize: 17.5 }}
+                  style={{ width: '100%', padding: '14px 22px', fontSize: 17 }}
                 >
                   ⚔️ WEJDŹ DO GRY (SOLO / CO-OP)
                 </button>
+                {onEnterCamp && (
+                  <button
+                    className="comic-btn comic-btn-blue"
+                    disabled={!connected}
+                    onClick={onEnterCamp}
+                    style={{
+                      width: '100%',
+                      padding: '9px 16px',
+                      fontSize: 13.5,
+                      borderColor: '#38bdf8',
+                    }}
+                  >
+                    🏕️ WSPÓLNY OBÓZ 3D (Kowal • Manekin DPS • Handel • Portal)
+                  </button>
+                )}
                 <div style={{ fontSize: 11.5, color: '#cbd5e1', fontWeight: 700 }}>
                   Cel wyprawy: <span style={{ color: '#fde68a' }}>Akt {activeLocDef.act} • {activeLocDef.name}</span>
                 </div>
@@ -1310,8 +1347,8 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
             maxWidth: 1520,
             margin: '0 auto',
             display: 'grid',
-            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-            gap: 12,
+            gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
+            gap: 10,
           }}
         >
           {/* Dock 1: Guild */}
@@ -1451,6 +1488,79 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               </div>
               <div style={{ fontSize: 10.5, color: '#cbd5e1', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 🔥 2× XP Dnia: #{featuredLoc.globalIndex} {featuredLoc.name}
+              </div>
+            </div>
+          </button>
+
+          {/* Dock 5: Szczelina Chaosu (Endless Rift + Leaderboard) */}
+          <button
+            className="mmo-dock-btn"
+            onClick={() => onOpenRift?.()}
+            style={{
+              borderColor: 'rgba(192, 132, 252, 0.5)',
+              background: 'linear-gradient(135deg, rgba(126, 34, 206, 0.22), rgba(18, 22, 42, 0.92))',
+            }}
+            title="Endgame: Szczelina Chaosu i Tablica Wyników (Solo / 2 / 3 / 4 Graczy)"
+          >
+            <span style={{ fontSize: 23 }}>🌀</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 900, color: '#e879f9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  Szczelina Chaosu
+                </span>
+                {(profile.bestRiftFloor || 0) > 0 && (
+                  <span
+                    style={{
+                      background: '#c084fc',
+                      color: '#111118',
+                      borderRadius: 99,
+                      padding: '0 5px',
+                      fontSize: 9.5,
+                      fontWeight: 900,
+                    }}
+                  >
+                    P.{profile.bestRiftFloor}
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 10.5, color: '#cbd5e1', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                Endgame & Ranking 1–4 Graczy
+              </div>
+            </div>
+          </button>
+
+          {/* Dock 6: Prestiż (Titles, Ground Auras, Running Trails) */}
+          <button
+            className="mmo-dock-btn"
+            onClick={() => onOpenPrestige?.()}
+            style={{
+              borderColor: 'rgba(251, 191, 36, 0.48)',
+              background: 'linear-gradient(135deg, rgba(234, 179, 8, 0.16), rgba(18, 22, 42, 0.92))',
+            }}
+            title="Komnata Prestiżu: Tytuły nad postacią, Aury pod stopami i Ślady biegu"
+          >
+            <span style={{ fontSize: 23 }}>👑</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 900, color: '#fde047', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  Prestiż & Aury
+                </span>
+                <span
+                  style={{
+                    background: 'rgba(253, 224, 71, 0.2)',
+                    color: '#fde047',
+                    border: '1px solid rgba(253, 224, 71, 0.45)',
+                    borderRadius: 99,
+                    padding: '0 5px',
+                    fontSize: 9.5,
+                    fontWeight: 900,
+                  }}
+                >
+                  {unlockedCosmeticsCount}/{COSMETIC_REWARDS.length}
+                </span>
+              </div>
+              <div style={{ fontSize: 10.5, color: '#cbd5e1', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                Tytuły, Aury i Ślady w 3D
               </div>
             </div>
           </button>

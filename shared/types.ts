@@ -132,6 +132,16 @@ export interface PlayerProfile {
   playerUid?: string;
   guildId?: string | null;
   guildSnapshot?: GuildState | null;
+  // Mentor System, Chaos Rift Endgame & Prestige Cosmetics
+  mentorShards?: number;
+  unlockedCosmetics?: string[];
+  equippedTitle?: string | null;
+  equippedAura?: string | null;
+  equippedTrail?: string | null;
+  bestRiftFloor?: number;
+  totalRevives?: number;
+  perfectDodgesTotal?: number;
+  noDownAct4QuadCleared?: boolean;
 }
 
 export interface NetPlayerState {
@@ -161,6 +171,18 @@ export interface NetPlayerState {
   invulnUntil: number;
   shieldExpiresAt: number;
   potionReadyAt: number;
+  // Combat depth: Perfect Dodge, Downed/Revive, Fairy Barrier Buff, Altar Buff, Mentor, Prestige
+  perfectDodgeBuffUntil?: number;
+  lightBarrierUntil?: number;
+  downedUntil?: number;
+  reviveProgress?: number; // 0..1
+  revivingByName?: string | null;
+  altarBuffLabel?: string | null;
+  altarBuffUntil?: number;
+  isMentor?: boolean;
+  equippedTitle?: string | null;
+  equippedAura?: string | null;
+  equippedTrail?: string | null;
   activeBoons?: BoonId[];
   stats: ComputedStats;
 }
@@ -174,7 +196,15 @@ export type EnemyTier =
   | 'root_trap'
   | 'goblin'
   | 'totem'
-  | 'barrel';
+  | 'barrel'
+  | 'dummy';
+
+export type HazardKind =
+  | 'barrel'
+  | 'stalactite'
+  | 'sand_pillar'
+  | 'toxic_shroom'
+  | 'chaos_crystal';
 
 export interface EnemyState {
   id: string;
@@ -184,6 +214,7 @@ export interface EnemyState {
   act: ActNumber;
   bossId?: BossId;
   affix?: EliteAffix;
+  hazardKind?: HazardKind;
   x: number;
   z: number;
   rotY: number;
@@ -191,6 +222,13 @@ export interface EnemyState {
   maxHp: number;
   shield: number;
   maxShield: number;
+  // Stagger Bar for Mini-Bosses & Bosses + Warlock Curse Primer + Camp DPS Dummy!
+  stagger?: number;
+  maxStagger?: number;
+  staggerBrokenUntil?: number;
+  cursedUntil?: number;
+  dummyDps?: number;
+  dummyMaxCrit?: number;
   radius: number;
   speed: number;
   damage: number;
@@ -240,6 +278,7 @@ export interface GroundLoot {
   z: number;
   item?: EquipmentItem;
   runeShard?: RuneId;
+  shardDrop?: { rarity: Rarity; amount: number };
   ownerId?: string; // undefined = shared/first pickup or instanced
   droppedAt: number;
   pickedUp: boolean;
@@ -353,6 +392,17 @@ export interface WaveObeliskState {
   state: 'idle' | 'active' | 'completed';
   currentWave: number;
   maxWaves: number;
+  endsAt?: number;
+  barrierRadius?: number;
+}
+
+export interface CampStation {
+  id: string;
+  kind: 'blacksmith' | 'runes' | 'trade' | 'portal' | 'rift' | 'prestige';
+  x: number;
+  z: number;
+  label: string;
+  color: string;
 }
 
 export interface GeneratedMapData {
@@ -361,6 +411,9 @@ export interface GeneratedMapData {
   height: number;
   spawn: Vec2;
   exitPortal: Vec2;
+  isCamp?: boolean;
+  riftFloor?: number;
+  campStations?: CampStation[];
   rooms: MapRoom[];
   walls: MapWall[];
   props: MapProp[];
@@ -475,11 +528,26 @@ export interface RoomSummary {
   bossDamageMultiplier: number;
 }
 
+export interface MvpCard {
+  id: 'dps' | 'tank' | 'support' | 'luck';
+  title: string;
+  icon: string;
+  color: string;
+  playerName: string;
+  classId: ClassId;
+  statLabel: string;
+}
+
 export interface WorldSnapshot {
   tick: number;
   serverTime: number;
   globalLocation: number;
+  isCamp?: boolean;
+  riftFloor?: number;
+  riftStartedAt?: number;
   partySize: number;
+  partyBondXpPct?: number;
+  partyBondMfPct?: number;
   players: NetPlayerState[];
   enemies: EnemyState[];
   telegraphs: TelegraphZone[];
@@ -497,5 +565,8 @@ export interface WorldSnapshot {
   mutatorId: LocationMutatorId;
   comboCount: number;
   comboExpiresAt: number;
+  comboMoveSpeedPct?: number;
+  comboMagicFindPct?: number;
   goblinAlive?: boolean;
+  goblinDespawnAt?: number;
 }

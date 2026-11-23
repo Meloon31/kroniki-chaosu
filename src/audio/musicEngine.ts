@@ -1203,10 +1203,10 @@ class DynamicMusicEngine {
   }
 
   public playActLocation(act: ActNumber, locationInAct: number, isBossOrMiniBoss = false) {
-    const tracks = ACT_TRACKS[act];
+    const tracks = ACT_TRACKS[act] || ACT_TRACKS[1];
     // Boss always gets dramatic Track 3; regular levels cycle smoothly across all 3 tracks!
-    const idx = isBossOrMiniBoss ? 2 : (locationInAct - 1) % tracks.length;
-    const chosen = tracks[idx];
+    const idx = isBossOrMiniBoss ? 2 : Math.max(0, locationInAct - 1) % tracks.length;
+    const chosen = tracks[idx] || tracks[0];
     if (this.currentTrack.id !== chosen.id) {
       this.switchTrack(chosen);
     } else if (!this.running) {

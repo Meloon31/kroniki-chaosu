@@ -51,9 +51,12 @@ import {
   rollRandomGuildShard,
 } from '../shared/guilds.js';
 import {
+  CAMP_LOCATION_INDEX,
   clipPointToLineOfSight,
   createSeededRng,
+  generateCampMap,
   generateMapData,
+  generateRiftMap,
   getLocationDef,
   hasLineOfSight,
   isHardcoreLocation,
@@ -61,6 +64,15 @@ import {
   resolveWallCollisions,
   TOTAL_LOCATIONS,
 } from '../shared/world.js';
+import {
+  getRiftCategory,
+  getRiftFloorDamageMultiplier,
+  getRiftFloorHpMultiplier,
+  getRiftFloorLuckBonus,
+  RiftCategory,
+  RiftLeaderboardEntry,
+  RiftLeaderboardMap,
+} from '../shared/rift.js';
 import type {
   ClassId,
   ComputedStats,
@@ -70,9 +82,12 @@ import type {
   FloatingCombatText,
   GeneratedMapData,
   GroundLoot,
+  HazardKind,
   LobbyMember,
+  MvpCard,
   NetPlayerState,
   ObsidianPillarState,
+  Rarity,
   RoomSummary,
   SkillRanks,
   SkillVfxEvent,
@@ -158,6 +173,7 @@ interface ServerPlayer extends NetPlayerState {
   socketId: string;
   ready: boolean;
   skillRanks: SkillRanks;
+  rawStats: ComputedStats;
   cooldowns: {
     basic: number;
     active1: number;
@@ -171,6 +187,19 @@ interface ServerPlayer extends NetPlayerState {
   poisonNextTick: number;
   poisonDps: number;
   respawnAt: number;
+  dashStartedAt: number;
+  perfectDodgeConsumed: boolean;
+  reviveHoldUntil: number;
+  altarAdApMult: number;
+  altarMoveMult: number;
+  // Per-location MVP stats
+  matchDamageDealt: number;
+  matchDamageTaken: number;
+  matchHealingSupport: number;
+  matchRevives: number;
+  matchDowns: number;
+  matchBestLootRank: number;
+  matchBestLootName: string;
   lastPlateId?: string;
   lastWardHintAt?: number;
   activeBoons: BoonId[];
@@ -198,6 +227,9 @@ interface ServerEnemy extends EnemyState {
   skillMaxHpPct: number;
   isWaveMob?: boolean;
   goblinDespawnAt?: number;
+  goblinNextShardAt?: number;
+  cursedBy?: string;
+  dummyRecentHits?: Array<{ t: number; dmg: number }>;
   nextSpecialAt?: number;
 }
 
@@ -222,6 +254,9 @@ interface GameRoom {
   code: string;
   hostId: string;
   globalLocation: number;
+  isCamp: boolean;
+  riftFloor: number;
+  riftStartedAt: number;
   inGame: boolean;
   tick: number;
   mapData: GeneratedMapData | null;
@@ -240,6 +275,7 @@ interface GameRoom {
   enemiesSlain: number;
   comboExpiresAt: number;
   nextMeteorAt: number;
+  nextEnvTrapAt: number;
   trades: Map<string, TradeSessionState>;
   pendingCombatTexts: FloatingCombatText[];
   pendingVfx: SkillVfxEvent[];
@@ -249,6 +285,250 @@ interface GameRoom {
 const rooms = new Map<string, GameRoom>();
 const socketToRoom = new Map<string, string>();
 let uidCounter = 1;
+
+// =========================================================
+// PERSISTENT CHAOS RIFT LEADERBOARD (Solo / Duo / Trio / Quad)
+// =========================================================
+const RIFT_DATA_PATH = path.resolve(__dirname, '../../rift-leaderboard.json');
+
+function createEmptyLeaderboard(): RiftLeaderboardMap {
+  return { solo: [], duo: [], trio: [], quad: [] };
+}
+
+let riftLeaderboard: RiftLeaderboardMap = createEmptyLeaderboard();
+
+function loadRiftLeaderboard() {
+  try {
+    if (!fs.existsSync(RIFT_DATA_PATH)) return;
+    const raw = fs.readFileSync(RIFT_DATA_PATH, 'utf8');
+    const parsed = JSON.parse(raw) as Partial<RiftLeaderboardMap>;
+    riftLeaderboard = {
+      solo: Array.isArray(parsed.solo) ? parsed.solo : [],
+      duo: Array.isArray(parsed.duo) ? parsed.duo : [],
+      trio: Array.isArray(parsed.trio) ? parsed.trio : [],
+      quad: Array.isArray(parsed.quad) ? parsed.quad : [],
+    };
+  } catch (err) {
+    console.warn('[Kroniki Chaosu] Could not load rift-leaderboard.json:', err);
+  }
+}
+
+function saveRiftLeaderboard() {
+  try {
+    fs.writeFileSync(RIFT_DATA_PATH, JSON.stringify(riftLeaderboard, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[Kroniki Chaosu] Could not save rift-leaderboard.json:', err);
+  }
+}
+
+function recordRiftClear(room: GameRoom, floor: number, clearTimeMs: number) {
+  const players = Array.from(room.players.values()).map((p) => ({
+    name: p.name,
+    classId: p.classId,
+    level: p.level,
+  }));
+  const cat: RiftCategory = getRiftCategory(players.length);
+  const entry: RiftLeaderboardEntry = {
+    id: nextId('rft'),
+    category: cat,
+    floor,
+    clearTimeMs: Math.max(1000, Math.round(clearTimeMs)),
+    achievedAt: new Date().toISOString(),
+    players,
+  };
+  const list = [...(riftLeaderboard[cat] || []), entry];
+  list.sort((a, b) => (b.floor !== a.floor ? b.floor - a.floor : a.clearTimeMs - b.clearTimeMs));
+  riftLeaderboard[cat] = list.slice(0, 15);
+  saveRiftLeaderboard();
+  io.emit('rift:leaderboard', riftLeaderboard);
+}
+
+loadRiftLeaderboard();
+
+// =========================================================
+// COMBO FRENZY, PARTY BOND, MENTOR SCALING & MVP HELPERS
+// =========================================================
+function getComboBonuses(combo: number): { moveSpeedPct: number; magicFindPct: number } {
+  if (combo >= 100) return { moveSpeedPct: 15, magicFindPct: 8 };
+  if (combo >= 50) return { moveSpeedPct: 12, magicFindPct: 6 };
+  if (combo >= 25) return { moveSpeedPct: 8, magicFindPct: 4 };
+  if (combo >= 10) return { moveSpeedPct: 4, magicFindPct: 2 };
+  return { moveSpeedPct: 0, magicFindPct: 0 };
+}
+
+function getPartyBondBonuses(partySize: number): { xpPct: number; mfPct: number } {
+  const allies = Math.max(0, Math.min(3, partySize - 1));
+  return { xpPct: allies * 5, mfPct: allies * 5 }; // +5%..+15% XP & Magic Find!
+}
+
+const RARITY_ORDER: Record<Rarity, number> = {
+  zwykly: 1,
+  normalny: 2,
+  mityczny: 3,
+  legendarny: 4,
+  boski: 5,
+  niesmiertelny: 6,
+};
+
+function applyMentorScaling(room: GameRoom, p: ServerPlayer) {
+  const loc = getLocationDef(room.globalLocation);
+  const shouldBeMentor =
+    !room.isCamp &&
+    room.riftFloor === 0 &&
+    room.players.size > 1 &&
+    loc.act <= 4 &&
+    p.level > loc.recommendedLevel + 6;
+
+  if (!shouldBeMentor) {
+    p.isMentor = false;
+    p.stats = { ...p.rawStats };
+    p.maxHp = p.stats.maxHp;
+    p.hp = Math.min(p.hp, p.maxHp);
+    return;
+  }
+
+  p.isMentor = true;
+  const targetLvl = Math.min(60, loc.recommendedLevel + 4);
+  // Compute balanced power cap for the target location so the mentor stays heroic but doesn't 1-shot!
+  const targetPower = Math.round(115 + targetLvl * 46 + Math.pow(targetLvl, 1.42) * 3.8);
+  const ratio = Math.min(1.0, Math.max(0.24, targetPower / Math.max(1, p.rawStats.combatPower)));
+  p.stats = {
+    ...p.rawStats,
+    maxHp: Math.max(180, Math.round(p.rawStats.maxHp * Math.max(0.45, ratio))),
+    ad: Math.max(18, Math.round(p.rawStats.ad * ratio)),
+    ap: Math.max(18, Math.round(p.rawStats.ap * ratio)),
+    def: Math.max(14, Math.round(p.rawStats.def * Math.max(0.42, ratio))),
+    combatPower: Math.round(p.rawStats.combatPower * ratio),
+  };
+  p.maxHp = p.stats.maxHp;
+  p.hp = Math.min(p.hp, p.maxHp);
+}
+
+function triggerPerfectDodge(room: GameRoom, player: ServerPlayer, now: number) {
+  if (player.perfectDodgeConsumed) return;
+  player.perfectDodgeConsumed = true;
+  player.perfectDodgeBuffUntil = now + 3000; // +25% DMG for 3s!
+  // Reduce active skill cooldowns by 2 seconds!
+  player.cooldowns.active1 = Math.max(now, player.cooldowns.active1 - 2000);
+  player.cooldowns.active2 = Math.max(now, player.cooldowns.active2 - 2000);
+  player.cooldowns.active3 = Math.max(now, player.cooldowns.active3 - 2000);
+
+  pushVfx(room, { kind: 'light_barrier', x: player.x, z: player.z, radius: 3.4, color: '#fde047', casterId: player.id });
+  pushCombatText(
+    room,
+    player.x,
+    3.1,
+    player.z,
+    '⚡ PERFEKCYJNY UNIK!',
+    'shield',
+    true,
+    true,
+    '+25% DMG • -2s CD'
+  );
+  io.to(player.socketId).emit('juice:perfect_dodge', {
+    buffMs: 3000,
+    cooldowns: {
+      active1: Math.max(0, player.cooldowns.active1 - now),
+      active2: Math.max(0, player.cooldowns.active2 - now),
+      active3: Math.max(0, player.cooldowns.active3 - now),
+    },
+  });
+}
+
+function buildMvpCards(room: GameRoom): MvpCard[] {
+  const players = Array.from(room.players.values());
+  if (players.length === 0) return [];
+
+  const topDps = [...players].sort((a, b) => b.matchDamageDealt - a.matchDamageDealt)[0];
+  const topTank = [...players].sort((a, b) => b.matchDamageTaken - a.matchDamageTaken)[0];
+  const topSup = [...players].sort((a, b) => b.matchHealingSupport - a.matchHealingSupport)[0];
+  const topLuck = [...players].sort((a, b) => b.matchBestLootRank - a.matchBestLootRank)[0];
+
+  return [
+    {
+      id: 'dps',
+      title: 'Maszyna do Bicia',
+      icon: '⚔️',
+      color: '#f43f5e',
+      playerName: topDps.name,
+      classId: topDps.classId,
+      statLabel: `${Math.round(topDps.matchDamageDealt).toLocaleString('pl-PL')} zadanych obrażeń`,
+    },
+    {
+      id: 'tank',
+      title: 'Ściana Nie Do Przejścia',
+      icon: '🛡️',
+      color: '#38bdf8',
+      playerName: topTank.name,
+      classId: topTank.classId,
+      statLabel: `${Math.round(topTank.matchDamageTaken).toLocaleString('pl-PL')} przyjętych / zablok.`,
+    },
+    {
+      id: 'support',
+      title: 'Anioł Stróż',
+      icon: '👼',
+      color: '#4ade80',
+      playerName: topSup.name,
+      classId: topSup.classId,
+      statLabel:
+        topSup.matchRevives > 0
+          ? `${topSup.matchRevives}× wskrzeszenie • ${Math.round(topSup.matchHealingSupport)} wsparcia`
+          : `${Math.round(topSup.matchHealingSupport).toLocaleString('pl-PL')} leczenia i tarcz`,
+    },
+    {
+      id: 'luck',
+      title: 'Szczęściarz',
+      icon: '🍀',
+      color: '#fbbf24',
+      playerName: topLuck.name,
+      classId: topLuck.classId,
+      statLabel: topLuck.matchBestLootName || 'Bogate łupy z wyprawy',
+    },
+  ];
+}
+
+function completeCursedAltar(room: GameRoom, now: number) {
+  if (!room.mapData?.obelisk || room.mapData.obelisk.state !== 'active') return;
+  const ob = room.mapData.obelisk;
+  const loc = room.mapData.location;
+  ob.state = 'completed';
+  ob.endsAt = 0;
+
+  // Clear remaining wave mobs cleanly if survived full 30s!
+  for (const e of room.enemies.values()) {
+    if (e.alive && e.isWaveMob) {
+      e.alive = false;
+      e.animState = 'dead';
+    }
+  }
+
+  pushVfx(room, { kind: 'chest_open', x: ob.x, z: ob.z, radius: 7, color: '#fbbf24' });
+  const partyBond = getPartyBondBonuses(room.players.size);
+  const altarLuck = 1.65 * (1 + partyBond.mfPct / 100);
+  for (let i = 0; i < 4; i++) {
+    spawnEquipmentDrop(room, ob.x, ob.z, Math.max(1, loc.globalIndex), true, altarLuck);
+  }
+
+  // Grant 3-minute Cursed Altar Party Buff (+15% AD/AP or +20% Move Speed!)
+  const giveDmgBuff = Math.random() < 0.55;
+  const buffLabel = giveDmgBuff ? '🔥 Ołtarz: +15% AD/AP (3m)' : '⚡ Ołtarz: +20% Ruch (3m)';
+  for (const p of room.players.values()) {
+    p.altarBuffLabel = buffLabel;
+    p.altarBuffUntil = now + 180_000;
+    p.altarAdApMult = giveDmgBuff ? 1.15 : 1.0;
+    p.altarMoveMult = giveDmgBuff ? 1.0 : 1.2;
+    pushCombatText(room, p.x, 3.2, p.z, buffLabel, 'heal', true, true);
+  }
+
+  const waveBonusXp = Math.round(targetLocationXpPool(Math.max(1, loc.globalIndex)) * 0.2);
+  io.to(room.code).emit('player:xp_gain', { amount: waveBonusXp, source: 'Przeklęty Ołtarz' });
+  io.to(room.code).emit('game:banner', {
+    type: 'boss_kill',
+    title: '🏆 PRZEKLĘTY OŁTARZ OPANOWANY!',
+    subtitle: `Skrzynia Ołtarza otwarta + 3-min buff drużyny (${buffLabel})!`,
+  });
+  offerBoonsToParty(room, '🏆 NAGRODA PRZEKLĘTEGO OŁTARZA — WYBIERZ DAR!');
+}
 
 // =========================================================
 // PERSISTENT GUILD SYSTEM (In-memory + disk JSON + client sync)
@@ -545,15 +825,29 @@ function applyBoundedShield(player: ServerPlayer, amount: number, durationMs: nu
  * - Act 3 Boss (Sylvara): Min. Full Legendarny +7 (~4 min)
  * - Act 4 Boss (Vaelgor): Min. Full Legendarny +9 (~4.5 min; even Boski +13 + 4x10/10 Runes ~2.1 min!)
  */
-function initializeLocation(room: GameRoom, globalLocation: number) {
-  room.globalLocation = Math.max(1, Math.min(TOTAL_LOCATIONS, globalLocation));
-  const map = generateMapData(room.globalLocation);
+function initializeLocation(room: GameRoom, globalLocation: number, riftFloor = 0) {
+  const isCamp = riftFloor === 0 && globalLocation === CAMP_LOCATION_INDEX;
+  room.isCamp = isCamp;
+  room.riftFloor = Math.max(0, Math.floor(riftFloor));
+  room.riftStartedAt = room.riftFloor > 0 ? Date.now() : 0;
+  room.globalLocation = isCamp
+    ? CAMP_LOCATION_INDEX
+    : room.riftFloor > 0
+      ? 60
+      : Math.max(1, Math.min(TOTAL_LOCATIONS, globalLocation));
+
+  const map = isCamp
+    ? generateCampMap()
+    : room.riftFloor > 0
+      ? generateRiftMap(room.riftFloor)
+      : generateMapData(room.globalLocation);
+
   room.mapData = map;
   room.enemies.clear();
   room.telegraphs.clear();
   room.loot.clear();
   room.pillars = [];
-  room.bossDefeated = false;
+  room.bossDefeated = isCamp;
   room.clearBonusAwarded = false;
   room.fullClearEmitted = false;
   room.mutatorId = map.location.mutatorId;
@@ -562,16 +856,105 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
   room.enemiesSlain = 0;
   room.comboExpiresAt = 0;
   room.nextMeteorAt = Date.now() + 4500;
+  room.nextEnvTrapAt = Date.now() + 5200;
 
   const partySize = Math.max(1, room.players.size);
+
+  // =========================================================
+  // INTERACTIVE 3D CO-OP CAMP HUB (globalLocation === 0)
+  // =========================================================
+  if (isCamp) {
+    // Spawn Immortal Training Dummy with live DPS & Max Crit counter!
+    const dummyId = nextId('dummy');
+    room.enemies.set(dummyId, {
+      id: dummyId,
+      archetype: 'training_dummy',
+      name: '🎯 Manekin Treningowy (DPS)',
+      tier: 'dummy',
+      act: 8,
+      x: 0,
+      z: -2,
+      homeX: 0,
+      homeZ: -2,
+      rotY: 0,
+      hp: 9999999,
+      maxHp: 9999999,
+      shield: 0,
+      maxShield: 0,
+      stagger: 100,
+      maxStagger: 100,
+      dummyDps: 0,
+      dummyMaxCrit: 0,
+      dummyRecentHits: [],
+      radius: 1.15,
+      speed: 0,
+      damage: 0,
+      xpReward: 0,
+      alive: true,
+      animState: 'idle',
+      stunnedUntil: 0,
+      slowedUntil: 0,
+      weakenedUntil: 0,
+      tauntedBy: null,
+      tauntedUntil: 0,
+      aggro: false,
+      nextAttackAt: 0,
+      abilityCooldowns: {},
+      armor: 120,
+      armorPenPct: 0,
+      requiredPower: 0,
+      skillMaxHpPct: 0,
+    });
+    room.totalEnemies = 0;
+
+    let pIdx = 0;
+    for (const p of room.players.values()) {
+      applyMentorScaling(room, p);
+      const offAngle = (pIdx / Math.max(1, room.players.size)) * Math.PI * 2;
+      p.x = map.spawn.x + Math.cos(offAngle) * 2.5;
+      p.z = map.spawn.z + Math.sin(offAngle) * 2.5;
+      p.hp = p.maxHp;
+      p.mana = p.maxMana;
+      p.shield = 0;
+      p.shieldExpiresAt = 0;
+      p.alive = true;
+      p.downedUntil = 0;
+      p.reviveProgress = 0;
+      p.revivingByName = null;
+      p.rootedUntil = 0;
+      p.slowedUntil = 0;
+      p.poisonUntil = 0;
+      p.animState = 'idle';
+      pIdx++;
+    }
+
+    io.to(room.code).emit('world:loaded', {
+      mapData: map,
+      partySize,
+      enemyCountMultiplier: 1,
+      bossHpMultiplier: 1,
+      bossDamageMultiplier: 1,
+    });
+    io.to(room.code).emit('game:banner', {
+      type: 'secret',
+      title: '🏕️ WSPÓLNY OBÓZ BOHATERÓW 3D',
+      subtitle: 'Kowal • Ołtarz Run • Manekin DPS • Handel • Portal Wypraw i Szczeliny Chaosu!',
+    });
+    broadcastRoomSummary(room);
+    return;
+  }
+
   const loc = map.location;
-  const isHC = isHardcoreLocation(loc.globalIndex);
-  const isGuild = isGuildLocation(loc.globalIndex);
+  const isRift = room.riftFloor > 0;
+  const isHC = !isRift && isHardcoreLocation(loc.globalIndex);
+  const isGuild = !isRift && isGuildLocation(loc.globalIndex);
 
   const countMult = isHC ? 1.0 : getEnemyCountMultiplier(partySize);
   const hcMobDiffMult = isHC ? getHardcoreMobDifficultyMultiplier(partySize) : 1.0; // +10% / +20% / +30%
   const hcBossDiffMult = isHC ? getHardcoreBossDifficultyMultiplier(partySize) : 1.0; // +33% / +66% / +99%
   const guildBossMult = isGuild ? Number((1 + (partySize - 1) * 0.9).toFixed(2)) : 1.0; // ~3 min for every Mythic +6 member!
+  const riftHpMult = isRift ? getRiftFloorHpMultiplier(room.riftFloor) : 1.0;
+  const riftDmgMult = isRift ? getRiftFloorDamageMultiplier(room.riftFloor) : 1.0;
   const bossHpMult = isGuild ? guildBossMult : isHC ? hcBossDiffMult : getBossHpMultiplier(partySize);
   const bossDmgMult = isGuild
     ? 1 + (partySize - 1) * 0.12
@@ -587,33 +970,40 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
 
   // Calibrated mob HP & DMG curve:
   // - Normal (Lvl 1..60): Loc 1..60
+  // - Endless Chaos Rift: built for +10..+13 gear & maxed Boss Runes, scaling per floor!
   // - HARDCORE (Acts 5-7, Loc 61..105): ~10 hits in Boski +13, PT +10%/+20%/+30%
   // - GUILD ACTS (Acts 8-9, Loc 106..135): balanced for Mythic +6 (~6-8 hits mobs, ~3 min final boss!)
-  const L = loc.globalIndex;
+  const L = isRift ? 60 : loc.globalIndex;
   const hcIdx = Math.max(1, L - 60);
-  const baseMobHp = isGuild
-    ? loc.act === 8
-      ? 7400
-      : 8800
-    : isHC
-      ? Math.round((71000 + hcIdx * 2150 + Math.pow(hcIdx, 1.52) * 115) * hcMobDiffMult)
-      : Math.round((180 + L * 68 + Math.pow(L, 2.25) * 2.35) * 1.25);
-  const baseMobDmg = isGuild
-    ? loc.act === 8
-      ? 340
-      : 395
-    : isHC
-      ? Math.round((3100 + hcIdx * 68) * hcMobDiffMult)
-      : Math.round(16 + L * 5.2 + Math.pow(L, 1.72) * 0.72);
-  const mobArmor = isGuild
-    ? loc.act === 8
-      ? 175
-      : 205
-    : isHC
-      ? Math.round(1350 + hcIdx * 36)
-      : Math.round(12 + L * 4.5);
+  const baseMobHp = isRift
+    ? Math.round(36000 * riftHpMult)
+    : isGuild
+      ? loc.act === 8
+        ? 7400
+        : 8800
+      : isHC
+        ? Math.round((71000 + hcIdx * 2150 + Math.pow(hcIdx, 1.52) * 115) * hcMobDiffMult)
+        : Math.round((180 + L * 68 + Math.pow(L, 2.25) * 2.35) * 1.25);
+  const baseMobDmg = isRift
+    ? Math.round(1450 * riftDmgMult)
+    : isGuild
+      ? loc.act === 8
+        ? 340
+        : 395
+      : isHC
+        ? Math.round((3100 + hcIdx * 68) * hcMobDiffMult)
+        : Math.round(16 + L * 5.2 + Math.pow(L, 1.72) * 0.72);
+  const mobArmor = isRift
+    ? Math.round(620 + room.riftFloor * 45)
+    : isGuild
+      ? loc.act === 8
+        ? 175
+        : 205
+      : isHC
+        ? Math.round(1350 + hcIdx * 36)
+        : Math.round(12 + L * 4.5);
 
-  const totalXpPool = targetLocationXpPool(loc.globalIndex);
+  const totalXpPool = targetLocationXpPool(L);
   const spawnedEnemies: ServerEnemy[] = [];
 
   for (const r of map.rooms) {
@@ -622,18 +1012,21 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
     if (r.index === 8) {
       if (loc.isMainBoss) {
         const bossDef = getMainBossByAct(loc.act);
-        // HC bosses: ~3 min solo, +33%/+66%/+99% in PT.
-        // Guild bosses: ~3 min in Mythic +6 (scales 1.0x/1.9x/2.8x/3.7x for 1-4 guildmates!).
-        const scaledHp = isGuild
-          ? Math.round(bossDef.baseHp * guildBossMult)
-          : isHC
-            ? Math.round(bossDef.baseHp * hcBossDiffMult)
-            : Math.round(bossDef.baseHp * bossHpMult * 1.25);
-        const scaledDmg = Math.round(bossDef.baseDamage * bossDmgMult);
+        const scaledHp = isRift
+          ? Math.round(MAIN_BOSSES.vaelgor.baseHp * 1.1 * riftHpMult * bossHpMult)
+          : isGuild
+            ? Math.round(bossDef.baseHp * guildBossMult)
+            : isHC
+              ? Math.round(bossDef.baseHp * hcBossDiffMult)
+              : Math.round(bossDef.baseHp * bossHpMult * 1.25);
+        const scaledDmg = isRift
+          ? Math.round(MAIN_BOSSES.vaelgor.baseDamage * 1.05 * riftDmgMult * bossDmgMult)
+          : Math.round(bossDef.baseDamage * bossDmgMult);
+        const maxStagger = 150 + partySize * 25;
         const boss: ServerEnemy = {
           id: nextId('boss'),
           archetype: `boss_${bossDef.id}`,
-          name: bossDef.name,
+          name: isRift ? `🌀 ${bossDef.name} (Piętro ${room.riftFloor})` : bossDef.name,
           tier: 'boss',
           act: loc.act,
           bossId: bossDef.id,
@@ -646,6 +1039,9 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
           maxHp: scaledHp,
           shield: 0,
           maxShield: 0,
+          stagger: maxStagger,
+          maxStagger,
+          staggerBrokenUntil: 0,
           radius: bossDef.radius,
           speed: bossDef.speed,
           damage: scaledDmg,
@@ -660,9 +1056,9 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
           aggro: false,
           nextAttackAt: 0,
           abilityCooldowns: {},
-          armor: bossDef.bossArmor,
+          armor: isRift ? Math.round(920 + room.riftFloor * 65) : bossDef.bossArmor,
           armorPenPct: bossDef.armorPenPct,
-          requiredPower: bossDef.requiredPower,
+          requiredPower: isRift ? 0 : bossDef.requiredPower,
           skillMaxHpPct: bossDef.skillMaxHpPct,
         };
         spawnedEnemies.push(boss);
@@ -673,6 +1069,7 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
           ? Math.round((baseMobHp / hcMobDiffMult) * 7.4 * hcBossDiffMult)
           : Math.round(baseMobHp * 13.5 * bossHpMult);
         const mbDmg = Math.round((baseMobDmg / hcMobDiffMult) * (isHC ? 1.45 : 1.95) * bossDmgMult);
+        const maxStagger = 100 + partySize * 15;
         const miniBoss: ServerEnemy = {
           id: nextId('miniboss'),
           archetype: mb.archetype,
@@ -688,6 +1085,9 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
           maxHp: mbHp,
           shield: 0,
           maxShield: 0,
+          stagger: maxStagger,
+          maxStagger,
+          staggerBrokenUntil: 0,
           radius: 1.9,
           speed: 4.5,
           damage: mbDmg,
@@ -825,20 +1225,39 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
       });
     }
 
-    // Spawn 1-2 tactical Explosive Powder Barrels in combat/shrine/puzzle rooms!
+    // Spawn 1-2 thematic Act Interactive Environmental Hazards per room!
+    // Act 1: Powder Barrels + Falling Stalactites | Act 2: Sand Pillars | Act 3: Toxic Shrooms | Act 4+: Chaos Crystals
     if (r.kind === 'combat' || r.kind === 'shrine' || r.kind === 'puzzle') {
-      const barrelCount = r.kind === 'combat' ? 2 : 1;
-      for (let b = 0; b < barrelCount; b++) {
+      const hazCount = r.kind === 'combat' ? 2 : 1;
+      for (let b = 0; b < hazCount; b++) {
         const ba = rng() * Math.PI * 2;
         const bd = 4.5 + rng() * 5.5;
         const bx = r.cx + Math.cos(ba) * bd;
         const bz = r.cz + Math.sin(ba) * bd;
         const bid = nextId('barrel');
+        const hazardKind: HazardKind =
+          loc.act === 1
+            ? b % 2 === 0
+              ? 'barrel'
+              : 'stalactite'
+            : loc.act === 2
+              ? 'sand_pillar'
+              : loc.act === 3
+                ? 'toxic_shroom'
+                : 'chaos_crystal';
+        const hazardNameMap: Record<HazardKind, string> = {
+          barrel: '🧨 Beczka Prochowa',
+          stalactite: '🪨 Kruchy Stalaktyt',
+          sand_pillar: '🏛️ Niestabilna Kolumna Piasku',
+          toxic_shroom: '🍄 Trujący Grzyb Zarodnikowy',
+          chaos_crystal: '💎 Niestabilny Kryształ Chaosu',
+        };
         room.enemies.set(bid, {
           id: bid,
-          archetype: 'explosive_barrel',
-          name: '🧨 Beczka Prochowa',
+          archetype: `hazard_${hazardKind}`,
+          name: hazardNameMap[hazardKind],
           tier: 'barrel',
+          hazardKind,
           act: loc.act,
           x: bx,
           z: bz,
@@ -1000,6 +1419,7 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
 
   let pIdx = 0;
   for (const p of room.players.values()) {
+    applyMentorScaling(room, p);
     const offAngle = (pIdx / Math.max(1, room.players.size)) * Math.PI * 2;
     p.x = map.spawn.x + Math.cos(offAngle) * 2.5;
     p.z = map.spawn.z + Math.sin(offAngle) * 2.5;
@@ -1008,6 +1428,9 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
     p.shield = 0;
     p.shieldExpiresAt = 0;
     p.alive = true;
+    p.downedUntil = 0;
+    p.reviveProgress = 0;
+    p.revivingByName = null;
     p.rootedUntil = 0;
     p.slowedUntil = 0;
     p.poisonUntil = 0;
@@ -1016,6 +1439,14 @@ function initializeLocation(room: GameRoom, globalLocation: number) {
     p.pendingBoonChoices = undefined;
     p.flameAuraNextTick = 0;
     p.titanBarrierNextTick = 0;
+    // Reset per-location MVP stats
+    p.matchDamageDealt = 0;
+    p.matchDamageTaken = 0;
+    p.matchHealingSupport = 0;
+    p.matchRevives = 0;
+    p.matchDowns = 0;
+    p.matchBestLootRank = 0;
+    p.matchBestLootName = '';
     pIdx++;
   }
 
@@ -1065,7 +1496,12 @@ function damagePlayer(
 ) {
   if (!player.alive) return;
   if (now < player.invulnUntil) {
-    pushCombatText(room, player.x, 2.5, player.z, 'UNIK!', 'shield', false, true);
+    // Perfect Dodge Window (~0.25s right after dashing into/past an incoming attack!)
+    if (!player.perfectDodgeConsumed && now - player.dashStartedAt <= 260) {
+      triggerPerfectDodge(room, player, now);
+    } else {
+      pushCombatText(room, player.x, 2.5, player.z, 'UNIK!', 'shield', false, true);
+    }
     return;
   }
 
@@ -1076,7 +1512,7 @@ function damagePlayer(
 
   const armorPen = options?.armorPenPct ?? 0;
   const effDef = player.stats.def * (1 - armorPen / 100);
-  const defMitigation = Math.min(0.54, effDef / (effDef + 160 + room.globalLocation * 18));
+  const defMitigation = Math.min(0.54, effDef / (effDef + 160 + Math.max(1, room.globalLocation) * 18));
 
   // Total non-armor DR strictly capped at 46% (no immortal tanks!)
   let dr = player.stats.damageReduction / 100;
@@ -1094,6 +1530,9 @@ function damagePlayer(
   const baseHit = rawDamage * underGearMult * (1 - defMitigation) * (1 - dr);
   const hpPctBonus = options?.extraMaxHpPct ? player.maxHp * (options.extraMaxHpPct / 100) : 0;
   let dmg = Math.max(1, Math.round(baseHit + hpPctBonus));
+
+  // Track total mitigated/taken damage for Tank MVP card ("Ściana Nie Do Przejścia")
+  player.matchDamageTaken += Math.round(rawDamage * (defMitigation + dr)) + dmg;
 
   if (player.shield > 0) {
     const absorbed = Math.min(player.shield, dmg);
@@ -1122,12 +1561,27 @@ function damagePlayer(
     player.alive = false;
     player.shield = 0;
     player.animState = 'dead';
-    player.respawnAt = now + 5500;
-    io.to(room.code).emit('game:banner', {
-      type: 'info',
-      title: `${player.name} poległ!`,
-      subtitle: 'Odrodzenie za 5 sekund lub uleczenie przez Wróżkę.',
-    });
+    player.matchDowns++;
+    player.reviveProgress = 0;
+    player.revivingByName = null;
+    if (room.players.size > 1) {
+      // Multiplayer Downed State (15s window for teammates to hold [E]/[F] and revive!)
+      player.downedUntil = now + 15000;
+      player.respawnAt = now + 15000;
+      io.to(room.code).emit('game:banner', {
+        type: 'info',
+        title: `🆘 ${player.name} POWALONY! (15s)`,
+        subtitle: 'Podejdź do sojusznika i przytrzymaj [E] lub [F] (2.5s • Wróżka 1.5s), aby wskrzesić z 40% HP!',
+      });
+    } else {
+      player.downedUntil = 0;
+      player.respawnAt = now + 5500;
+      io.to(room.code).emit('game:banner', {
+        type: 'info',
+        title: `${player.name} poległ!`,
+        subtitle: 'Odrodzenie przy punkcie kontrolnym za 5 sekund.',
+      });
+    }
   }
 }
 
@@ -1140,7 +1594,8 @@ function damageEnemy(
   now: number,
   canCrit = true,
   allowBoonProcs = true,
-  originPos?: { x: number; z: number }
+  originPos?: { x: number; z: number },
+  combatOpts?: { staggerDmg?: number; forceCrit?: boolean; bonusCritDmgPct?: number }
 ): number {
   if (!enemy.alive) return 0;
   if (enemy.burrowUntil && now < enemy.burrowUntil) return 0;
@@ -1160,6 +1615,21 @@ function damageEnemy(
   let dmg = rawDamage;
   if (now < enemy.weakenedUntil) {
     dmg *= 1.12;
+  }
+
+  // Perfect Dodge 3s buff (+25% damage!)
+  if (attacker.perfectDodgeBuffUntil && now < attacker.perfectDodgeBuffUntil) {
+    dmg *= 1.25;
+  }
+
+  // Cursed Altar 3-min party buff (+15% AD/AP!)
+  if (attacker.altarBuffUntil && now < attacker.altarBuffUntil && attacker.altarAdApMult > 1) {
+    dmg *= attacker.altarAdApMult;
+  }
+
+  // Stagger Broken window: Boss / Mini-Boss takes 150% damage for 4 seconds!
+  if (enemy.staggerBrokenUntil && now < enemy.staggerBrokenUntil) {
+    dmg *= 1.5;
   }
 
   // Hardcore Kaelis Rune bonus damage vs Bosses, Mini-Bosses & Elites!
@@ -1200,13 +1670,84 @@ function damageEnemy(
 
   const hasCritFury = attacker.activeBoons.includes('crit_fury');
   const effCritChance = attacker.stats.critChance + (hasCritFury ? 28 : 0);
-  const effCritDmg = attacker.stats.critDamage + (hasCritFury ? 55 : 0);
-  const isCrit = canCrit && enemy.tier !== 'barrel' && Math.random() * 100 < effCritChance;
+  const effCritDmg = attacker.stats.critDamage + (hasCritFury ? 55 : 0) + (combatOpts?.bonusCritDmgPct ?? 0);
+  const isCrit =
+    enemy.tier !== 'barrel' &&
+    (combatOpts?.forceCrit || (canCrit && Math.random() * 100 < effCritChance));
   if (isCrit) {
     dmg *= effCritDmg / 100;
   }
 
   dmg = Math.max(1, Math.round(dmg * (0.94 + Math.random() * 0.12)));
+
+  // Apply Stagger Bar damage on Bosses, Mini-Bosses & Camp Dummy!
+  if (
+    enemy.maxStagger &&
+    enemy.maxStagger > 0 &&
+    enemy.stagger !== undefined &&
+    (!enemy.staggerBrokenUntil || now >= enemy.staggerBrokenUntil)
+  ) {
+    const stagHit = combatOpts?.staggerDmg ?? 3;
+    if (stagHit > 0) {
+      enemy.stagger = Math.max(0, enemy.stagger - stagHit);
+      if (enemy.stagger <= 0) {
+        enemy.staggerBrokenUntil = now + 4000;
+        enemy.stunnedUntil = Math.max(enemy.stunnedUntil, now + 4000);
+        enemy.castingAbility = undefined;
+        pushVfx(room, { kind: 'hammer_slam', x: enemy.x, z: enemy.z, radius: 5.5, color: '#fde047' });
+        pushCombatText(
+          room,
+          enemy.x,
+          enemy.tier === 'boss' ? 5.6 : 3.8,
+          enemy.z,
+          '💫 PRZEŁAMANIE! (150% DMG • 4s)',
+          'physical',
+          true,
+          true
+        );
+        if (enemy.tier === 'boss' || enemy.tier === 'miniboss') {
+          io.to(room.code).emit('game:banner', {
+            type: 'boss',
+            title: `💫 PRZEŁAMANO RÓWNOWAGĘ: ${enemy.name.toUpperCase()}!`,
+            subtitle: 'Boss ogłuszony na 4 sekundy — zadawajcie 150% obrażeń!',
+          });
+        }
+      }
+    }
+  }
+
+  // Immortal Camp Training Dummy: records rolling 5s DPS & Max Crit without dying!
+  if (enemy.tier === 'dummy') {
+    if (!enemy.dummyRecentHits) enemy.dummyRecentHits = [];
+    enemy.dummyRecentHits.push({ t: now, dmg });
+    const cutoff = now - 5000;
+    enemy.dummyRecentHits = enemy.dummyRecentHits.filter((h) => h.t >= cutoff);
+    const sum5s = enemy.dummyRecentHits.reduce((acc, h) => acc + h.dmg, 0);
+    const spanSec = Math.max(1, (now - (enemy.dummyRecentHits[0]?.t ?? now)) / 1000);
+    enemy.dummyDps = Math.round(sum5s / Math.min(5, Math.max(1, spanSec)));
+    if (isCrit && dmg > (enemy.dummyMaxCrit || 0)) {
+      enemy.dummyMaxCrit = dmg;
+    }
+    pushCombatText(
+      room,
+      enemy.x + (Math.random() - 0.5) * 0.9,
+      2.6,
+      enemy.z + (Math.random() - 0.5) * 0.9,
+      isCrit ? `${dmg}!` : `${dmg}`,
+      damageType,
+      isCrit,
+      false,
+      `DPS: ${enemy.dummyDps.toLocaleString('pl-PL')}`
+    );
+    if (isCrit) {
+      io.to(attacker.socketId).emit('juice:crit', { intensity: 0.75 });
+    }
+    return dmg;
+  }
+
+  if (enemy.tier !== 'barrel') {
+    attacker.matchDamageDealt += dmg;
+  }
 
   if (enemy.shield > 0) {
     const absorbed = Math.min(enemy.shield, dmg);
@@ -1332,14 +1873,32 @@ function handleEnemyDeath(
   }
 
   if (enemy.tier === 'barrel') {
-    pushVfx(room, { kind: 'meteor', x: enemy.x, z: enemy.z, radius: 6.5, color: '#f97316' });
-    pushCombatText(room, enemy.x, 2.8, enemy.z, '💥 KABOOM!', 'physical', true, true);
+    const hk = enemy.hazardKind || 'barrel';
+    const blastCfg: Record<
+      HazardKind,
+      { vfx: SkillVfxEvent['kind']; label: string; color: string; radius: number; stunMs: number; slowMs: number; pct: number }
+    > = {
+      barrel: { vfx: 'meteor', label: '💥 KABOOM!', color: '#f97316', radius: 6.8, stunMs: 0, slowMs: 0, pct: 0.42 },
+      stalactite: { vfx: 'hammer_slam', label: '🪨 ZAWALENIE!', color: '#94a3b8', radius: 6.4, stunMs: 2400, slowMs: 0, pct: 0.36 },
+      sand_pillar: { vfx: 'miniboss_sand_roar', label: '🌪️ BURZA PIASKU!', color: '#eab308', radius: 7.2, stunMs: 2000, slowMs: 3500, pct: 0.32 },
+      toxic_shroom: { vfx: 'miniboss_venom_web', label: '🍄 CHMURA JADU!', color: '#84cc16', radius: 7.0, stunMs: 0, slowMs: 4500, pct: 0.38 },
+      chaos_crystal: { vfx: 'boss_chaos_burst', label: '💎 EKSPLOZJA CHAOSU!', color: '#f43f5e', radius: 7.6, stunMs: 1400, slowMs: 0, pct: 0.45 },
+    };
+    const cfg = blastCfg[hk];
+    pushVfx(room, { kind: cfg.vfx, x: enemy.x, z: enemy.z, radius: cfg.radius, color: cfg.color });
+    pushCombatText(room, enemy.x, 2.8, enemy.z, cfg.label, 'magical', true, true);
     for (const other of room.enemies.values()) {
-      if (!other.alive || other.id === enemy.id || other.tier === 'root_trap') continue;
-      if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 6.8 + other.radius) {
-        const blastPct = other.tier === 'boss' ? 0.06 : other.tier === 'miniboss' ? 0.1 : 0.42;
+      if (!other.alive || other.id === enemy.id || other.tier === 'root_trap' || other.tier === 'dummy') continue;
+      if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= cfg.radius + other.radius) {
+        const blastPct = other.tier === 'boss' ? 0.06 : other.tier === 'miniboss' ? 0.1 : cfg.pct;
         const blastDmg = Math.max(120, Math.round(other.maxHp * blastPct));
-        damageEnemy(room, killer, other, blastDmg, 'magical', now, false, false, { x: enemy.x, z: enemy.z });
+        damageEnemy(room, killer, other, blastDmg, 'magical', now, false, false, { x: enemy.x, z: enemy.z }, { staggerDmg: 22 });
+        if (cfg.stunMs > 0 && other.tier !== 'boss' && other.tier !== 'miniboss') {
+          other.stunnedUntil = Math.max(other.stunnedUntil, now + cfg.stunMs);
+        }
+        if (cfg.slowMs > 0) {
+          other.slowedUntil = Math.max(other.slowedUntil, now + cfg.slowMs);
+        }
       }
     }
     return;
@@ -1347,32 +1906,41 @@ function handleEnemyDeath(
 
   if (enemy.tier === 'summon') return;
 
-  const loc = getLocationDef(room.globalLocation);
+  const loc = room.mapData?.location ?? getLocationDef(room.globalLocation);
   const mutDef = LOCATION_MUTATORS[room.mutatorId];
   const fortuneLuck = killer.activeBoons.includes('golden_fortune') ? 1.65 : 1.0;
-  const effectiveLuck = mutDef.luckBonus * fortuneLuck;
 
-  // Update Party Kill-Streak Combo & Expedition Stats!
+  // Update Party Kill-Streak Combo (5s window; milestones x10, x25, x50, x100!)
   room.comboCount = now <= room.comboExpiresAt ? room.comboCount + 1 : 1;
   if (room.comboCount > room.maxCombo) room.maxCombo = room.comboCount;
   room.enemiesSlain++;
-  room.comboExpiresAt = now + 5500;
-  if (room.comboCount === 5 || room.comboCount === 10 || room.comboCount === 20 || room.comboCount === 30) {
+  room.comboExpiresAt = now + 5000;
+  if (room.comboCount === 10 || room.comboCount === 25 || room.comboCount === 50 || room.comboCount === 100) {
     const label =
-      room.comboCount >= 30
-        ? '👑 30x LEGENDA!'
-        : room.comboCount >= 20
-          ? '💀 20x MASAKRA!'
-          : room.comboCount >= 10
-            ? '⚡ 10x SZAŁ!'
-            : '🔥 5x SERIA!';
+      room.comboCount >= 100
+        ? '👑 100× BÓG CHAOSU! (+15% Ruch, +8% Drop)'
+        : room.comboCount >= 50
+          ? '🔥 50× FURIA! (+12% Ruch, +6% Drop)'
+          : room.comboCount >= 25
+            ? '💀 25× MASAKRA! (+8% Ruch, +4% Drop)'
+            : '⚡ 10× SZAŁ! (+4% Ruch, +2% Drop)';
     pushCombatText(room, killer.x, 3.6, killer.z, label, 'physical', true, true);
   }
 
-  const comboXpMult = 1 + Math.min(0.5, room.comboCount * 0.03);
+  const comboBon = getComboBonuses(room.comboCount);
+  const partyBond = getPartyBondBonuses(room.players.size);
+  const riftLuck = room.riftFloor > 0 ? getRiftFloorLuckBonus(room.riftFloor) : 1.0;
+  const effectiveLuck =
+    mutDef.luckBonus *
+    fortuneLuck *
+    riftLuck *
+    (1 + (comboBon.magicFindPct + partyBond.mfPct) / 100);
+
+  const comboXpMult = 1 + Math.min(0.5, room.comboCount * 0.02);
   const mutXpMult = 1 + mutDef.xpBonusPct / 100;
   const boonXpMult = killer.activeBoons.includes('golden_fortune') ? 1.35 : 1.0;
-  const finalXp = Math.round(enemy.xpReward * comboXpMult * mutXpMult * boonXpMult);
+  const partyXpMult = 1 + partyBond.xpPct / 100;
+  const finalXp = Math.round(enemy.xpReward * comboXpMult * mutXpMult * boonXpMult * partyXpMult);
 
   if (finalXp > 0) {
     io.to(room.code).emit('player:xp_gain', {
@@ -1382,14 +1950,14 @@ function handleEnemyDeath(
   }
 
   if (enemy.tier === 'goblin') {
-    pushVfx(room, { kind: 'chest_open', x: enemy.x, z: enemy.z, radius: 5, color: '#fbbf24' });
-    for (let i = 0; i < 5; i++) {
-      spawnEquipmentDrop(room, enemy.x, enemy.z, loc.globalIndex, true, 1.55 * fortuneLuck, killer.classId);
+    pushVfx(room, { kind: 'chest_open', x: enemy.x, z: enemy.z, radius: 5.5, color: '#fbbf24' });
+    for (let i = 0; i < 4; i++) {
+      spawnEquipmentDrop(room, enemy.x, enemy.z, Math.max(1, loc.globalIndex), true, 1.75 * effectiveLuck, killer.classId);
     }
     io.to(room.code).emit('game:banner', {
       type: 'secret',
-      title: '💰 ZŁOTY GOBLIN POKONANY!',
-      subtitle: 'Worek skarbów pękł — 5 rzadkich łupów rozsypało się na arenie!',
+      title: '💰 GOBLIN SKARBNIK POKONANY!',
+      subtitle: 'Fontanna łupów! 4 gwarantowane przedmioty z podbitą szansą na Mityczny/Legendarny/Boski!',
     });
     return;
   }
@@ -1427,7 +1995,7 @@ function handleEnemyDeath(
     });
   }
 
-  // Check Wave Obelisk progress!
+  // Check Cursed Altar (Przeklęty Ołtarz) wave progress!
   if (enemy.isWaveMob && room.mapData?.obelisk && room.mapData.obelisk.state === 'active') {
     let waveRemaining = 0;
     for (const e of room.enemies.values()) {
@@ -1439,25 +2007,54 @@ function handleEnemyDeath(
         ob.currentWave++;
         spawnObeliskWave(room, ob.currentWave);
       } else {
-        ob.state = 'completed';
-        pushVfx(room, { kind: 'chest_open', x: ob.x, z: ob.z, radius: 6, color: '#38bdf8' });
-        for (let i = 0; i < 3; i++) {
-          spawnEquipmentDrop(room, ob.x, ob.z, loc.globalIndex, true, 1.45 * fortuneLuck, killer.classId);
-        }
-        const waveBonusXp = Math.round(targetLocationXpPool(loc.globalIndex) * 0.18);
-        io.to(room.code).emit('player:xp_gain', { amount: waveBonusXp, source: 'Ołtarz Fal' });
-        io.to(room.code).emit('game:banner', {
-          type: 'boss_kill',
-          title: '🏆 WYZWANIE FAL UKOŃCZONE!',
-          subtitle: 'Zdobyto Skarb Mistrzów oraz wybór nowego Daru Chaosu!',
-        });
-        offerBoonsToParty(room, '🏆 NAGRODA OŁTARZA FAL — WYBIERZ DAR!');
+        completeCursedAltar(room, now);
       }
     }
   }
 
   if (enemy.tier === 'boss') {
     room.bossDefeated = true;
+    // Auto-revive any downed allies immediately when Boss falls!
+    for (const ally of room.players.values()) {
+      if (!ally.alive) {
+        ally.alive = true;
+        ally.downedUntil = 0;
+        ally.reviveProgress = 0;
+        ally.hp = Math.round(ally.maxHp * 0.5);
+        ally.animState = 'idle';
+        pushCombatText(room, ally.x, 2.8, ally.z, '👼 POWSTAŁ PO ZWYCIĘSTWIE!', 'heal', true, true);
+      }
+    }
+
+    // Endless Chaos Rift Floor Clear -> Record persistent 4-Category Leaderboard!
+    if (room.riftFloor > 0) {
+      const clearTimeMs = Math.max(1000, now - (room.riftStartedAt || now));
+      recordRiftClear(room, room.riftFloor, clearTimeMs);
+      for (let i = 0; i < 6; i++) {
+        spawnEquipmentDrop(room, enemy.x, enemy.z, 60, i < 4, 1.85 * effectiveLuck, killer.classId);
+      }
+      io.to(room.code).emit('rift:floor_cleared', {
+        floor: room.riftFloor,
+        clearTimeMs,
+        partySize: room.players.size,
+      });
+      io.to(room.code).emit('game:banner', {
+        type: 'boski',
+        title: `🌀 PIĘTRO ${room.riftFloor} SZCZELINY UKOŃCZONE!`,
+        subtitle: `Wynik zapisany na Tablicy Wyników! Wejdź do Portalu po Piętro ${room.riftFloor + 1}!`,
+      });
+      return;
+    }
+
+    // Check No-Down 4-Player Act 4 Flawless Prestige Challenge!
+    if (
+      loc.act === 4 &&
+      room.players.size >= 4 &&
+      Array.from(room.players.values()).every((pl) => pl.matchDowns === 0)
+    ) {
+      io.to(room.code).emit('prestige:flawless_act4_quad');
+    }
+
     for (let i = 0; i < 6; i++) {
       spawnEquipmentDrop(
         room,
@@ -1465,7 +2062,7 @@ function handleEnemyDeath(
         enemy.z,
         isGuildAct(loc.act) ? 45 : loc.globalIndex,
         i < 3,
-        1.35 * fortuneLuck,
+        1.35 * effectiveLuck,
         killer.classId
       );
     }
@@ -2977,10 +3574,65 @@ function tickRoom(room: GameRoom) {
     room.comboCount = 0;
   }
 
+  // Check Cursed Altar (Przeklęty Ołtarz) 30-second survival timer!
+  if (
+    map.obelisk &&
+    map.obelisk.state === 'active' &&
+    map.obelisk.endsAt &&
+    now >= map.obelisk.endsAt
+  ) {
+    completeCursedAltar(room, now);
+  }
+
+  // Track active revive channels (reset each tick, accumulated below if an ally holds [E]/[F] nearby!)
+  const beingRevived = new Set<string>();
+  for (const rescuer of room.players.values()) {
+    if (!rescuer.alive || now >= rescuer.reviveHoldUntil) continue;
+    let target: ServerPlayer | null = null;
+    let bestD = 3.85;
+    for (const ally of room.players.values()) {
+      if (ally.alive || ally.id === rescuer.id || !ally.downedUntil || now >= ally.downedUntil) continue;
+      const d = Math.hypot(ally.x - rescuer.x, ally.z - rescuer.z);
+      if (d <= bestD) {
+        bestD = d;
+        target = ally;
+      }
+    }
+    if (target) {
+      beingRevived.add(target.id);
+      const revDurationSec = rescuer.classId === 'wrozka' ? 1.5 : 2.5;
+      target.reviveProgress = Math.min(1, (target.reviveProgress || 0) + dt / revDurationSec);
+      target.revivingByName = rescuer.name;
+      if (target.reviveProgress >= 1) {
+        target.alive = true;
+        target.downedUntil = 0;
+        target.respawnAt = 0;
+        target.reviveProgress = 0;
+        target.revivingByName = null;
+        target.hp = Math.max(1, Math.round(target.maxHp * 0.4));
+        target.mana = Math.round(target.maxMana * 0.5);
+        target.invulnUntil = now + 2200;
+        target.animState = 'idle';
+        rescuer.matchRevives++;
+        rescuer.matchHealingSupport += 600 + target.hp;
+        pushVfx(room, { kind: 'heal_wave', x: target.x, z: target.z, radius: 4.5, color: '#4ade80' });
+        pushCombatText(room, target.x, 3.0, target.z, `👼 WSKRZESZONY! (+40% HP)`, 'heal', true, true);
+        io.to(rescuer.socketId).emit('player:revive_credit', { allyName: target.name });
+      }
+    }
+  }
+
   for (const p of room.players.values()) {
     if (!p.alive) {
+      if (!beingRevived.has(p.id)) {
+        p.reviveProgress = Math.max(0, (p.reviveProgress || 0) - dt * 0.45);
+        p.revivingByName = null;
+      }
       if (p.respawnAt > 0 && now >= p.respawnAt) {
         p.alive = true;
+        p.downedUntil = 0;
+        p.reviveProgress = 0;
+        p.revivingByName = null;
         p.hp = Math.round(p.maxHp * 0.8);
         p.mana = p.maxMana;
         p.x = map.spawn.x;
@@ -2989,6 +3641,14 @@ function tickRoom(room: GameRoom) {
         p.animState = 'idle';
       }
       continue;
+    }
+
+    // Expire 3-minute Cursed Altar buff cleanly
+    if (p.altarBuffUntil && now >= p.altarBuffUntil) {
+      p.altarBuffUntil = 0;
+      p.altarBuffLabel = null;
+      p.altarAdApMult = 1.0;
+      p.altarMoveMult = 1.0;
     }
 
     // Expire temporary shields cleanly
@@ -3037,7 +3697,19 @@ function tickRoom(room: GameRoom) {
       for (const e of room.enemies.values()) {
         if (!e.alive) continue;
         if (Math.hypot(e.x - p.x, e.z - p.z) <= 4.5 + e.radius) {
-          damageEnemy(room, p, e, tickDmg, 'physical', now);
+          damageEnemy(room, p, e, tickDmg, 'physical', now, true, true, undefined, { staggerDmg: 6 });
+          // Co-op Combo: Warlock Curse + Warrior Whirlwind -> WYBUCH CIENIA!
+          if (e.cursedUntil && now < e.cursedUntil) {
+            e.cursedUntil = 0;
+            const detDmg = Math.round(p.stats.ad * 1.15 + 95);
+            pushVfx(room, { kind: 'shadow_orb', x: e.x, z: e.z, tx: e.x, tz: e.z, radius: 4.8, color: '#a855f7' });
+            pushCombatText(room, e.x, 3.6, e.z, '💥 WYBUCH CIENIA!', 'magical', true, true, 'SYNERGIA CO-OP');
+            for (const other of room.enemies.values()) {
+              if (other.alive && other.tier !== 'root_trap' && Math.hypot(other.x - e.x, other.z - e.z) <= 4.8 + other.radius) {
+                damageEnemy(room, p, other, detDmg, 'magical', now, false, false, { x: e.x, z: e.z }, { staggerDmg: 10 });
+              }
+            }
+          }
         }
       }
     }
@@ -3095,8 +3767,56 @@ function tickRoom(room: GameRoom) {
     }
   }
 
+  // Act-specific periodic environmental traps: Act 2 Desert Spikes & Act 4 Lava Geysers!
+  if (
+    !room.isCamp &&
+    alivePlayers.length > 0 &&
+    (map.location.act === 2 || map.location.act === 4) &&
+    now >= room.nextEnvTrapAt
+  ) {
+    room.nextEnvTrapAt = now + 7200;
+    const refP = alivePlayers[Math.floor(Math.random() * alivePlayers.length)];
+    const L = Math.max(1, room.globalLocation);
+    const trapDmg = Math.round((20 + L * 5.2 + Math.pow(L, 1.65) * 0.6) * 0.95);
+    const tx = refP.x + (Math.random() - 0.5) * 9;
+    const tz = refP.z + (Math.random() - 0.5) * 9;
+    const tid = nextId('tel');
+    const isAct2 = map.location.act === 2;
+    room.telegraphs.set(tid, {
+      id: tid,
+      shape: 'circle',
+      x: tx,
+      z: tz,
+      radius: 2.8,
+      color: isAct2 ? '#eab308' : '#f97316',
+      label: isAct2 ? '⚠️ Pułapka z Kolcami!' : '🌋 Gejzer Lawy!',
+      createdAt: now,
+      triggerAt: now + 1350,
+      ownerId: 'world',
+      abilityId: isAct2 ? 'env_spike_trap' : 'env_lava_geyser',
+      resolved: false,
+      damage: trapDmg,
+      damageType: isAct2 ? 'physical' : 'magical',
+      hitsEnemies: true,
+    });
+  }
+
   for (const e of room.enemies.values()) {
     if (!e.alive) continue;
+    // Refill Boss/Mini-Boss Stagger Bar cleanly after 4s stun break ends!
+    if (e.maxStagger && e.stagger === 0 && e.staggerBrokenUntil && now >= e.staggerBrokenUntil) {
+      e.stagger = e.maxStagger;
+      e.staggerBrokenUntil = 0;
+    }
+    // Decay Camp Training Dummy DPS readout when idle for 5s
+    if (e.tier === 'dummy') {
+      if (e.dummyRecentHits && e.dummyRecentHits.length > 0) {
+        const cutoff = now - 5000;
+        e.dummyRecentHits = e.dummyRecentHits.filter((h) => h.t >= cutoff);
+        if (e.dummyRecentHits.length === 0) e.dummyDps = 0;
+      }
+      continue;
+    }
     if (e.tier === 'root_trap' || e.tier === 'barrel') continue;
 
     // Shield Totem AI: periodically grants protective shield to nearby enemies!
@@ -3137,22 +3857,40 @@ function tickRoom(room: GameRoom) {
       }
       if (!e.aggro && nearestDist <= 16.5) {
         e.aggro = true;
-        e.goblinDespawnAt = now + 38000;
-        pushCombatText(room, e.x, 2.8, e.z, '💰 ŁAP MNIE! HEHE!', 'physical', true, true);
+        e.goblinDespawnAt = now + 20000; // 20s chase window per spec!
+        e.goblinNextShardAt = now + 2400;
+        pushCombatText(room, e.x, 2.8, e.z, '💰 HEHEHE! ŁAP MNIE! (20s)', 'physical', true, true);
+        io.to(room.code).emit('juice:goblin_laugh');
         io.to(room.code).emit('game:banner', {
           type: 'secret',
-          title: '💰 ZŁOTY GOBLIN SPŁOSZONY!',
-          subtitle: 'Goń go i pokonaj w 38 sekund zanim ucieknie ze skarbem!',
+          title: '💰 GOBLIN SKARBNIK SPŁOSZONY!',
+          subtitle: 'Goń go i pokonaj w 20 sekund zanim otworzy portal — po drodze gubi odłamki!',
         });
       }
       if (!e.aggro) {
         e.animState = 'idle';
         continue;
       }
+      // Drop trail of single shards while fleeing!
+      if (e.goblinNextShardAt && now >= e.goblinNextShardAt) {
+        e.goblinNextShardAt = now + 2800;
+        const rRoll = Math.random();
+        const shardRarity: Rarity =
+          rRoll < 0.08 ? 'boski' : rRoll < 0.3 ? 'legendarny' : rRoll < 0.7 ? 'mityczny' : 'normalny';
+        const sDrop: GroundLoot = {
+          id: nextId('shard'),
+          x: e.x,
+          z: e.z,
+          shardDrop: { rarity: shardRarity, amount: 1 },
+          droppedAt: now,
+          pickedUp: false,
+        };
+        room.loot.set(sDrop.id, sDrop);
+      }
       if (e.goblinDespawnAt && now >= e.goblinDespawnAt) {
         e.alive = false;
-        pushVfx(room, { kind: 'puzzle_solve', x: e.x, z: e.z, radius: 4, color: '#fbbf24' });
-        pushCombatText(room, e.x, 2.8, e.z, '💨 GOBLIN UCIEKŁ!', 'physical', false, true);
+        pushVfx(room, { kind: 'puzzle_solve', x: e.x, z: e.z, radius: 4.2, color: '#fbbf24' });
+        pushCombatText(room, e.x, 2.8, e.z, '🌀 GOBLIN UCIEKŁ PORTALEM!', 'physical', false, true);
         continue;
       }
       if (now < e.stunnedUntil) {
@@ -3631,32 +4369,46 @@ function tickRoom(room: GameRoom) {
 
   let enemiesRemaining = 0;
   let goblinAlive = false;
+  let goblinDespawnAt = 0;
   for (const e of room.enemies.values()) {
     if (!e.alive) continue;
-    if (e.tier === 'goblin') goblinAlive = true;
+    if (e.tier === 'goblin') {
+      goblinAlive = true;
+      if (e.goblinDespawnAt) goblinDespawnAt = e.goblinDespawnAt;
+    }
     if (
       e.tier !== 'summon' &&
       e.tier !== 'root_trap' &&
       e.tier !== 'barrel' &&
       e.tier !== 'totem' &&
       e.tier !== 'goblin' &&
+      e.tier !== 'dummy' &&
       !e.isWaveMob
     ) {
       enemiesRemaining++;
     }
   }
 
-  const loc = getLocationDef(room.globalLocation);
-  const exitUnlocked =
-    loc.isMainBoss || loc.isMiniBoss
+  const loc = map.location;
+  const exitUnlocked = room.isCamp
+    ? true
+    : loc.isMainBoss || loc.isMiniBoss
       ? room.bossDefeated
       : enemiesRemaining <= Math.floor(room.totalEnemies * 0.45);
+
+  const partyBond = getPartyBondBonuses(room.players.size);
+  const comboBon = getComboBonuses(room.comboCount);
 
   const snapshot: WorldSnapshot = {
     tick: room.tick,
     serverTime: now,
     globalLocation: room.globalLocation,
+    isCamp: room.isCamp,
+    riftFloor: room.riftFloor,
+    riftStartedAt: room.riftStartedAt,
     partySize: room.players.size,
+    partyBondXpPct: partyBond.xpPct,
+    partyBondMfPct: partyBond.mfPct,
     players: Array.from(room.players.values()).map((p) => ({
       id: p.id,
       name: p.name,
@@ -3683,6 +4435,17 @@ function tickRoom(room: GameRoom) {
       invulnUntil: p.invulnUntil,
       shieldExpiresAt: p.shieldExpiresAt,
       potionReadyAt: p.potionReadyAt,
+      perfectDodgeBuffUntil: p.perfectDodgeBuffUntil,
+      lightBarrierUntil: p.lightBarrierUntil,
+      downedUntil: p.downedUntil,
+      reviveProgress: p.reviveProgress,
+      revivingByName: p.revivingByName,
+      altarBuffLabel: p.altarBuffLabel,
+      altarBuffUntil: p.altarBuffUntil,
+      isMentor: p.isMentor,
+      equippedTitle: p.equippedTitle,
+      equippedAura: p.equippedAura,
+      equippedTrail: p.equippedTrail,
       activeBoons: p.activeBoons,
       stats: p.stats,
     })),
@@ -3696,6 +4459,7 @@ function tickRoom(room: GameRoom) {
         act: e.act,
         bossId: e.bossId,
         affix: e.affix,
+        hazardKind: e.hazardKind,
         x: Number(e.x.toFixed(2)),
         z: Number(e.z.toFixed(2)),
         rotY: Number(e.rotY.toFixed(2)),
@@ -3703,6 +4467,12 @@ function tickRoom(room: GameRoom) {
         maxHp: e.maxHp,
         shield: Math.round(e.shield),
         maxShield: e.maxShield,
+        stagger: e.stagger,
+        maxStagger: e.maxStagger,
+        staggerBrokenUntil: e.staggerBrokenUntil,
+        cursedUntil: e.cursedUntil,
+        dummyDps: e.dummyDps,
+        dummyMaxCrit: e.dummyMaxCrit,
         radius: e.radius,
         speed: e.speed,
         damage: e.damage,
@@ -3732,7 +4502,10 @@ function tickRoom(room: GameRoom) {
     mutatorId: room.mutatorId,
     comboCount: room.comboCount,
     comboExpiresAt: room.comboExpiresAt,
+    comboMoveSpeedPct: comboBon.moveSpeedPct,
+    comboMagicFindPct: comboBon.magicFindPct,
     goblinAlive,
+    goblinDespawnAt,
   };
 
   io.to(room.code).emit('world:snapshot', snapshot);
@@ -3867,6 +4640,50 @@ function handleSkillCast(
     }
   };
 
+  const triggerWarlockWarriorCombo = (targetEnemy: ServerEnemy) => {
+    if (player.classId !== 'wojownik' || !targetEnemy.cursedUntil || now >= targetEnemy.cursedUntil) return;
+    targetEnemy.cursedUntil = 0;
+    const detDmg = Math.round(player.stats.ad * 1.15 + 95);
+    pushVfx(room, {
+      kind: 'shadow_orb',
+      x: targetEnemy.x,
+      z: targetEnemy.z,
+      tx: targetEnemy.x,
+      tz: targetEnemy.z,
+      radius: 4.8,
+      color: '#a855f7',
+    });
+    pushCombatText(room, targetEnemy.x, 3.6, targetEnemy.z, '💥 WYBUCH CIENIA!', 'magical', true, true, 'SYNERGIA CO-OP');
+    for (const other of room.enemies.values()) {
+      if (
+        other.alive &&
+        other.tier !== 'root_trap' &&
+        Math.hypot(other.x - targetEnemy.x, other.z - targetEnemy.z) <= 4.8 + other.radius
+      ) {
+        damageEnemy(room, player, other, detDmg, 'magical', now, false, false, { x: targetEnemy.x, z: targetEnemy.z }, { staggerDmg: 10 });
+      }
+    }
+  };
+
+  const applyElfDwarfComboOpts = (targetEnemy: ServerEnemy, baseStagger: number) => {
+    const isPrimed = now < targetEnemy.tauntedUntil || now < targetEnemy.stunnedUntil;
+    if (player.classId === 'elf' && isPrimed) {
+      pushCombatText(
+        room,
+        targetEnemy.x,
+        3.5,
+        targetEnemy.z,
+        '🎯 KRYTYCZNE PRZEŁAMANIE!',
+        'hybrid',
+        true,
+        true,
+        'SYNERGIA CO-OP'
+      );
+      return { staggerDmg: baseStagger + 8, forceCrit: true, bonusCritDmgPct: 20 };
+    }
+    return { staggerDmg: baseStagger };
+  };
+
   switch (skillDef.id) {
     case 'potezne_ciecie': {
       const dmg = player.stats.ad * (skillDef.damageScaleAd ?? 1.85) * rankMult;
@@ -3877,7 +4694,8 @@ function handleSkillCast(
       for (const e of room.enemies.values()) {
         if (!e.alive) continue;
         if (Math.hypot(e.x - cx, e.z - cz) <= skillDef.radius + e.radius) {
-          damageEnemy(room, player, e, dmg, 'physical', now);
+          damageEnemy(room, player, e, dmg, 'physical', now, true, true, undefined, { staggerDmg: 18 });
+          triggerWarlockWarriorCombo(e);
         }
       }
       break;
@@ -3901,7 +4719,8 @@ function handleSkillCast(
       for (const e of room.enemies.values()) {
         if (!e.alive) continue;
         if (Math.hypot(e.x - player.x, e.z - player.z) <= skillDef.radius + e.radius + 0.8) {
-          damageEnemy(room, player, e, dmg, 'physical', now);
+          damageEnemy(room, player, e, dmg, 'physical', now, true, true, undefined, { staggerDmg: 32 });
+          triggerWarlockWarriorCombo(e);
           if (e.tier !== 'boss' && e.tier !== 'miniboss') {
             e.stunnedUntil = now + 2000;
             pushCombatText(room, e.x, 3.0, e.z, 'OGŁUSZONY!', 'physical', false, true);
@@ -3918,7 +4737,9 @@ function handleSkillCast(
       for (const e of room.enemies.values()) {
         if (!e.alive) continue;
         if (Math.hypot(e.x - targetX, e.z - targetZ) <= skillDef.radius + e.radius) {
-          damageEnemy(room, player, e, dmg, 'magical', now);
+          damageEnemy(room, player, e, dmg, 'magical', now, true, true, undefined, { staggerDmg: 10 });
+          e.cursedUntil = now + 6500;
+          e.cursedBy = player.id;
         }
       }
       break;
@@ -3931,7 +4752,9 @@ function handleSkillCast(
       for (const e of room.enemies.values()) {
         if (!e.alive) continue;
         if (Math.hypot(e.x - targetX, e.z - targetZ) <= skillDef.radius + e.radius) {
-          damageEnemy(room, player, e, dmg, 'magical', now);
+          damageEnemy(room, player, e, dmg, 'magical', now, true, true, undefined, { staggerDmg: 16 });
+          e.cursedUntil = now + 6500;
+          e.cursedBy = player.id;
         }
       }
       break;
@@ -3944,7 +4767,9 @@ function handleSkillCast(
       for (const e of room.enemies.values()) {
         if (!e.alive) continue;
         if (Math.hypot(e.x - targetX, e.z - targetZ) <= skillDef.radius + e.radius) {
-          totalDealt += damageEnemy(room, player, e, dmg, 'magical', now);
+          totalDealt += damageEnemy(room, player, e, dmg, 'magical', now, true, true, undefined, { staggerDmg: 10 });
+          e.cursedUntil = now + 6500;
+          e.cursedBy = player.id;
         }
       }
       if (totalDealt > 0) {
@@ -3952,6 +4777,7 @@ function handleSkillCast(
         const heal = Math.min(player.maxHp - player.hp, maxCapHeal, Math.round(totalDealt * 0.16));
         if (heal > 0) {
           player.hp += heal;
+          player.matchHealingSupport += heal;
           pushCombatText(room, player.x, 2.7, player.z, `+${heal}`, 'heal', false, false);
         }
       }
@@ -3969,7 +4795,7 @@ function handleSkillCast(
         const proj = rx * dirX + rz * dirZ;
         const perp = Math.abs(rx * dirZ - rz * dirX);
         if (proj >= 0 && proj <= skillDef.range && perp <= 1.8 + e.radius) {
-          damageEnemy(room, player, e, dmg, 'hybrid', now);
+          damageEnemy(room, player, e, dmg, 'hybrid', now, true, true, undefined, applyElfDwarfComboOpts(e, 10));
         }
       }
       break;
@@ -3984,7 +4810,7 @@ function handleSkillCast(
         const rz = e.z - player.z;
         const d = Math.hypot(rx, rz);
         if (d <= skillDef.range && (rx * dirX + rz * dirZ) / Math.max(0.01, d) > 0.55) {
-          damageEnemy(room, player, e, dmg, 'hybrid', now);
+          damageEnemy(room, player, e, dmg, 'hybrid', now, true, true, undefined, applyElfDwarfComboOpts(e, 10));
         }
       }
       const backX = player.x - dirX * 5.2;
@@ -4008,7 +4834,7 @@ function handleSkillCast(
         const proj = rx * dirX + rz * dirZ;
         const perp = Math.abs(rx * dirZ - rz * dirX);
         if (proj >= 0 && proj <= skillDef.range && perp <= 3.0 + e.radius) {
-          damageEnemy(room, player, e, dmg, 'hybrid', now);
+          damageEnemy(room, player, e, dmg, 'hybrid', now, true, true, undefined, applyElfDwarfComboOpts(e, 12));
         }
       }
       break;
@@ -4021,7 +4847,7 @@ function handleSkillCast(
       for (const e of room.enemies.values()) {
         if (!e.alive) continue;
         if (Math.hypot(e.x - player.x, e.z - player.z) <= skillDef.radius + e.radius) {
-          damageEnemy(room, player, e, dmg, 'physical', now);
+          damageEnemy(room, player, e, dmg, 'physical', now, true, true, undefined, { staggerDmg: 34 });
           e.tauntedBy = player.id;
           e.tauntedUntil = now + 5200;
           pushCombatText(room, e.x, 3.2, e.z, 'PROWOKACJA!', 'physical', false, true);
@@ -4034,6 +4860,7 @@ function handleSkillCast(
       player.stoneSkinUntil = now + 4500;
       const rawShield = (player.stats.def * 1.2 + player.maxHp * 0.14) * rankMult;
       const applied = applyBoundedShield(player, rawShield, 5500, now);
+      player.matchHealingSupport += applied;
       pushVfx(room, { kind: 'stone_skin', x: player.x, z: player.z, radius: 2.8, color: '#78716c', casterId: player.id });
       pushCombatText(room, player.x, 2.8, player.z, `KAMIENNA SKÓRA +${applied}`, 'shield', false, true);
       break;
@@ -4046,7 +4873,7 @@ function handleSkillCast(
       for (const e of room.enemies.values()) {
         if (!e.alive) continue;
         if (Math.hypot(e.x - player.x, e.z - player.z) <= skillDef.radius + e.radius) {
-          damageEnemy(room, player, e, dmg, 'physical', now);
+          damageEnemy(room, player, e, dmg, 'physical', now, true, true, undefined, { staggerDmg: 42 });
           e.slowedUntil = now + 3800;
           if (e.tier !== 'boss' && e.tier !== 'miniboss') e.stunnedUntil = now + 1500;
         }
@@ -4061,7 +4888,7 @@ function handleSkillCast(
       for (const e of room.enemies.values()) {
         if (!e.alive) continue;
         if (Math.hypot(e.x - targetX, e.z - targetZ) <= skillDef.radius + e.radius) {
-          damageEnemy(room, player, e, dmg, 'magical', now);
+          damageEnemy(room, player, e, dmg, 'magical', now, true, true, undefined, { staggerDmg: 8 });
           e.weakenedUntil = now + 5000;
           pushCombatText(room, e.x, 3.1, e.z, 'OSŁABIONY!', 'magical', false, true);
         }
@@ -4077,11 +4904,18 @@ function handleSkillCast(
         const cappedHeal = Math.min(rawHeal, Math.round(ally.maxHp * 0.34));
         if (!ally.alive) {
           ally.alive = true;
-          ally.hp = Math.min(ally.maxHp, cappedHeal);
+          ally.downedUntil = 0;
+          ally.reviveProgress = 0;
+          ally.hp = Math.min(ally.maxHp, Math.max(cappedHeal, Math.round(ally.maxHp * 0.4)));
           ally.animState = 'idle';
-          pushCombatText(room, ally.x, 2.8, ally.z, 'WSKRZESZONY!', 'heal', true, true);
+          player.matchRevives++;
+          player.matchHealingSupport += ally.hp + 500;
+          pushCombatText(room, ally.x, 2.8, ally.z, '👼 WSKRZESZONY!', 'heal', true, true);
+          io.to(player.socketId).emit('player:revive_credit', { allyName: ally.name });
         } else {
+          const actualHeal = Math.min(ally.maxHp - ally.hp, cappedHeal);
           ally.hp = Math.min(ally.maxHp, ally.hp + cappedHeal);
+          player.matchHealingSupport += Math.max(10, actualHeal);
           pushCombatText(room, ally.x, 2.6, ally.z, `+${cappedHeal}`, 'heal', false, false);
         }
       }
@@ -4095,8 +4929,10 @@ function handleSkillCast(
         if (!ally.alive) continue;
         if (Math.hypot(ally.x - player.x, ally.z - player.z) <= skillDef.radius) {
           const applied = applyBoundedShield(ally, rawShield, 6500, now);
+          ally.lightBarrierUntil = now + 6500; // Co-op Synergy: +15% Attack Speed while shielded!
           ally.rootedUntil = 0;
-          pushCombatText(room, ally.x, 2.8, ally.z, `TARCZA +${applied}`, 'shield', false, true);
+          player.matchHealingSupport += applied;
+          pushCombatText(room, ally.x, 2.8, ally.z, `TARCZA +${applied}`, 'shield', false, true, '+15% ASPD!');
         }
       }
       break;
@@ -4112,8 +4948,11 @@ function handleBasicAttack(room: GameRoom, player: ServerPlayer, aimX: number, a
   const cls = CLASSES[player.classId];
   const frenzyAspd = room.mutatorId === 'blood_frenzy' ? 1.28 : 1.0;
   const comboAspd = 1 + Math.min(0.4, room.comboCount * 0.02);
+  // Co-op Synergy: Fairy Light Barrier grants +15% Attack Speed to every shielded ally!
+  const fairyBarrierAspd =
+    player.lightBarrierUntil && now < player.lightBarrierUntil && player.shield > 0 ? 1.15 : 1.0;
   const cdMs = Math.round(
-    (cls.baseAttackCooldown * 1000) / Math.max(0.5, player.stats.attackSpeed * frenzyAspd * comboAspd)
+    (cls.baseAttackCooldown * 1000) / Math.max(0.5, player.stats.attackSpeed * frenzyAspd * comboAspd * fairyBarrierAspd)
   );
   player.cooldowns.basic = now + cdMs;
   player.animState = 'attack';
@@ -4209,6 +5048,9 @@ io.on('connection', (socket: Socket) => {
     level: number;
     skillRanks: SkillRanks;
     stats: ComputedStats;
+    equippedTitle?: string | null;
+    equippedAura?: string | null;
+    equippedTrail?: string | null;
   }): ServerPlayer => ({
     id: socket.id,
     socketId: socket.id,
@@ -4236,7 +5078,21 @@ io.on('connection', (socket: Socket) => {
     invulnUntil: 0,
     shieldExpiresAt: 0,
     potionReadyAt: 0,
-    stats: payload.stats,
+    perfectDodgeBuffUntil: 0,
+    lightBarrierUntil: 0,
+    downedUntil: 0,
+    reviveProgress: 0,
+    revivingByName: null,
+    altarBuffLabel: null,
+    altarBuffUntil: 0,
+    altarAdApMult: 1.0,
+    altarMoveMult: 1.0,
+    isMentor: false,
+    equippedTitle: payload.equippedTitle ?? null,
+    equippedAura: payload.equippedAura ?? null,
+    equippedTrail: payload.equippedTrail ?? null,
+    stats: { ...payload.stats },
+    rawStats: { ...payload.stats },
     ready: true,
     skillRanks: payload.skillRanks,
     cooldowns: { basic: 0, active1: 0, active2: 0, active3: 0, dash: 0 },
@@ -4246,18 +5102,39 @@ io.on('connection', (socket: Socket) => {
     poisonNextTick: 0,
     poisonDps: 0,
     respawnAt: 0,
+    dashStartedAt: 0,
+    perfectDodgeConsumed: false,
+    reviveHoldUntil: 0,
+    matchDamageDealt: 0,
+    matchDamageTaken: 0,
+    matchHealingSupport: 0,
+    matchRevives: 0,
+    matchDowns: 0,
+    matchBestLootRank: 0,
+    matchBestLootName: '',
     activeBoons: [],
     flameAuraNextTick: 0,
     titanBarrierNextTick: 0,
   });
 
+  socket.on('rift:get_leaderboard', (ack) => {
+    if (typeof ack === 'function') ack(riftLeaderboard);
+    else socket.emit('rift:leaderboard', riftLeaderboard);
+  });
+
   socket.on('room:create', (payload, ack) => {
-    const reqLoc = Math.max(1, Math.min(TOTAL_LOCATIONS, payload.globalLocation || 1));
-    const guildCheck = checkGuildLocationAccess(socket.id, reqLoc);
-    if (!guildCheck.ok) {
-      if (ack) ack({ ok: false, error: guildCheck.error });
-      socket.emit('guild:error', { error: guildCheck.error });
-      return;
+    const rawLoc = Number(payload.globalLocation);
+    const reqLoc =
+      rawLoc === CAMP_LOCATION_INDEX
+        ? CAMP_LOCATION_INDEX
+        : Math.max(1, Math.min(TOTAL_LOCATIONS, rawLoc || 1));
+    if (reqLoc > 0) {
+      const guildCheck = checkGuildLocationAccess(socket.id, reqLoc);
+      if (!guildCheck.ok) {
+        if (ack) ack({ ok: false, error: guildCheck.error });
+        socket.emit('guild:error', { error: guildCheck.error });
+        return;
+      }
     }
     leaveCurrentRoom(socket);
     const code = generateRoomCode();
@@ -4266,6 +5143,9 @@ io.on('connection', (socket: Socket) => {
       code,
       hostId: socket.id,
       globalLocation: reqLoc,
+      isCamp: reqLoc === CAMP_LOCATION_INDEX,
+      riftFloor: 0,
+      riftStartedAt: 0,
       inGame: false,
       tick: 0,
       mapData: null,
@@ -4284,6 +5164,7 @@ io.on('connection', (socket: Socket) => {
       enemiesSlain: 0,
       comboExpiresAt: 0,
       nextMeteorAt: 0,
+      nextEnvTrapAt: 0,
       trades: new Map(),
       pendingCombatTexts: [],
       pendingVfx: [],
@@ -4317,6 +5198,10 @@ io.on('connection', (socket: Socket) => {
     socketToRoom.set(socket.id, code);
     socket.join(code);
 
+    for (const rp of room.players.values()) {
+      applyMentorScaling(room, rp);
+    }
+
     const summary = buildRoomSummary(room);
     if (ack) ack({ ok: true, summary });
     broadcastRoomSummary(room);
@@ -4343,11 +5228,14 @@ io.on('connection', (socket: Socket) => {
     p.name = (payload.name || p.name).slice(0, 20);
     p.classId = payload.classId || p.classId;
     p.level = Math.max(1, Math.min(60, payload.level || p.level));
+    if (payload.equippedTitle !== undefined) p.equippedTitle = payload.equippedTitle;
+    if (payload.equippedAura !== undefined) p.equippedAura = payload.equippedAura;
+    if (payload.equippedTrail !== undefined) p.equippedTrail = payload.equippedTrail;
     if (payload.skillRanks) p.skillRanks = payload.skillRanks;
     if (payload.stats) {
       const hpRatio = p.maxHp > 0 ? p.hp / p.maxHp : 1;
-      p.stats = payload.stats;
-      p.maxHp = payload.stats.maxHp;
+      p.rawStats = { ...payload.stats };
+      applyMentorScaling(room, p);
       p.maxMana = payload.stats.maxMana;
       p.hp = Math.min(p.maxHp, Math.max(1, Math.round(p.maxHp * hpRatio)));
       p.weaponGlow = payload.stats.weaponUpgradeGlow;
@@ -4362,15 +5250,21 @@ io.on('connection', (socket: Socket) => {
     if (!code) return;
     const room = rooms.get(code);
     if (!room) return;
-    const targetLoc = Math.max(1, Math.min(TOTAL_LOCATIONS, Number(payload.globalLocation) || 1));
-    const guildCheck = checkGuildLocationAccess(socket.id, targetLoc);
-    if (!guildCheck.ok) {
-      socket.emit('guild:error', { error: guildCheck.error });
-      return;
+    const rawLoc = Number(payload.globalLocation);
+    const targetLoc =
+      rawLoc === CAMP_LOCATION_INDEX
+        ? CAMP_LOCATION_INDEX
+        : Math.max(1, Math.min(TOTAL_LOCATIONS, rawLoc || 1));
+    if (targetLoc > 0) {
+      const guildCheck = checkGuildLocationAccess(socket.id, targetLoc);
+      if (!guildCheck.ok) {
+        socket.emit('guild:error', { error: guildCheck.error });
+        return;
+      }
     }
     room.globalLocation = targetLoc;
     if (room.inGame) {
-      initializeLocation(room, room.globalLocation);
+      initializeLocation(room, room.globalLocation, 0);
     } else {
       broadcastRoomSummary(room);
     }
@@ -4381,20 +5275,60 @@ io.on('connection', (socket: Socket) => {
     if (!code) return;
     const room = rooms.get(code);
     if (!room) return;
-    const targetLoc = payload?.globalLocation
-      ? Math.max(1, Math.min(TOTAL_LOCATIONS, Number(payload.globalLocation)))
-      : room.globalLocation;
-    const guildCheck = checkGuildLocationAccess(socket.id, targetLoc);
-    if (!guildCheck.ok) {
-      socket.emit('guild:error', { error: guildCheck.error });
-      return;
+    const rawLoc = payload?.globalLocation !== undefined ? Number(payload.globalLocation) : room.globalLocation;
+    const targetLoc =
+      rawLoc === CAMP_LOCATION_INDEX
+        ? CAMP_LOCATION_INDEX
+        : Math.max(1, Math.min(TOTAL_LOCATIONS, rawLoc || 1));
+    const riftFloor = payload?.riftFloor ? Math.max(1, Math.floor(Number(payload.riftFloor))) : 0;
+
+    if (riftFloor === 0 && targetLoc > 0) {
+      const guildCheck = checkGuildLocationAccess(socket.id, targetLoc);
+      if (!guildCheck.ok) {
+        socket.emit('guild:error', { error: guildCheck.error });
+        return;
+      }
     }
     room.globalLocation = targetLoc;
     room.inGame = true;
-    initializeLocation(room, room.globalLocation);
+    initializeLocation(room, room.globalLocation, riftFloor);
     if (!room.loopTimer) {
       room.loopTimer = setInterval(() => tickRoom(room), 50);
     }
+  });
+
+  socket.on('camp:enter', () => {
+    const code = socketToRoom.get(socket.id);
+    if (!code) return;
+    const room = rooms.get(code);
+    if (!room) return;
+    room.inGame = true;
+    initializeLocation(room, CAMP_LOCATION_INDEX, 0);
+    if (!room.loopTimer) {
+      room.loopTimer = setInterval(() => tickRoom(room), 50);
+    }
+  });
+
+  socket.on('rift:start', (payload: { floor?: number }) => {
+    const code = socketToRoom.get(socket.id);
+    if (!code) return;
+    const room = rooms.get(code);
+    if (!room) return;
+    const floor = Math.max(1, Math.floor(Number(payload?.floor) || 1));
+    room.inGame = true;
+    initializeLocation(room, 60, floor);
+    if (!room.loopTimer) {
+      room.loopTimer = setInterval(() => tickRoom(room), 50);
+    }
+  });
+
+  socket.on('player:revive_hold', () => {
+    const code = socketToRoom.get(socket.id);
+    if (!code) return;
+    const room = rooms.get(code);
+    const p = room?.players.get(socket.id);
+    if (!room || !p || !p.alive) return;
+    p.reviveHoldUntil = Date.now() + 260;
   });
 
   socket.on('player:move', (payload: { dx: number; dz: number; rotY?: number }) => {
@@ -4415,13 +5349,27 @@ io.on('connection', (socket: Socket) => {
       const ndx = payload.dx / Math.max(1, len);
       const ndz = payload.dz / Math.max(1, len);
       let speed = 8.4 * p.stats.moveSpeed;
+      const comboBon = getComboBonuses(room.comboCount);
+      if (comboBon.moveSpeedPct > 0) speed *= 1 + comboBon.moveSpeedPct / 100;
+      if (p.altarBuffUntil && now < p.altarBuffUntil && p.altarMoveMult > 1) speed *= p.altarMoveMult;
       if (now < p.slowedUntil) speed *= 0.55;
       if (now < p.hasteUntil) speed *= 1.3;
       if (room.mutatorId === 'blood_frenzy') speed *= 1.24;
       if (p.activeBoons.includes('swift_step')) speed *= 1.3;
       const dt = 0.05;
-      const nx = p.x + ndx * speed * dt;
-      const nz = p.z + ndz * speed * dt;
+      let nx = p.x + ndx * speed * dt;
+      let nz = p.z + ndz * speed * dt;
+      // Cursed Altar active arena barrier: gently keep engaged fighters inside the glowing 13.5m ring!
+      const ob = room.mapData.obelisk;
+      if (ob && ob.state === 'active' && ob.barrierRadius) {
+        const curD = Math.hypot(p.x - ob.x, p.z - ob.z);
+        const nextD = Math.hypot(nx - ob.x, nz - ob.z);
+        if (curD <= ob.barrierRadius + 0.5 && nextD > ob.barrierRadius - 0.3) {
+          const ang = Math.atan2(nz - ob.z, nx - ob.x);
+          nx = ob.x + Math.cos(ang) * (ob.barrierRadius - 0.35);
+          nz = ob.z + Math.sin(ang) * (ob.barrierRadius - 0.35);
+        }
+      }
       const resolved = moveWithWallSweep(
         p.x,
         p.z,
@@ -4487,10 +5435,39 @@ io.on('connection', (socket: Socket) => {
     const now = Date.now();
     if (now < p.cooldowns.dash || now < p.rootedUntil) return;
 
+    const oldX = p.x;
+    const oldZ = p.z;
     p.cooldowns.dash = now + 2600;
+    p.dashStartedAt = now;
+    p.perfectDodgeConsumed = false;
     p.invulnUntil = now + 340;
     p.animState = 'dash';
     p.animTime = now;
+
+    // Check if hero dashed at the last moment (~0.26s) out of an imminent enemy telegraph or melee strike!
+    let imminentThreat = false;
+    for (const tel of room.telegraphs.values()) {
+      if (tel.resolved) continue;
+      const timeLeft = tel.triggerAt - now;
+      if (timeLeft >= -40 && timeLeft <= 280) {
+        const dTel = Math.hypot(oldX - tel.x, oldZ - tel.z);
+        if (dTel <= tel.radius + 1.2) {
+          imminentThreat = true;
+          break;
+        }
+      }
+    }
+    if (!imminentThreat) {
+      for (const e of room.enemies.values()) {
+        if (!e.alive || e.tier === 'barrel' || e.tier === 'goblin' || e.tier === 'dummy') continue;
+        const dEn = Math.hypot(oldX - e.x, oldZ - e.z);
+        if (dEn <= e.radius + 2.6 && e.nextAttackAt - now <= 260 && e.nextAttackAt - now >= -120) {
+          imminentThreat = true;
+          break;
+        }
+      }
+    }
+
     const len = Math.hypot(payload.dirX, payload.dirZ) || 1;
     const nx = p.x + (payload.dirX / len) * 5.8;
     const nz = p.z + (payload.dirZ / len) * 5.8;
@@ -4506,7 +5483,12 @@ io.on('connection', (socket: Socket) => {
     );
     p.x = resolved.x;
     p.z = resolved.z;
-    pushCombatText(room, p.x, 2.3, p.z, 'UNIK!', 'shield', false, true);
+
+    if (imminentThreat) {
+      triggerPerfectDodge(room, p, now);
+    } else {
+      pushCombatText(room, p.x, 2.3, p.z, 'UNIK!', 'shield', false, true);
+    }
   });
 
   socket.on('loot:pickup', (payload: { lootId: string }) => {
@@ -4521,9 +5503,17 @@ io.on('connection', (socket: Socket) => {
 
     drop.pickedUp = true;
     room.loot.delete(drop.id);
+    if (drop.item) {
+      const rRank = RARITY_ORDER[drop.item.rarity] || 1;
+      if (rRank >= p.matchBestLootRank) {
+        p.matchBestLootRank = rRank;
+        p.matchBestLootName = drop.item.name;
+      }
+    }
     socket.emit('loot:granted', {
       item: drop.item,
       runeShard: drop.runeShard,
+      shardDrop: drop.shardDrop,
     });
   });
 
@@ -4535,11 +5525,32 @@ io.on('connection', (socket: Socket) => {
     if (!room || !p || !p.alive || !room.mapData) return;
     const map = room.mapData;
 
+    // Interactive 3D Camp Stations!
+    if (map.isCamp && map.campStations) {
+      for (const st of map.campStations) {
+        if (Math.hypot(p.x - st.x, p.z - st.z) <= 4.4) {
+          socket.emit('camp:station_interact', { kind: st.kind });
+          return;
+        }
+      }
+    }
+
     for (const drop of room.loot.values()) {
       if (!drop.pickedUp && Math.hypot(p.x - drop.x, p.z - drop.z) <= 4.5) {
         drop.pickedUp = true;
         room.loot.delete(drop.id);
-        socket.emit('loot:granted', { item: drop.item, runeShard: drop.runeShard });
+        if (drop.item) {
+          const rRank = RARITY_ORDER[drop.item.rarity] || 1;
+          if (rRank >= p.matchBestLootRank) {
+            p.matchBestLootRank = rRank;
+            p.matchBestLootName = drop.item.name;
+          }
+        }
+        socket.emit('loot:granted', {
+          item: drop.item,
+          runeShard: drop.runeShard,
+          shardDrop: drop.shardDrop,
+        });
         return;
       }
     }
@@ -4638,11 +5649,22 @@ io.on('connection', (socket: Socket) => {
     if (map.obelisk && map.obelisk.state === 'idle' && Math.hypot(p.x - map.obelisk.x, p.z - map.obelisk.z) <= 4.6) {
       map.obelisk.state = 'active';
       map.obelisk.currentWave = 1;
+      map.obelisk.endsAt = Date.now() + 30000;
+      map.obelisk.barrierRadius = 13.5;
       spawnObeliskWave(room, 1);
+      io.to(room.code).emit('game:banner', {
+        type: 'boss',
+        title: '🔮 PRZEKLĘTY OŁTARZ AKTYWOWANY! (30s)',
+        subtitle: 'Arena zamknięta barierą! Przetrwaj 30s lub pokonaj fale po Skrzynię + 3-min Buff!',
+      });
       return;
     }
 
     if (Math.hypot(p.x - map.exitPortal.x, p.z - map.exitPortal.z) <= 4.8) {
+      if (map.isCamp) {
+        socket.emit('camp:station_interact', { kind: 'portal' });
+        return;
+      }
       let remaining = 0;
       for (const e of room.enemies.values()) {
         if (
@@ -4652,6 +5674,7 @@ io.on('connection', (socket: Socket) => {
           e.tier !== 'barrel' &&
           e.tier !== 'totem' &&
           e.tier !== 'goblin' &&
+          e.tier !== 'dummy' &&
           !e.isWaveMob
         ) {
           remaining++;
@@ -4666,9 +5689,20 @@ io.on('connection', (socket: Socket) => {
         pushCombatText(room, map.exitPortal.x, 3.0, map.exitPortal.z, 'POKONAJ STRAŻNIKÓW!', 'physical', false, true);
         return;
       }
+
+      // Endless Chaos Rift progression -> Floor N+1!
+      if (room.riftFloor > 0) {
+        const nextFloor = room.riftFloor + 1;
+        initializeLocation(room, 60, nextFloor);
+        return;
+      }
+
       if (!room.clearBonusAwarded) {
         room.clearBonusAwarded = true;
-        const clearXp = Math.round(targetLocationXpPool(room.globalLocation) * 0.12);
+        const partyBond = getPartyBondBonuses(room.players.size);
+        const clearXp = Math.round(
+          targetLocationXpPool(room.globalLocation) * 0.12 * (1 + partyBond.xpPct / 100)
+        );
         const chestsOpened = map.chests.filter((c) => c.opened).length;
         const secretsFound = map.secrets.filter((s) => s.revealed).length;
         const score =
@@ -4677,21 +5711,28 @@ io.on('connection', (socket: Socket) => {
           (secretsFound >= 1 ? 1 : 0) +
           (remaining === 0 ? 1 : 0);
         const grade = score >= 4 ? 'S' : score >= 2 ? 'A' : 'B';
-        io.to(room.code).emit('location:completed', {
-          globalLocation: room.globalLocation,
-          locationName: loc.name,
-          act: loc.act,
-          isMainBoss: loc.isMainBoss,
-          allEnemiesCleared: remaining === 0,
-          clearXp,
-          enemiesSlain: room.enemiesSlain,
-          maxCombo: room.maxCombo,
-          chestsOpened,
-          totalChests: map.chests.length,
-          secretsFound,
-          totalSecrets: map.secrets.length,
-          grade,
-        });
+        const mvpCards = buildMvpCards(room);
+        const baseMentorReward = loc.isMainBoss ? 6 : loc.isMiniBoss ? 4 : 2;
+        for (const rp of room.players.values()) {
+          io.to(rp.socketId).emit('location:completed', {
+            globalLocation: room.globalLocation,
+            locationName: loc.name,
+            act: loc.act,
+            isMainBoss: loc.isMainBoss,
+            partySize: room.players.size,
+            allEnemiesCleared: remaining === 0,
+            clearXp,
+            enemiesSlain: room.enemiesSlain,
+            maxCombo: room.maxCombo,
+            chestsOpened,
+            totalChests: map.chests.length,
+            secretsFound,
+            totalSecrets: map.secrets.length,
+            grade,
+            mvpCards,
+            mentorShardsEarned: rp.isMentor ? baseMentorReward : 0,
+          });
+        }
       }
       // After finishing Guild Act I (120) or Guild Act II (135), don't auto-loop into a locked/completed Guild Act!
       if (room.globalLocation === 120 || room.globalLocation === 135) {
@@ -4703,7 +5744,7 @@ io.on('connection', (socket: Socket) => {
         return;
       }
       const nextLoc = Math.min(TOTAL_LOCATIONS, room.globalLocation + 1);
-      initializeLocation(room, nextLoc);
+      initializeLocation(room, nextLoc, 0);
     }
   });
 

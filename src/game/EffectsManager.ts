@@ -1677,6 +1677,13 @@ export class EffectsManager {
           beamHeight = 14.5;
           beamRadius = 0.42;
           maxOpacity = 0.36;
+        } else if (drop.shardDrop) {
+          rarity = drop.shardDrop.rarity;
+          const meta = RARITY_META[rarity];
+          beamColor = meta.beamColor;
+          beamHeight = 8.5;
+          beamRadius = 0.26;
+          maxOpacity = 0.32;
         } else if (drop.item) {
           rarity = drop.item.rarity;
           const meta = RARITY_META[rarity];

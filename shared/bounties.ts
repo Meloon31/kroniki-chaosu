@@ -7,7 +7,10 @@ export type BountyKind =
   | 'clear'
   | 'upgrade'
   | 'loot'
-  | 'emote';
+  | 'emote'
+  | 'perfect_dodge'
+  | 'salvage'
+  | 'coop_boss';
 
 export interface BountyDef {
   id: string;
@@ -538,6 +541,47 @@ export const BOUNTY_POOL: BountyDef[] = [
     target: 2,
     rewardXp: 650,
     rewardShards: { zwykly: 6, normalny: 4 },
+  },
+  {
+    id: 'perfect_dodge_5',
+    kind: 'perfect_dodge',
+    title: 'Mistrz Refleksu',
+    description: 'Wykonaj 5 Perfekcyjnych Uników [Spacja] tuż przed trafieniem.',
+    icon: '⚡',
+    target: 5,
+    rewardXp: 1650,
+    rewardShards: { mityczny: 4, legendarny: 2 },
+  },
+  {
+    id: 'salvage_10',
+    kind: 'salvage',
+    title: 'Recykling Kowala',
+    description: 'Rozbierz 10 sztuk ekwipunku na odłamki w Ekwipunku.',
+    icon: '♻️',
+    target: 10,
+    rewardXp: 1200,
+    rewardShards: { normalny: 5, mityczny: 4 },
+  },
+  {
+    id: 'chest_3',
+    kind: 'chest',
+    title: 'Szyfrant Zagadek',
+    description: 'Otwórz 3 skrzynki z zagadkami logicznymi na lokacjach.',
+    icon: '🔐',
+    target: 3,
+    rewardXp: 1850,
+    rewardItemRarity: 'legendarny',
+    rewardShards: { mityczny: 3 },
+  },
+  {
+    id: 'coop_boss_1',
+    kind: 'coop_boss',
+    title: 'Braterstwo w Walce',
+    description: 'Pokonaj Głównego Bossa w trybie Co-op (2–4 graczy).',
+    icon: '🤝',
+    target: 1,
+    rewardXp: 2600,
+    rewardShards: { legendarny: 3, boski: 1 },
   },
 ];
 

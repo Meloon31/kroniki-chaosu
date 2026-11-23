@@ -4,6 +4,7 @@ import { getDailyBlessing, getDailyFeaturedLocation } from '../../shared/bountie
 import { getTotalGuildShards, GuildState, isGuildAct } from '../../shared/guilds';
 import { RARITY_META } from '../../shared/items';
 import { CHAOS_BOONS, LOCATION_MUTATORS } from '../../shared/mutators';
+import { formatRiftTime } from '../../shared/rift';
 import { getLocationDef } from '../../shared/world';
 import type {
   GeneratedMapData,
@@ -23,7 +24,9 @@ export type ActivePanel =
   | 'worldmap'
   | 'trade'
   | 'bounties'
-  | 'guild';
+  | 'guild'
+  | 'rift'
+  | 'prestige';
 
 const COOP_EMOTES = [
   { icon: '👍', label: '👍 SUPER!' },
@@ -55,6 +58,7 @@ interface HudProps {
   onUsePotion: () => void;
   onRequestTrade: (targetId: string) => void;
   onSendEmote?: (text: string) => void;
+  onEnterCamp?: () => void;
   onLeaveToLobby: () => void;
 }
 
@@ -80,6 +84,7 @@ export const Hud: React.FC<HudProps> = ({
   onUsePotion,
   onRequestTrade,
   onSendEmote,
+  onEnterCamp,
   onLeaveToLobby,
 }) => {
   const minimapRef = useRef<HTMLCanvasElement | null>(null);
@@ -182,9 +187,26 @@ export const Hud: React.FC<HudProps> = ({
       ctx.fill();
     }
 
-    // Enemies (including Golden Goblin & Shield Totems!)
+    // Camp 3D Stations on minimap
+    if (mapData.campStations && mapData.campStations.length > 0) {
+      for (const st of mapData.campStations) {
+        ctx.fillStyle = st.color || '#fde047';
+        ctx.beginPath();
+        ctx.arc(toX(st.x), toY(st.z), 4.0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Enemies (including Golden Goblin, Shield Totems & Camp Training Dummy)
     for (const e of snapshot.enemies) {
       if (!e.alive || e.tier === 'root_trap' || e.tier === 'barrel') continue;
+      if (e.tier === 'dummy') {
+        ctx.fillStyle = '#38bdf8';
+        ctx.beginPath();
+        ctx.arc(toX(e.x), toY(e.z), 3.6, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
       ctx.fillStyle =
         e.tier === 'goblin'
           ? '#fde047'
@@ -208,14 +230,39 @@ export const Hud: React.FC<HudProps> = ({
       ctx.fill();
     }
 
-    // Players (Teammates + Local Hero)
+    // Players (Teammates + Local Hero + Pulsing Downed Rescue Marker!)
+    const miniNow = Date.now();
     for (const p of snapshot.players) {
       const isMe = p.id === localPlayerId;
+      const px = toX(p.x);
+      const pz = toY(p.z);
+      const isDowned = !p.alive && (p.downedUntil || 0) > miniNow;
+
+      if (isDowned) {
+        const pulse = 5.5 + Math.sin(miniNow * 0.012) * 2.2;
+        ctx.strokeStyle = '#f43f5e';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(px, pz, pulse, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.fillStyle = '#e11d48';
+        ctx.beginPath();
+        ctx.arc(px, pz, 4.2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // White medical cross
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(px - 2.6, pz - 0.9, 5.2, 1.8);
+        ctx.fillRect(px - 0.9, pz - 2.6, 1.8, 5.2);
+        continue;
+      }
+
       ctx.fillStyle = isMe ? '#fde047' : '#38bdf8';
       ctx.strokeStyle = '#111118';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.arc(toX(p.x), toY(p.z), isMe ? 4.2 : 3.5, 0, Math.PI * 2);
+      ctx.arc(px, pz, isMe ? 4.2 : 3.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }
@@ -308,77 +355,174 @@ export const Hud: React.FC<HudProps> = ({
           </div>
         </div>
 
+        {/* Party Bond Buff Pill (+5% XP & +5% Magic Find per extra ally) */}
+        {snapshot && (snapshot.partyBondXpPct || 0) > 0 && (
+          <div
+            className="comic-panel-sm"
+            style={{
+              padding: '4px 9px',
+              fontSize: 10.5,
+              fontWeight: 900,
+              color: '#86efac',
+              borderColor: '#22c55e',
+              background: 'rgba(20, 83, 45, 0.72)',
+              textAlign: 'center',
+            }}
+            title="Premia Więzi Drużyny za wspólną grę w Co-op"
+          >
+            🤝 Więzi Drużyny: +{snapshot.partyBondXpPct}% XP • +{snapshot.partyBondMfPct || snapshot.partyBondXpPct}% Drop
+          </div>
+        )}
+
         {(snapshot?.players ?? []).map((p) => {
           const isMe = p.id === localPlayerId;
           const pCls = CLASSES[p.classId];
           const hpPct = Math.max(0, Math.min(100, (p.hp / Math.max(1, p.maxHp)) * 100));
           const shieldPct = Math.min(100, (p.shield / Math.max(1, p.maxHp)) * 100);
+          const isDowned = !p.alive && (p.downedUntil || 0) > now;
+          const downedSec = isDowned ? Math.max(0, ((p.downedUntil || 0) - now) / 1000) : 0;
+          const revPct = Math.round((p.reviveProgress || 0) * 100);
+          const hasBarrierBuff = (p.lightBarrierUntil || 0) > now && p.shield > 0;
+
           return (
             <div
               key={p.id}
               className="comic-panel-sm"
               style={{
                 padding: '7px 9px',
-                borderColor: isMe ? '#fde047' : pCls.primaryColor,
+                borderColor: isDowned ? '#f43f5e' : isMe ? '#fde047' : pCls.primaryColor,
+                background: isDowned ? 'rgba(136, 19, 55, 0.85)' : undefined,
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                <div style={{ fontSize: 12, fontWeight: 900, color: '#fff' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4, gap: 4 }}>
+                <div style={{ fontSize: 12, fontWeight: 900, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {p.name}{' '}
                   <span style={{ color: pCls.primaryColor, fontSize: 11 }}>
                     ({pCls.name} • {p.level})
                   </span>
                 </div>
-                {!isMe && (
-                  <button
-                    className="comic-btn comic-btn-gold"
-                    onClick={() => onRequestTrade(p.id)}
-                    style={{ padding: '2px 7px', fontSize: 10 }}
-                    title="Zaproponuj handel"
-                  >
-                    🤝 Handluj
-                  </button>
-                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                  {p.isMentor && (
+                    <span
+                      style={{
+                        fontSize: 9,
+                        fontWeight: 900,
+                        background: '#0284c7',
+                        color: '#e0f2fe',
+                        padding: '1px 5px',
+                        borderRadius: 6,
+                      }}
+                      title="Mentor (statystyki skalowane do lokacji -> Odłamki Mentora!)"
+                    >
+                      🎓
+                    </span>
+                  )}
+                  {hasBarrierBuff && (
+                    <span
+                      style={{
+                        fontSize: 9,
+                        fontWeight: 900,
+                        background: 'rgba(56, 189, 248, 0.25)',
+                        color: '#7dd3fc',
+                        border: '1px solid #38bdf8',
+                        padding: '0px 4px',
+                        borderRadius: 6,
+                      }}
+                      title="Bariera Światła Wróżki: +15% Szybkości Ataku"
+                    >
+                      🪽+15%
+                    </span>
+                  )}
+                  {!isMe && (
+                    <button
+                      className="comic-btn comic-btn-gold"
+                      onClick={() => onRequestTrade(p.id)}
+                      style={{ padding: '2px 7px', fontSize: 10 }}
+                      title="Zaproponuj handel"
+                    >
+                      🤝 Handluj
+                    </button>
+                  )}
+                </div>
               </div>
-              <div
-                style={{
-                  position: 'relative',
-                  height: 12,
-                  background: '#0f1221',
-                  border: '2px solid #111118',
-                  borderRadius: 6,
-                  overflow: 'hidden',
-                }}
-              >
-                <div style={{ width: `${hpPct}%`, height: '100%', background: '#22c55e', transition: 'width 0.12s' }} />
-                {p.shield > 0 && (
+              {isDowned ? (
+                <div
+                  style={{
+                    position: 'relative',
+                    height: 16,
+                    background: '#2b0a14',
+                    border: '2px solid #f43f5e',
+                    borderRadius: 6,
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    style={{
+                      width: `${revPct}%`,
+                      height: '100%',
+                      background: 'linear-gradient(90deg, #22c55e, #fde047)',
+                      transition: 'width 0.08s',
+                    }}
+                  />
                   <div
                     style={{
                       position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: `${shieldPct}%`,
-                      height: '100%',
-                      background: 'rgba(56, 189, 248, 0.7)',
+                      inset: 0,
+                      fontSize: 9.5,
+                      fontWeight: 900,
+                      color: '#fff',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      textShadow: '1px 1px 0 #111',
                     }}
-                  />
-                )}
+                  >
+                    {revPct > 0
+                      ? `👼 Wskrzeszanie: ${revPct}%${p.revivingByName ? ` (${p.revivingByName})` : ''}`
+                      : `🚑 POWALONY (${downedSec.toFixed(0)}s) — Trzymaj [E]/[F]`}
+                  </div>
+                </div>
+              ) : (
                 <div
                   style={{
-                    position: 'absolute',
-                    inset: 0,
-                    fontSize: 9,
-                    fontWeight: 900,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    textShadow: '1px 1px 0 #111',
+                    position: 'relative',
+                    height: 12,
+                    background: '#0f1221',
+                    border: '2px solid #111118',
+                    borderRadius: 6,
+                    overflow: 'hidden',
                   }}
                 >
-                  {p.hp}/{p.maxHp}
-                  {p.shield > 0 ? ` (+${p.shield})` : ''}
+                  <div style={{ width: `${hpPct}%`, height: '100%', background: '#22c55e', transition: 'width 0.12s' }} />
+                  {p.shield > 0 && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: `${shieldPct}%`,
+                        height: '100%',
+                        background: 'rgba(56, 189, 248, 0.7)',
+                      }}
+                    />
+                  )}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      fontSize: 9,
+                      fontWeight: 900,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      textShadow: '1px 1px 0 #111',
+                    }}
+                  >
+                    {p.hp}/{p.maxHp}
+                    {p.shield > 0 ? ` (+${p.shield})` : ''}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           );
         })}
@@ -404,126 +548,293 @@ export const Hud: React.FC<HudProps> = ({
             padding: '7px 16px',
             textAlign: 'center',
             width: '100%',
+            borderColor: snapshot?.isCamp
+              ? '#fbbf24'
+              : (snapshot?.riftFloor || 0) > 0
+                ? '#c084fc'
+                : undefined,
           }}
         >
-          <div
-            style={{
-              fontSize: 11,
-              fontWeight: 900,
-              color: isGuildAct(loc.act) ? '#fbbf24' : loc.act >= 5 ? '#00f5d4' : '#fde047',
-              letterSpacing: 1,
-            }}
-          >
-            {isGuildAct(loc.act)
-              ? `🏰 AKT GILDYJNY ${loc.act === 8 ? 'I' : 'II'} • LOKACJA ${loc.locationInAct}/15 • BOSS: 100% ODŁAMEK GILDII`
-              : `${loc.act >= 5 ? '🔥 HARDCORE • ' : ''}AKT ${loc.act} • LOKACJA ${loc.locationInAct}/15 (#${loc.globalIndex}/105) • ${
-                  loc.act >= 5
-                    ? `PT BOSS: ${Math.round(room.bossHpMultiplier * 100)}% / MOB: ${Math.round(room.enemyCountMultiplier * 100)}%`
-                    : `SKALA DRUŻYNY: ${Math.round(room.enemyCountMultiplier * 100)}%`
-                }`}
-          </div>
-          <div className="comic-title" style={{ fontSize: 22, color: '#fff', lineHeight: 1.1 }}>
-            {loc.name}
-          </div>
-          {(() => {
-            const mut = LOCATION_MUTATORS[snapshot?.mutatorId ?? loc.mutatorId];
-            const blessing = getDailyBlessing();
-            const isFeatured = getDailyFeaturedLocation().globalLocation === loc.globalIndex;
-            return (
-              <div style={{ marginTop: 4, display: 'flex', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
-                <div
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    padding: '2px 10px',
-                    borderRadius: 999,
-                    background: 'rgba(15, 18, 33, 0.82)',
-                    border: `1.5px solid ${mut.color}`,
-                    fontSize: 11,
-                    fontWeight: 900,
-                    color: mut.color,
-                  }}
-                  title={mut.shortDesc}
-                >
-                  <span>
-                    {mut.icon} {mut.name.toUpperCase()}
-                  </span>
-                  <span style={{ color: '#e2e8f0', fontSize: 10 }}>+{mut.xpBonusPct}% XP</span>
-                  {snapshot?.goblinAlive && (
-                    <span style={{ color: '#fde047', fontSize: 10 }}>• 💰 GOBLIN NA MAPIE!</span>
-                  )}
-                  {snapshot?.obelisk?.state === 'active' && (
-                    <span style={{ color: '#fb7185', fontSize: 10 }}>
-                      • 🔮 FALA {snapshot.obelisk.currentWave}/{snapshot.obelisk.maxWaves}
+          {snapshot?.isCamp ? (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 900, color: '#fbbf24', letterSpacing: 1 }}>
+                🏕️ WSPÓLNY OBÓZ 3D (INTERAKTYWNE LOBBY DRUŻYNY)
+              </div>
+              <div className="comic-title" style={{ fontSize: 22, color: '#fff', lineHeight: 1.1 }}>
+                Obóz Bohaterów Chaosu
+              </div>
+              {(() => {
+                const dummy = snapshot.enemies.find((e) => e.tier === 'dummy');
+                const dps = Math.round(dummy?.dummyDps || 0);
+                const maxCrit = Math.round(dummy?.dummyMaxCrit || 0);
+                return (
+                  <div style={{ marginTop: 4, display: 'flex', justifyContent: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11 }}>
+                    <span style={{ color: '#cbd5e1', fontWeight: 700 }}>
+                      Podejdź do stanowisk (🔨 Kowal • 💠 Runy • 👑 Prestiż • 🌀 Szczelina • 🗺️ Portal) i wciśnij [F]
                     </span>
-                  )}
+                    {(dps > 0 || maxCrit > 0) && (
+                      <span
+                        style={{
+                          padding: '2px 10px',
+                          borderRadius: 999,
+                          background: 'rgba(14, 116, 144, 0.45)',
+                          border: '1.5px solid #38bdf8',
+                          color: '#fde047',
+                          fontWeight: 900,
+                        }}
+                      >
+                        🎯 MANEKIN DPS: {dps.toLocaleString()}/s • 💥 Max Kryt: {maxCrit.toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
+            </>
+          ) : (snapshot?.riftFloor || 0) > 0 ? (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 900, color: '#e879f9', letterSpacing: 1 }}>
+                🌀 SZCZELINA CHAOSU (ENDGAME) • PIĘTRO {snapshot?.riftFloor} • ⏱️{' '}
+                {formatRiftTime(Math.max(0, now - (snapshot?.riftStartedAt || now)))}
+              </div>
+              <div className="comic-title" style={{ fontSize: 22, color: '#fff', lineHeight: 1.1 }}>
+                Szczelina Chaosu — Poziom {snapshot?.riftFloor}
+              </div>
+              <div style={{ fontSize: 11, color: '#cbd5e1', marginTop: 4, display: 'flex', justifyContent: 'center', gap: 12 }}>
+                <span>⚔️ Wrogowie: {snapshot?.enemiesRemaining}/{snapshot?.totalEnemies}</span>
+                <span style={{ color: snapshot?.exitUnlocked ? '#4ade80' : '#f472b6', fontWeight: 900 }}>
+                  {snapshot?.exitUnlocked ? '🌀 PORTAL NA KOLEJNE PIĘTRO OTWARTY!' : '👑 Pokonaj Strażnika Szczeliny'}
+                </span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 900,
+                  color: isGuildAct(loc.act) ? '#fbbf24' : loc.act >= 5 ? '#00f5d4' : '#fde047',
+                  letterSpacing: 1,
+                }}
+              >
+                {isGuildAct(loc.act)
+                  ? `🏰 AKT GILDYJNY ${loc.act === 8 ? 'I' : 'II'} • LOKACJA ${loc.locationInAct}/15 • BOSS: 100% ODŁAMEK GILDII`
+                  : `${loc.act >= 5 ? '🔥 HARDCORE • ' : ''}AKT ${loc.act} • LOKACJA ${loc.locationInAct}/15 (#${loc.globalIndex}/105) • ${
+                      loc.act >= 5
+                        ? `PT BOSS: ${Math.round(room.bossHpMultiplier * 100)}% / MOB: ${Math.round(room.enemyCountMultiplier * 100)}%`
+                        : `SKALA DRUŻYNY: ${Math.round(room.enemyCountMultiplier * 100)}%`
+                    }`}
+              </div>
+              <div className="comic-title" style={{ fontSize: 22, color: '#fff', lineHeight: 1.1 }}>
+                {loc.name}
+              </div>
+              {(() => {
+                const mut = LOCATION_MUTATORS[snapshot?.mutatorId ?? loc.mutatorId];
+                const blessing = getDailyBlessing();
+                const isFeatured = getDailyFeaturedLocation().globalLocation === loc.globalIndex;
+                const goblinRem =
+                  snapshot?.goblinAlive && snapshot.goblinDespawnAt
+                    ? Math.max(0, Math.ceil((snapshot.goblinDespawnAt - now) / 1000))
+                    : 0;
+                const altarRem =
+                  snapshot?.obelisk?.state === 'active' && snapshot.obelisk.endsAt
+                    ? Math.max(0, Math.ceil((snapshot.obelisk.endsAt - now) / 1000))
+                    : 0;
+                return (
+                  <div style={{ marginTop: 4, display: 'flex', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <div
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '2px 10px',
+                        borderRadius: 999,
+                        background: 'rgba(15, 18, 33, 0.82)',
+                        border: `1.5px solid ${mut.color}`,
+                        fontSize: 11,
+                        fontWeight: 900,
+                        color: mut.color,
+                      }}
+                      title={mut.shortDesc}
+                    >
+                      <span>
+                        {mut.icon} {mut.name.toUpperCase()}
+                      </span>
+                      <span style={{ color: '#e2e8f0', fontSize: 10 }}>+{mut.xpBonusPct}% XP</span>
+                    </div>
+                    {snapshot?.goblinAlive && (
+                      <div
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '2px 9px',
+                          borderRadius: 999,
+                          background: 'rgba(202, 138, 4, 0.35)',
+                          border: '1.5px solid #fde047',
+                          fontSize: 10.5,
+                          fontWeight: 900,
+                          color: '#fef08a',
+                        }}
+                      >
+                        💰 GOBLIN SKARBNIK{goblinRem > 0 ? `: ${goblinRem}s!` : '!'}
+                      </div>
+                    )}
+                    {snapshot?.obelisk?.state === 'active' && (
+                      <div
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '2px 9px',
+                          borderRadius: 999,
+                          background: 'rgba(190, 18, 60, 0.45)',
+                          border: '1.5px solid #fb7185',
+                          fontSize: 10.5,
+                          fontWeight: 900,
+                          color: '#fecdd3',
+                        }}
+                      >
+                        🔮 PRZEKLĘTY OŁTARZ: {altarRem > 0 ? `${altarRem}s` : `FALA ${snapshot.obelisk.currentWave}/${snapshot.obelisk.maxWaves}`}
+                      </div>
+                    )}
+                    <div
+                      title={`Błogosławieństwo Dnia (${blessing.dayName}): ${blessing.summary}`}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        padding: '2px 9px',
+                        borderRadius: 999,
+                        background: 'rgba(15, 18, 33, 0.82)',
+                        border: `1.5px solid ${blessing.color}`,
+                        fontSize: 10.5,
+                        fontWeight: 900,
+                        color: blessing.color,
+                      }}
+                    >
+                      <span>{blessing.icon} {blessing.name}</span>
+                    </div>
+                    {isFeatured && (
+                      <div
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '2px 9px',
+                          borderRadius: 999,
+                          background: 'rgba(234, 88, 12, 0.4)',
+                          border: '1.5px solid #fb923c',
+                          fontSize: 10.5,
+                          fontWeight: 900,
+                          color: '#fef08a',
+                        }}
+                      >
+                        🔥 WYPRAWA DNIA 2× XP
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              {snapshot && (
+                <div style={{ fontSize: 11, color: '#cbd5e1', marginTop: 4, display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <span>⚔️ Wrogowie: {snapshot.enemiesRemaining}/{snapshot.totalEnemies}</span>
+                  <span>
+                    🧩 Zagadka:{' '}
+                    <strong style={{ color: snapshot.puzzles.every((p) => p.solved) ? '#4ade80' : '#38bdf8' }}>
+                      {snapshot.puzzles.every((p) => p.solved) ? 'OTWARTA ✓' : 'ZABLOKOWANA'}
+                    </strong>
+                  </span>
+                  <span>
+                    🔐 Skrzynie: {snapshot.chests.filter((c) => c.opened).length}/{snapshot.chests.length}
+                  </span>
+                  <span>
+                    🗝️ Sekrety: {snapshot.secrets.filter((s) => s.revealed).length}/{snapshot.secrets.length}
+                  </span>
                 </div>
-                <div
-                  title={`Błogosławieństwo Dnia (${blessing.dayName}): ${blessing.summary}`}
+              )}
+            </>
+          )}
+
+          {/* Active Combat Buff Pills (Mentor, Perfect Dodge, Fairy Barrier, Altar Buff) */}
+          {localPlayer && (
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+              {localPlayer.isMentor && (
+                <span
                   style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
                     padding: '2px 9px',
                     borderRadius: 999,
-                    background: 'rgba(15, 18, 33, 0.82)',
-                    border: `1.5px solid ${blessing.color}`,
+                    background: 'rgba(2, 132, 199, 0.4)',
+                    border: '1.5px solid #38bdf8',
                     fontSize: 10.5,
                     fontWeight: 900,
-                    color: blessing.color,
+                    color: '#e0f2fe',
                   }}
                 >
-                  <span>{blessing.icon} {blessing.name}</span>
-                </div>
-                {isFeatured && (
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      padding: '2px 9px',
-                      borderRadius: 999,
-                      background: 'rgba(234, 88, 12, 0.4)',
-                      border: '1.5px solid #fb923c',
-                      fontSize: 10.5,
-                      fontWeight: 900,
-                      color: '#fef08a',
-                    }}
-                  >
-                    🔥 WYPRAWA DNIA 2× XP
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-          {snapshot && (
-            <div style={{ fontSize: 11, color: '#cbd5e1', marginTop: 4, display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap' }}>
-              <span>⚔️ Wrogowie: {snapshot.enemiesRemaining}/{snapshot.totalEnemies}</span>
-              <span>
-                🧩 Zagadka:{' '}
-                <strong style={{ color: snapshot.puzzles.every((p) => p.solved) ? '#4ade80' : '#38bdf8' }}>
-                  {snapshot.puzzles.every((p) => p.solved) ? 'OTWARTA ✓' : 'ZABLOKOWANA'}
-                </strong>
-              </span>
-              <span>
-                🔐 Skrzynie: {snapshot.chests.filter((c) => c.opened).length}/{snapshot.chests.length}
-              </span>
-              <span>
-                🗝️ Sekrety: {snapshot.secrets.filter((s) => s.revealed).length}/{snapshot.secrets.length}
-              </span>
+                  🎓 TRYB MENTORA (Skalowany ➔ Odłamki Mentora!)
+                </span>
+              )}
+              {(localPlayer.perfectDodgeBuffUntil || 0) > now && (
+                <span
+                  style={{
+                    padding: '2px 9px',
+                    borderRadius: 999,
+                    background: 'rgba(234, 179, 8, 0.38)',
+                    border: '1.5px solid #fde047',
+                    fontSize: 10.5,
+                    fontWeight: 900,
+                    color: '#fef08a',
+                  }}
+                >
+                  ⚡ PERFEKCYJNY UNIK: +25% DMG ({(((localPlayer.perfectDodgeBuffUntil || 0) - now) / 1000).toFixed(1)}s)
+                </span>
+              )}
+              {(localPlayer.lightBarrierUntil || 0) > now && localPlayer.shield > 0 && (
+                <span
+                  style={{
+                    padding: '2px 9px',
+                    borderRadius: 999,
+                    background: 'rgba(56, 189, 248, 0.3)',
+                    border: '1.5px solid #38bdf8',
+                    fontSize: 10.5,
+                    fontWeight: 900,
+                    color: '#bae6fd',
+                  }}
+                >
+                  🪽 Bariera Światła: +15% ASPD
+                </span>
+              )}
+              {(localPlayer.altarBuffUntil || 0) > now && localPlayer.altarBuffLabel && (
+                <span
+                  style={{
+                    padding: '2px 9px',
+                    borderRadius: 999,
+                    background: 'rgba(168, 85, 247, 0.36)',
+                    border: '1.5px solid #c084fc',
+                    fontSize: 10.5,
+                    fontWeight: 900,
+                    color: '#f5d0fe',
+                  }}
+                >
+                  ✨ {localPlayer.altarBuffLabel} ({Math.ceil(((localPlayer.altarBuffUntil || 0) - now) / 1000)}s)
+                </span>
+              )}
             </div>
           )}
         </div>
 
-        {/* Active Boss / Mini-Boss Giant Comic HP Bar */}
+        {/* Active Boss / Mini-Boss Giant Comic HP Bar + Yellow Stagger Bar */}
         {activeBoss && (
           <div
             className="comic-panel"
             style={{
               width: '100%',
               padding: '8px 14px',
-              borderColor: activeBoss.tier === 'boss' ? '#f43f5e' : '#f59e0b',
+              borderColor:
+                (activeBoss.staggerBrokenUntil || 0) > now
+                  ? '#fde047'
+                  : activeBoss.tier === 'boss'
+                    ? '#f43f5e'
+                    : '#f59e0b',
               background: 'linear-gradient(180deg, #3b0d1f 0%, #1a0b15 100%)',
             }}
           >
@@ -570,6 +881,77 @@ export const Hud: React.FC<HudProps> = ({
                 />
               )}
             </div>
+
+            {/* Yellow Stagger Bar (Pasek Przełamania) */}
+            {(activeBoss.maxStagger || 0) > 0 && (
+              <div style={{ marginTop: 5 }}>
+                <div
+                  style={{
+                    position: 'relative',
+                    height: 12,
+                    background: '#111118',
+                    border: '2px solid #000',
+                    borderRadius: 6,
+                    overflow: 'hidden',
+                  }}
+                >
+                  {(activeBoss.staggerBrokenUntil || 0) > now ? (
+                    <div
+                      style={{
+                        width: `${Math.max(0, Math.min(100, (((activeBoss.staggerBrokenUntil || 0) - now) / 4000) * 100))}%`,
+                        height: '100%',
+                        background: 'linear-gradient(90deg, #f59e0b, #fef08a, #f97316)',
+                      }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: `${Math.max(0, Math.min(100, ((activeBoss.stagger || 0) / Math.max(1, activeBoss.maxStagger || 1)) * 100))}%`,
+                        height: '100%',
+                        background: 'linear-gradient(90deg, #ca8a04, #fde047)',
+                        transition: 'width 0.1s',
+                      }}
+                    />
+                  )}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      fontSize: 9,
+                      fontWeight: 900,
+                      color: (activeBoss.staggerBrokenUntil || 0) > now ? '#111118' : '#fef9c3',
+                      textShadow: (activeBoss.staggerBrokenUntil || 0) > now ? 'none' : '1px 1px 0 #111',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    {(activeBoss.staggerBrokenUntil || 0) > now
+                      ? `💫 PRZEŁAMANIE! OGŁUSZONY • 150% DMG (${(((activeBoss.staggerBrokenUntil || 0) - now) / 1000).toFixed(1)}s)`
+                      : `⚡ PRZEŁAMANIE: ${Math.round(activeBoss.stagger || 0)} / ${Math.round(activeBoss.maxStagger || 0)}`}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Warlock Curse Primer Indicator on Boss */}
+            {(activeBoss.cursedUntil || 0) > now && (
+              <div
+                style={{
+                  marginTop: 4,
+                  textAlign: 'center',
+                  fontSize: 10.5,
+                  fontWeight: 900,
+                  color: '#e9d5ff',
+                  background: 'rgba(126, 34, 206, 0.45)',
+                  borderRadius: 6,
+                  padding: '1px 8px',
+                }}
+              >
+                🟣 KLĄTWA CZARNOKSIĘŻNIKA — Traf Wojownikiem, aby zdetonować WYBUCH CIENIA!
+              </div>
+            )}
+
             {activeBoss.castingAbility && (
               <div
                 style={{
@@ -590,7 +972,7 @@ export const Hud: React.FC<HudProps> = ({
         )}
       </div>
 
-      {/* KILL-STREAK COMBO COUNTER (Right-Center) */}
+      {/* KILL-STREAK COMBO / FRENZY METER (x10 / x25 / x50 / x100) */}
       {snapshot && snapshot.comboCount >= 2 && snapshot.comboExpiresAt > now && (
         <div
           className="comic-panel-sm"
@@ -600,13 +982,17 @@ export const Hud: React.FC<HudProps> = ({
             top: 305,
             padding: '8px 14px',
             borderColor:
-              snapshot.comboCount >= 20
-                ? '#f43f5e'
-                : snapshot.comboCount >= 10
-                  ? '#f59e0b'
-                  : '#fbbf24',
+              snapshot.comboCount >= 100
+                ? '#00f5d4'
+                : snapshot.comboCount >= 50
+                  ? '#f43f5e'
+                  : snapshot.comboCount >= 25
+                    ? '#f59e0b'
+                    : snapshot.comboCount >= 10
+                      ? '#fde047'
+                      : '#94a3b8',
             background: 'linear-gradient(135deg, rgba(40, 14, 48, 0.92), rgba(17, 20, 38, 0.92))',
-            minWidth: 168,
+            minWidth: 192,
             textAlign: 'right',
           }}
         >
@@ -616,24 +1002,50 @@ export const Hud: React.FC<HudProps> = ({
               fontSize: 26,
               lineHeight: 1,
               color:
-                snapshot.comboCount >= 20
-                  ? '#fb7185'
-                  : snapshot.comboCount >= 10
-                    ? '#fb923c'
-                    : '#fde047',
+                snapshot.comboCount >= 100
+                  ? '#00f5d4'
+                  : snapshot.comboCount >= 50
+                    ? '#fb7185'
+                    : snapshot.comboCount >= 25
+                      ? '#fb923c'
+                      : '#fde047',
             }}
           >
-            {snapshot.comboCount >= 30
-              ? '👑 '
-              : snapshot.comboCount >= 20
-                ? '💀 '
-                : snapshot.comboCount >= 10
-                  ? '⚡ '
-                  : '🔥 '}
-            {snapshot.comboCount}x COMBO!
+            {snapshot.comboCount >= 100
+              ? '💎 '
+              : snapshot.comboCount >= 50
+                ? '👑 '
+                : snapshot.comboCount >= 25
+                  ? '💀 '
+                  : snapshot.comboCount >= 10
+                    ? '⚡ '
+                    : '🔥 '}
+            {snapshot.comboCount}x SERIA!
           </div>
-          <div style={{ fontSize: 10, fontWeight: 900, color: '#e2e8f0', marginTop: 2 }}>
+          <div style={{ fontSize: 10, fontWeight: 900, color: '#86efac', marginTop: 2 }}>
+            {(snapshot.comboMoveSpeedPct || 0) > 0 || (snapshot.comboMagicFindPct || 0) > 0
+              ? `+${snapshot.comboMoveSpeedPct || 0}% Ruch • +${snapshot.comboMagicFindPct || 0}% Drop`
+              : 'Dobij x10 po +4% Ruch & +2% Drop!'}
+          </div>
+          <div style={{ fontSize: 9.5, fontWeight: 800, color: '#cbd5e1', marginTop: 1 }}>
             +{Math.min(40, snapshot.comboCount * 2)}% ASPD • +{Math.min(50, snapshot.comboCount * 3)}% XP
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, marginTop: 3 }}>
+            {[10, 25, 50, 100].map((tier) => (
+              <span
+                key={tier}
+                style={{
+                  fontSize: 8.5,
+                  fontWeight: 900,
+                  padding: '0 4px',
+                  borderRadius: 4,
+                  background: snapshot.comboCount >= tier ? '#fde047' : 'rgba(255,255,255,0.08)',
+                  color: snapshot.comboCount >= tier ? '#111118' : '#64748b',
+                }}
+              >
+                x{tier}
+              </span>
+            ))}
           </div>
           <div
             style={{
@@ -646,7 +1058,7 @@ export const Hud: React.FC<HudProps> = ({
           >
             <div
               style={{
-                width: `${Math.max(0, Math.min(100, ((snapshot.comboExpiresAt - now) / 5500) * 100))}%`,
+                width: `${Math.max(0, Math.min(100, ((snapshot.comboExpiresAt - now) / 5000) * 100))}%`,
                 height: '100%',
                 background: 'linear-gradient(90deg, #f59e0b, #f43f5e)',
               }}
@@ -718,7 +1130,17 @@ export const Hud: React.FC<HudProps> = ({
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {!snapshot?.isCamp && onEnterCamp && (
+            <button
+              className="comic-btn comic-btn-gold"
+              onClick={onEnterCamp}
+              title="Wróć do Wspólnego Obozu 3D (Kowal, Manekin DPS, Runy, Szczelina)"
+              style={{ padding: '5px 10px', fontSize: 12 }}
+            >
+              🏕️ Obóz
+            </button>
+          )}
           <button
             className="comic-btn comic-btn-dark"
             onClick={onToggleMute}
@@ -821,7 +1243,7 @@ export const Hud: React.FC<HudProps> = ({
           left: '50%',
           transform: 'translateX(-50%)',
           pointerEvents: 'auto',
-          width: 'min(760px, 95vw)',
+          width: 'min(880px, 96vw)',
         }}
       >
         <div className="comic-panel" style={{ padding: '10px 14px', position: 'relative' }}>
@@ -1231,6 +1653,22 @@ export const Hud: React.FC<HudProps> = ({
                   </span>
                 )}
               </button>
+              <button
+                className="comic-btn comic-btn-purple"
+                onClick={() => onOpenPanel('rift')}
+                style={{ padding: '8px 10px', fontSize: 12, borderColor: '#e879f9' }}
+                title="Szczelina Chaosu & Tablica Wyników [R]"
+              >
+                🌀 [R] Szczelina
+              </button>
+              <button
+                className="comic-btn comic-btn-gold"
+                onClick={() => onOpenPanel('prestige')}
+                style={{ padding: '8px 10px', fontSize: 12 }}
+                title="Prestiż: Tytuły, Aury i Ślady [P]"
+              >
+                👑 [P] Prestiż
+              </button>
             </div>
           </div>
 
@@ -1264,7 +1702,7 @@ export const Hud: React.FC<HudProps> = ({
                 : `${profile.xp.toLocaleString()} / ${xpNeeded.toLocaleString()} XP`}
             </span>
             <span style={{ fontSize: 10, color: '#64748b', whiteSpace: 'nowrap' }}>
-              WASD: Ruch • LPM: Atak • Spacja: Unik • F: Interakcja
+              WASD: Ruch • LPM: Atak • Spacja: Perf. Unik • E/F: Interakcja/Wskrześ
             </span>
           </div>
         </div>

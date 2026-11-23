@@ -1,7 +1,9 @@
 import { getMainBossByAct, getMiniBoss } from './bosses.js';
 import { getMutatorForLocation, LOCATION_MUTATORS } from './mutators.js';
+import { getRiftFloorAct } from './rift.js';
 import type {
   ActNumber,
+  CampStation,
   GeneratedMapData,
   LocationDefinition,
   LockedChestState,
@@ -368,9 +370,112 @@ for (let act = 1 as ActNumber; act <= 9; act = (act + 1) as ActNumber) {
   }
 }
 
+export const CAMP_LOCATION_INDEX = 0;
+
 export function getLocationDef(globalIndex: number): LocationDefinition {
+  if (globalIndex === CAMP_LOCATION_INDEX) {
+    return {
+      globalIndex: 0,
+      act: 8,
+      locationInAct: 0,
+      name: 'Wspólny Obóz Bohaterów',
+      subtitle: 'Kowal • Ołtarz Run • Manekin DPS • Handel • Portal Wypraw i Szczeliny',
+      isMiniBoss: false,
+      isMainBoss: false,
+      recommendedLevel: 1,
+      seed: 777777,
+      mutatorId: 'treasure_goblin',
+    };
+  }
   const idx = Math.max(1, Math.min(TOTAL_LOCATIONS, Math.round(globalIndex)));
   return ALL_LOCATIONS[idx - 1];
+}
+
+/**
+ * Generates the Interactive 3D Co-op Hero Camp (Lobby Hub 3D):
+ * Contains Blacksmith Forge, Rune Altar, Training Dummy Arena (live DPS),
+ * Co-op Trade Carpet, Prestige Hall, Expedition Portal, and Chaos Rift Portal!
+ */
+export function generateCampMap(): GeneratedMapData {
+  const location = getLocationDef(CAMP_LOCATION_INDEX);
+  const HALF = 26;
+  const WALL_H = 4.6;
+  const walls: MapWall[] = [
+    { x: 0, z: -HALF, w: HALF * 2 + 2, d: 2.2, h: WALL_H },
+    { x: 0, z: HALF, w: HALF * 2 + 2, d: 2.2, h: WALL_H },
+    { x: -HALF, z: 0, w: 2.2, d: HALF * 2 + 2, h: WALL_H },
+    { x: HALF, z: 0, w: 2.2, d: HALF * 2 + 2, h: WALL_H },
+  ];
+
+  const campStations: CampStation[] = [
+    { id: 'st_blacksmith', kind: 'blacksmith', x: -15, z: -3, label: '🔨 KOWAL (+0→+20 & MENTOR) [F]', color: '#fbbf24' },
+    { id: 'st_runes', kind: 'runes', x: 15, z: -3, label: '🔮 OŁTARZ RUN (0/10) [F]', color: '#a855f7' },
+    { id: 'st_trade', kind: 'trade', x: -14, z: 11, label: '🤝 STREFA HANDLU CO-OP [F]', color: '#38bdf8' },
+    { id: 'st_prestige', kind: 'prestige', x: 14, z: 11, label: '👑 PRESTIŻ: TYTUŁY I AURY [F]', color: '#fb7185' },
+    { id: 'st_rift', kind: 'rift', x: -7, z: -15, label: '🌀 SZCZELINA CHAOSU (ENDLESS) [F]', color: '#c084fc' },
+    { id: 'st_portal', kind: 'portal', x: 7, z: -15, label: '🗺️ PORTAL WYPRAW (AKTY 1–9) [F]', color: '#22d3ee' },
+  ];
+
+  const props: MapProp[] = [
+    { x: -20, z: -20, kind: 'gnarled_tree', scale: 1.15, rotY: 0.4 },
+    { x: 20, z: -20, kind: 'gnarled_tree', scale: 1.1, rotY: 2.1 },
+    { x: -20, z: 20, kind: 'gnarled_tree', scale: 1.05, rotY: 1.2 },
+    { x: 20, z: 20, kind: 'gnarled_tree', scale: 1.2, rotY: 3.0 },
+    { x: -19, z: -10, kind: 'torch_pillar', scale: 1.0, rotY: 0 },
+    { x: 19, z: -10, kind: 'torch_pillar', scale: 1.0, rotY: 0 },
+    { x: -19, z: 4, kind: 'torch_pillar', scale: 1.0, rotY: 0 },
+    { x: 19, z: 4, kind: 'torch_pillar', scale: 1.0, rotY: 0 },
+    { x: -10, z: 18, kind: 'glow_mushroom', scale: 0.9, rotY: 0.5 },
+    { x: 10, z: 18, kind: 'glow_mushroom', scale: 0.95, rotY: 2.2 },
+    { x: 0, z: 17, kind: 'lava_brazier', scale: 0.95, rotY: 0 },
+  ];
+
+  return {
+    location,
+    width: HALF * 2,
+    height: HALF * 2,
+    spawn: { x: 0, z: 10 },
+    exitPortal: { x: 7, z: -15 },
+    isCamp: true,
+    campStations,
+    rooms: [
+      { index: 0, cx: 0, cz: 0, w: HALF * 2 - 4, d: HALF * 2 - 4, kind: 'spawn' },
+    ],
+    walls,
+    props,
+    shrines: [],
+    puzzles: [],
+    secrets: [],
+    chests: [],
+  };
+}
+
+/**
+ * Generates an Endless Chaos Rift procedural dungeon for Floor 1..∞!
+ */
+export function generateRiftMap(floor: number): GeneratedMapData {
+  const f = Math.max(1, Math.floor(floor));
+  const act = getRiftFloorAct(f);
+  const boss = getMainBossByAct(act);
+  // Base layout derived from a rotating location in that Act, with floor-specific boss & title!
+  const baseGlobal = (act - 1) * 15 + (((f - 1) % 14) + 1);
+  const map = generateMapData(baseGlobal);
+  return {
+    ...map,
+    riftFloor: f,
+    location: {
+      ...map.location,
+      act,
+      name: `Szczelina Chaosu — Piętro ${f}`,
+      subtitle: `Strażnik Szczeliny: ${boss.name} • Endless Endgame`,
+      isMainBoss: true,
+      isMiniBoss: false,
+      bossName: `${boss.name} (Piętro ${f})`,
+      bossId: boss.id,
+      recommendedLevel: 60,
+      seed: 900001 + f * 1337,
+    },
+  };
 }
 
 export function createSeededRng(seed: number): () => number {

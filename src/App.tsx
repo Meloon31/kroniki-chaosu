@@ -41,7 +41,9 @@ import {
   SIDE_LOCATION_REWARD_HC,
   WHEEL_SLICES,
 } from '../shared/bounties';
-import { TOTAL_LOCATIONS } from '../shared/world';
+import { CAMP_LOCATION_INDEX, TOTAL_LOCATIONS } from '../shared/world';
+import { CosmeticSlot } from '../shared/prestige';
+import { RiftLeaderboardMap } from '../shared/rift';
 import {
   GUILD_UPGRADES,
   GuildInvitePayload,
@@ -59,6 +61,7 @@ import type {
   FloatingCombatText,
   GeneratedMapData,
   LockedChestState,
+  MvpCard,
   PlayerProfile,
   Rarity,
   RoomSummary,
@@ -77,6 +80,8 @@ import { GuildModal } from './components/GuildModal';
 import { ActivePanel, Hud } from './components/Hud';
 import { InventoryModal } from './components/InventoryModal';
 import { LobbyScreen } from './components/LobbyScreen';
+import { PrestigeModal } from './components/PrestigeModal';
+import { RiftModal } from './components/RiftModal';
 import { RunesModal } from './components/RunesModal';
 import { SkillsModal } from './components/SkillsModal';
 import { TradeModal } from './components/TradeModal';
@@ -134,6 +139,14 @@ function createDefaultProfile(classId: ClassId = 'wojownik'): PlayerProfile {
     playerUid: `plr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`,
     guildId: null,
     guildSnapshot: null,
+    mentorShards: 0,
+    bestRiftFloor: 0,
+    perfectDodgesTotal: 0,
+    totalRevives: 0,
+    noDownAct4QuadCleared: false,
+    equippedTitle: null,
+    equippedAura: null,
+    equippedTrail: null,
   };
 }
 
@@ -173,6 +186,8 @@ interface VictorySummaryData {
   secretsFound: number;
   totalSecrets: number;
   grade: 'S' | 'A' | 'B';
+  mvpCards?: MvpCard[];
+  mentorShardsEarned?: number;
 }
 
 interface BannerMessage {
@@ -204,6 +219,15 @@ export function App() {
   const loadedBuildIdRef = useRef<string | null>(null);
   const [localPlayerId, setLocalPlayerId] = useState('');
   const [room, setRoom] = useState<RoomSummary | null>(null);
+  const roomRef = useRef<RoomSummary | null>(room);
+  roomRef.current = room;
+  const [riftLeaderboard, setRiftLeaderboard] = useState<RiftLeaderboardMap>({
+    solo: [],
+    duo: [],
+    trio: [],
+    quad: [],
+  });
+  const [perfectDodgeFlashKey, setPerfectDodgeFlashKey] = useState(0);
   const [inGame, setInGame] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [lanUrls, setLanUrls] = useState<string[]>([]);
@@ -325,6 +349,9 @@ export function App() {
         classId: profile.classId,
         level: profile.level,
         skillRanks: profile.skillRanks,
+        equippedTitle: profile.equippedTitle ?? null,
+        equippedAura: profile.equippedAura ?? null,
+        equippedTrail: profile.equippedTrail ?? null,
         stats,
       });
     }
@@ -459,6 +486,7 @@ export function App() {
         guildId: p.guildId,
         guildSnapshot: p.guildSnapshot,
       });
+      sock.emit('rift:get_leaderboard');
     });
 
     sock.on('guild:state', (gState: GuildState | null) => {
@@ -614,31 +642,131 @@ export function App() {
       );
     });
 
-    sock.on('loot:granted', (payload: { item?: EquipmentItem; runeShard?: RuneId }) => {
-      if (payload.item) {
-        const it = payload.item;
-        soundEngine.playLootDrop(it.rarity);
-        pushToast(`+${RARITY_META[it.rarity].name}: ${it.name}`, RARITY_META[it.rarity].color);
+    sock.on(
+      'juice:perfect_dodge',
+      (payload: { buffMs: number; cooldowns?: { active1: number; active2: number; active3: number } }) => {
+        soundEngine.playPerfectDodge();
+        engineRef.current?.triggerHitStop(75);
+        engineRef.current?.addScreenShake(0.28);
+        setPerfectDodgeFlashKey((k) => k + 1);
+        if (payload.cooldowns) {
+          const now = Date.now();
+          setSkillCooldowns({
+            active1: payload.cooldowns.active1 > 0 ? now + payload.cooldowns.active1 : 0,
+            active2: payload.cooldowns.active2 > 0 ? now + payload.cooldowns.active2 : 0,
+            active3: payload.cooldowns.active3 > 0 ? now + payload.cooldowns.active3 : 0,
+          });
+        }
         setProfile((prev) => ({
           ...prev,
-          inventory: [it, ...prev.inventory].slice(0, 60),
+          perfectDodgesTotal: (prev.perfectDodgesTotal || 0) + 1,
         }));
-        advanceBounty('loot', 1, 'add');
+        advanceBounty('perfect_dodge', 1, 'add');
+        pushToast('⚡ PERFEKCYJNY UNIK! +25% DMG (3s) • -2s Cooldownów!', '#fde047');
       }
-      if (payload.runeShard) {
-        const rid = payload.runeShard;
-        const rDef = RUNES[rid];
-        soundEngine.playRuneUpgrade();
-        pushToast(`💠 Zdobyto ${rDef.shardName}!`, rDef.color);
-        setProfile((prev) => ({
-          ...prev,
-          runeShards: {
-            ...prev.runeShards,
-            [rid]: (prev.runeShards[rid] || 0) + 1,
-          },
-        }));
-      }
+    );
+
+    sock.on('juice:goblin_laugh', () => {
+      soundEngine.playGoblinLaugh();
+      pushToast('💰 Hi-hi-hi! Pojawił się Goblin Skarbnik! Masz 20s!', '#fde047');
     });
+
+    sock.on('player:revive_credit', (payload: { allyName: string }) => {
+      soundEngine.playHeal();
+      setProfile((prev) => ({
+        ...prev,
+        totalRevives: (prev.totalRevives || 0) + 1,
+      }));
+      pushToast(`👼 Wskrzeszono sojusznika: ${payload.allyName}!`, '#4ade80');
+    });
+
+    sock.on('prestige:flawless_act4_quad', () => {
+      soundEngine.playLootDrop('niesmiertelny');
+      setProfile((prev) => ({ ...prev, noDownAct4QuadCleared: true }));
+      showBanner(
+        'boski',
+        '🌈 PRESTIŻ ODBLOKOWANY: ŚLAD NIEPOKONANYCH!',
+        '4× Co-op Akt 4 bez ani jednego powalenia! Załóż tęczowy ślad w [P] Prestiż!',
+        5800
+      );
+    });
+
+    sock.on('rift:leaderboard', (data: RiftLeaderboardMap) => {
+      if (data && typeof data === 'object') setRiftLeaderboard(data);
+    });
+
+    sock.on('rift:floor_cleared', (payload: { floor: number; clearTimeMs: number; partySize: number }) => {
+      soundEngine.playLevelUp();
+      setProfile((prev) => ({
+        ...prev,
+        bestRiftFloor: Math.max(prev.bestRiftFloor || 0, payload.floor || 0),
+      }));
+    });
+
+    sock.on(
+      'camp:station_interact',
+      (payload: { kind: 'blacksmith' | 'runes' | 'trade' | 'portal' | 'rift' | 'prestige' }) => {
+        soundEngine.playPuzzleTick();
+        if (payload.kind === 'blacksmith') setActivePanel('blacksmith');
+        else if (payload.kind === 'runes') setActivePanel('runes');
+        else if (payload.kind === 'prestige') setActivePanel('prestige');
+        else if (payload.kind === 'portal') setActivePanel('worldmap');
+        else if (payload.kind === 'rift') {
+          sock.emit('rift:get_leaderboard');
+          setActivePanel('rift');
+        } else if (payload.kind === 'trade') {
+          const other = roomRef.current?.members.find((m) => m.id !== sock.id);
+          if (other) {
+            sock.emit('trade:request', { targetId: other.id });
+            pushToast(`🤝 Wysłano zaproszenie do handlu: ${other.name}`, '#fde047');
+          } else {
+            pushToast('🤝 Strefa Handlu: Zaproś znajomego do Obozu 3D, aby się wymieniać!', '#38bdf8');
+          }
+        }
+      }
+    );
+
+    sock.on(
+      'loot:granted',
+      (payload: { item?: EquipmentItem; runeShard?: RuneId; shardDrop?: { rarity: Rarity; amount: number } }) => {
+        if (payload.item) {
+          const it = payload.item;
+          soundEngine.playLootDrop(it.rarity);
+          pushToast(`+${RARITY_META[it.rarity].name}: ${it.name}`, RARITY_META[it.rarity].color);
+          setProfile((prev) => ({
+            ...prev,
+            inventory: [it, ...prev.inventory].slice(0, 60),
+          }));
+          advanceBounty('loot', 1, 'add');
+        }
+        if (payload.runeShard) {
+          const rid = payload.runeShard;
+          const rDef = RUNES[rid];
+          soundEngine.playRuneUpgrade();
+          pushToast(`💠 Zdobyto ${rDef.shardName}!`, rDef.color);
+          setProfile((prev) => ({
+            ...prev,
+            runeShards: {
+              ...prev.runeShards,
+              [rid]: (prev.runeShards[rid] || 0) + 1,
+            },
+          }));
+        }
+        if (payload.shardDrop && payload.shardDrop.amount > 0) {
+          const { rarity, amount } = payload.shardDrop;
+          const meta = RARITY_META[rarity];
+          soundEngine.playPuzzleTick();
+          pushToast(`💎 +${amount} × ${meta.shardName}`, meta.color);
+          setProfile((prev) => ({
+            ...prev,
+            shards: {
+              ...prev.shards,
+              [rarity]: (prev.shards[rarity] || 0) + amount,
+            },
+          }));
+        }
+      }
+    );
 
     sock.on('player:xp_gain', (payload: { amount: number }) => {
       grantXp(payload.amount);
@@ -670,6 +798,9 @@ export function App() {
           `☀️ Misja Dzienna (Przejście Aktu) ukończona! Odbierz 2× Leg + 1× Boski w [J] Misje!`,
           '#fb7185'
         );
+      }
+      if ((roomRef.current?.members.length || 1) >= 2) {
+        advanceBounty('coop_boss', 1, 'add');
       }
     });
 
@@ -706,12 +837,15 @@ export function App() {
         secretsFound?: number;
         totalSecrets?: number;
         grade?: 'S' | 'A' | 'B';
+        mvpCards?: MvpCard[];
+        mentorShardsEarned?: number;
       }) => {
         const todayKey = getTodayDateKey();
         const featured = getDailyFeaturedLocation();
         const isFeaturedBonus =
           payload.globalLocation === featured.globalLocation &&
           profileRef.current.dailyFeaturedClaimedDate !== todayKey;
+        const mentorBonus = payload.mentorShardsEarned || 0;
 
         const finalClearXp = isFeaturedBonus ? payload.clearXp * 2 : payload.clearXp;
         grantXp(finalClearXp);
@@ -722,6 +856,12 @@ export function App() {
           pushToast(
             `🔥 WYPRAWA DNIA UKOŃCZONA! 2× XP (+${finalClearXp}) + 2× Legendarny & 3× Mityczny Odłamek!`,
             '#fb923c'
+          );
+        }
+        if (mentorBonus > 0) {
+          pushToast(
+            `🎓 NAGRODA MENTORA: +${mentorBonus} Odłamków Mentora! Wymień je u Kowala [B]!`,
+            '#38bdf8'
           );
         }
 
@@ -744,6 +884,7 @@ export function App() {
           return {
             ...prev,
             shards: nextShards,
+            mentorShards: (prev.mentorShards || 0) + mentorBonus,
             fullClearedLocations: nextFull,
             defeatedActBosses: nextBosses,
             dailyActClearedDate: payload.isMainBoss ? todayKey : prev.dailyActClearedDate,
@@ -769,12 +910,14 @@ export function App() {
           secretsFound: payload.secretsFound ?? 0,
           totalSecrets: payload.totalSecrets ?? 0,
           grade: payload.grade ?? 'A',
+          mvpCards: payload.mvpCards,
+          mentorShardsEarned: mentorBonus,
         };
         setVictorySummary(summary);
         if (victoryTimerRef.current) window.clearTimeout(victoryTimerRef.current);
         victoryTimerRef.current = window.setTimeout(() => {
           setVictorySummary(null);
-        }, 9500);
+        }, 12500);
       }
     );
 
@@ -870,6 +1013,9 @@ export function App() {
       onInteract: () => {
         socketRef.current?.emit('world:interact');
       },
+      onReviveHold: () => {
+        socketRef.current?.emit('player:revive_hold');
+      },
       onAutoPickupLoot: (lootId) => {
         socketRef.current?.emit('loot:pickup', { lootId });
       },
@@ -921,6 +1067,10 @@ export function App() {
       else if (k === 'm') setActivePanel((p) => (p === 'worldmap' ? null : 'worldmap'));
       else if (k === 'j') setActivePanel((p) => (p === 'bounties' ? null : 'bounties'));
       else if (k === 'g') setActivePanel((p) => (p === 'guild' ? null : 'guild'));
+      else if (k === 'r') {
+        socketRef.current?.emit('rift:get_leaderboard');
+        setActivePanel((p) => (p === 'rift' ? null : 'rift'));
+      } else if (k === 'p') setActivePanel((p) => (p === 'prestige' ? null : 'prestige'));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -943,6 +1093,9 @@ export function App() {
     classId: p.classId,
     level: p.level,
     skillRanks: p.skillRanks,
+    equippedTitle: p.equippedTitle ?? null,
+    equippedAura: p.equippedAura ?? null,
+    equippedTrail: p.equippedTrail ?? null,
     stats: computePlayerStats(
       p.classId,
       p.level,
@@ -954,6 +1107,78 @@ export function App() {
     ),
     globalLocation,
   });
+
+  const handleEnterCamp = () => {
+    setErrorMsg(null);
+    setActivePanel(null);
+    if (roomRef.current) {
+      socketRef.current?.emit('camp:enter');
+      return;
+    }
+    socketRef.current?.emit(
+      'room:create',
+      buildNetPayload(profileRef.current, CAMP_LOCATION_INDEX),
+      (res: { ok: boolean; summary?: RoomSummary; error?: string }) => {
+        if (!res.ok) {
+          setErrorMsg(res.error || 'Nie udało się wejść do Obozu 3D');
+        } else if (res.summary) {
+          setRoom(res.summary);
+          socketRef.current?.emit('camp:enter');
+        }
+      }
+    );
+  };
+
+  const handleStartRift = (floor: number) => {
+    setErrorMsg(null);
+    setActivePanel(null);
+    if (roomRef.current) {
+      socketRef.current?.emit('rift:start', { floor });
+      return;
+    }
+    socketRef.current?.emit(
+      'room:create',
+      buildNetPayload(profileRef.current, 60),
+      (res: { ok: boolean; summary?: RoomSummary; error?: string }) => {
+        if (!res.ok) {
+          setErrorMsg(res.error || 'Nie udało się otworzyć Szczeliny Chaosu');
+        } else if (res.summary) {
+          setRoom(res.summary);
+          socketRef.current?.emit('rift:start', { floor });
+        }
+      }
+    );
+  };
+
+  const handleExchangeMentorShards = (targetRarity: Rarity, mentorCost: number, grantAmount: number) => {
+    const cur = profileRef.current;
+    if ((cur.mentorShards || 0) < mentorCost) return;
+    const meta = RARITY_META[targetRarity];
+    soundEngine.playRuneUpgrade();
+    setProfile((prev) => {
+      if ((prev.mentorShards || 0) < mentorCost) return prev;
+      return {
+        ...prev,
+        mentorShards: (prev.mentorShards || 0) - mentorCost,
+        shards: {
+          ...prev.shards,
+          [targetRarity]: (prev.shards[targetRarity] || 0) + grantAmount,
+        },
+      };
+    });
+    pushToast(`🎓 Wymieniono ${mentorCost} Odł. Mentora ➔ +${grantAmount} × ${meta.shardName}!`, meta.color);
+  };
+
+  const handleEquipCosmetic = (slot: CosmeticSlot, id: string | null) => {
+    soundEngine.playPuzzleTick();
+    setProfile((prev) => ({
+      ...prev,
+      equippedTitle: slot === 'title' ? id : prev.equippedTitle,
+      equippedAura: slot === 'aura' ? id : prev.equippedAura,
+      equippedTrail: slot === 'trail' ? id : prev.equippedTrail,
+    }));
+    pushToast(id ? '👑 Założono kosmetyk Prestiżu (widoczny dla drużyny w 3D)!' : '👑 Zdjęto kosmetyk Prestiżu.', '#fde047');
+  };
 
   const handleCreateGuild = (
     name: string,
@@ -1127,13 +1352,13 @@ export function App() {
   };
 
   const handleSalvageItem = (itemId: string) => {
+    const target = profileRef.current.inventory.find((i) => i.id === itemId);
+    if (!target) return;
     soundEngine.playAnvilStrike(1);
     const salvageMult = 1 + (getDailyBlessing().salvageBonusPct || 0) / 100;
+    const gained = Math.max(1, Math.round(getSalvageShardYield(target) * salvageMult));
     setProfile((prev) => {
-      const target = prev.inventory.find((i) => i.id === itemId);
-      if (!target) return prev;
-      const gained = Math.max(1, Math.round(getSalvageShardYield(target) * salvageMult));
-      pushToast(`+${gained} × ${RARITY_META[target.rarity].shardName}`, RARITY_META[target.rarity].color);
+      if (!prev.inventory.some((i) => i.id === itemId)) return prev;
       return {
         ...prev,
         inventory: prev.inventory.filter((i) => i.id !== itemId),
@@ -1143,20 +1368,21 @@ export function App() {
         },
       };
     });
+    pushToast(`+${gained} × ${RARITY_META[target.rarity].shardName}`, RARITY_META[target.rarity].color);
+    advanceBounty('salvage', 1, 'add');
   };
 
   const handleBulkSalvage = (rarity: Rarity) => {
+    const matching = profileRef.current.inventory.filter((i) => i.rarity === rarity);
+    if (matching.length === 0) return;
     soundEngine.playAnvilStrike(3);
     const salvageMult = 1 + (getDailyBlessing().salvageBonusPct || 0) / 100;
+    let gained = 0;
+    for (const it of matching) {
+      gained += Math.max(1, Math.round(getSalvageShardYield(it) * salvageMult));
+    }
     setProfile((prev) => {
-      let gained = 0;
-      const kept: EquipmentItem[] = [];
-      for (const it of prev.inventory) {
-        if (it.rarity === rarity) gained += Math.max(1, Math.round(getSalvageShardYield(it) * salvageMult));
-        else kept.push(it);
-      }
-      if (gained === 0) return prev;
-      pushToast(`Rozebrano! +${gained} × ${RARITY_META[rarity].shardName}`, RARITY_META[rarity].color);
+      const kept = prev.inventory.filter((it) => it.rarity !== rarity);
       return {
         ...prev,
         inventory: kept,
@@ -1166,6 +1392,8 @@ export function App() {
         },
       };
     });
+    pushToast(`Rozebrano ${matching.length}×! +${gained} × ${RARITY_META[rarity].shardName}`, RARITY_META[rarity].color);
+    advanceBounty('salvage', matching.length, 'add');
   };
 
   const handleUpgradeSkill = (slot: keyof SkillRanks) => {
@@ -1627,6 +1855,12 @@ export function App() {
             setActivePanel('bounties');
           }}
           onOpenGuild={() => setActivePanel('guild')}
+          onEnterCamp={handleEnterCamp}
+          onOpenRift={() => {
+            socketRef.current?.emit('rift:get_leaderboard');
+            setActivePanel('rift');
+          }}
+          onOpenPrestige={() => setActivePanel('prestige')}
         />
       ) : (
         <>
@@ -1635,6 +1869,18 @@ export function App() {
 
           {/* Boski Crimson-Rainbow Screen Flash */}
           {boskiFlashKey > 0 && <div key={boskiFlashKey} className="boski-screen-flash" />}
+
+          {/* Perfect Dodge Comic Gold Flash */}
+          {perfectDodgeFlashKey > 0 && (
+            <div
+              key={perfectDodgeFlashKey}
+              className="boski-screen-flash"
+              style={{
+                background:
+                  'radial-gradient(circle, rgba(254, 240, 138, 0.34) 0%, rgba(56, 189, 248, 0.22) 55%, transparent 78%)',
+              }}
+            />
+          )}
 
           {/* Comic HUD */}
           {room && (
@@ -1663,13 +1909,17 @@ export function App() {
                 musicEngine.setVolume(v);
               }}
               onNextTrack={() => musicEngine.nextTrackInCurrentAct()}
-              onOpenPanel={(p) => setActivePanel(p)}
+              onOpenPanel={(p) => {
+                if (p === 'rift') socketRef.current?.emit('rift:get_leaderboard');
+                setActivePanel(p);
+              }}
               onCastSkill={(slot) => engineRef.current?.castSkillFromHud(slot)}
               onUsePotion={() => socketRef.current?.emit('player:potion')}
               onRequestTrade={(targetId) => {
                 socketRef.current?.emit('trade:request', { targetId });
               }}
               onSendEmote={handleSendEmote}
+              onEnterCamp={handleEnterCamp}
               onLeaveToLobby={() => {
                 socketRef.current?.emit('room:leave');
                 setInGame(false);
@@ -1846,17 +2096,19 @@ export function App() {
             </div>
           )}
 
-          {/* Expedition Victory Summary Card (Grade S / A / B) */}
+          {/* Expedition Victory Summary Card (Grade S / A / B + 4 Comic MVP Cards!) */}
           {victorySummary && (
             <div
               className="comic-panel"
               style={{
                 position: 'fixed',
-                top: 96,
+                top: 72,
                 left: '50%',
                 transform: 'translateX(-50%)',
                 zIndex: 84,
-                width: 'min(480px, 92vw)',
+                width: victorySummary.mvpCards && victorySummary.mvpCards.length > 0 ? 'min(640px, 94vw)' : 'min(480px, 92vw)',
+                maxHeight: '84vh',
+                overflowY: 'auto',
                 padding: '16px 20px',
                 borderColor:
                   victorySummary.grade === 'S'
@@ -1864,7 +2116,7 @@ export function App() {
                     : victorySummary.grade === 'A'
                       ? '#38bdf8'
                       : '#a855f7',
-                background: 'linear-gradient(155deg, rgba(22, 26, 56, 0.96), rgba(11, 14, 30, 0.98))',
+                background: 'linear-gradient(155deg, rgba(22, 26, 56, 0.97), rgba(11, 14, 30, 0.98))',
                 pointerEvents: 'auto',
               }}
             >
@@ -1920,7 +2172,7 @@ export function App() {
                   </div>
                 </div>
                 <div className="comic-panel-sm" style={{ padding: '6px 4px', textAlign: 'center' }}>
-                  <div style={{ fontSize: 10, color: '#94a3b8' }}>🔥 Max Combo</div>
+                  <div style={{ fontSize: 10, color: '#94a3b8' }}>🔥 Max Seria</div>
                   <div style={{ fontSize: 16, fontWeight: 900, color: '#fb923c' }}>
                     {victorySummary.maxCombo}×
                   </div>
@@ -1938,6 +2190,109 @@ export function App() {
                   </div>
                 </div>
               </div>
+
+              {/* Mentor Shards Earned Highlight */}
+              {(victorySummary.mentorShardsEarned || 0) > 0 && (
+                <div
+                  className="comic-panel-sm"
+                  style={{
+                    padding: '7px 12px',
+                    marginBottom: 10,
+                    borderColor: '#38bdf8',
+                    background: 'rgba(14, 116, 144, 0.35)',
+                    fontSize: 12,
+                    fontWeight: 900,
+                    color: '#e0f2fe',
+                    textAlign: 'center',
+                  }}
+                >
+                  🎓 PREMIA MENTORA: Zdobyto <strong style={{ color: '#fde047' }}>+{victorySummary.mentorShardsEarned} Odłamków Mentora</strong> (wymień u Kowala [B])!
+                </div>
+              )}
+
+              {/* 4 Comic MVP Cards */}
+              {victorySummary.mvpCards && victorySummary.mvpCards.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 900,
+                      color: '#fde68a',
+                      letterSpacing: 1,
+                      marginBottom: 6,
+                      textAlign: 'center',
+                    }}
+                  >
+                    🏆 KOMIKSOWE KARTY WYRÓŻNIEŃ MVP
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+                    {victorySummary.mvpCards.map((card) => {
+                      const cls = CLASSES[card.classId];
+                      return (
+                        <div
+                          key={card.id}
+                          className="comic-panel-sm"
+                          style={{
+                            padding: '8px 10px',
+                            borderColor: card.color,
+                            background: `linear-gradient(135deg, ${card.color}22 0%, rgba(15, 18, 36, 0.94) 100%)`,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 10,
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: 38,
+                              height: 38,
+                              borderRadius: 11,
+                              background: `${card.color}30`,
+                              border: `2px solid ${card.color}`,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: 20,
+                              flexShrink: 0,
+                            }}
+                          >
+                            {card.icon}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div
+                              style={{
+                                fontSize: 11.5,
+                                fontWeight: 900,
+                                color: card.color,
+                                lineHeight: 1.1,
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              {card.title}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 13,
+                                fontWeight: 900,
+                                color: '#fff',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                marginTop: 1,
+                              }}
+                            >
+                              {card.playerName}{' '}
+                              <span style={{ fontSize: 10, color: cls.primaryColor }}>({cls.name})</span>
+                            </div>
+                            <div style={{ fontSize: 10.5, fontWeight: 800, color: '#cbd5e1' }}>
+                              {card.statLabel}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 11, color: '#cbd5e1', fontWeight: 700 }}>
@@ -1978,6 +2333,7 @@ export function App() {
             <BlacksmithModal
               profile={profile}
               onUpgradeItem={handleUpgradeItem}
+              onExchangeMentorShards={handleExchangeMentorShards}
               onClose={() => setActivePanel(null)}
             />
           )}
@@ -2069,6 +2425,27 @@ export function App() {
           onLeaveGuild={handleLeaveGuild}
           onUpgradeGuild={handleUpgradeGuild}
           onStartGuildAct={handleStartGuildAct}
+          onClose={() => setActivePanel(null)}
+        />
+      )}
+
+      {/* Endless Chaos Rift & 4-Category Leaderboard Modal (Main Menu & In-Game [R]) */}
+      {activePanel === 'rift' && (
+        <RiftModal
+          profile={profile}
+          room={room}
+          leaderboard={riftLeaderboard}
+          onStartRift={handleStartRift}
+          onRefreshLeaderboard={() => socketRef.current?.emit('rift:get_leaderboard')}
+          onClose={() => setActivePanel(null)}
+        />
+      )}
+
+      {/* Prestige Chamber Modal: Titles, Ground Auras & Running Trails (Main Menu & In-Game [P]) */}
+      {activePanel === 'prestige' && (
+        <PrestigeModal
+          profile={profile}
+          onEquipCosmetic={handleEquipCosmetic}
           onClose={() => setActivePanel(null)}
         />
       )}

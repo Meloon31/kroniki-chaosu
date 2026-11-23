@@ -65,6 +65,99 @@ export function getOutlineMaterial(thickness = 0.032, colorHex = '#25193d'): THR
 }
 
 /**
+ * Biome-tinted comic outlines (NEVER pure black #000000!):
+ * Act 1 Deep Navy, Act 2 Dark Warm Umber, Act 3 Deep Forest Green, Act 4 Dark Crimson-Plum, etc.
+ */
+export function getBiomeOutlineColor(act: number): string {
+  const map: Record<number, string> = {
+    1: '#141b38', // Podziemia: głęboki granat
+    2: '#3b2110', // Pustynia: ciemny ciepły brąz
+    3: '#0f2e22', // Przeklęty Las: głęboka ciemna zieleń
+    4: '#2d1024', // Obsydianowa Cytadela: ciemny karmin-śliwka
+    5: '#0f2942', // Cytadela Mrozu: arktyczny granat
+    6: '#331a0c', // Kuźnia Tytanów: ciemny brąz kuźni
+    7: '#1f1442', // Tron Wieczności: głęboki indygo
+    8: '#162552', // Złota Cytadela Gildii: królewski granat
+    9: '#0b3328', // Sanktuarium Smoka: ciemny szmaragd
+  };
+  return map[act] || '#1e1938';
+}
+
+/**
+ * Shared GPU Wind Shader uniform (updated once per frame in GameEngine — zero CPU vertex work!).
+ */
+export const SHARED_WIND_UNIFORMS = {
+  uWindTime: { value: 0 },
+};
+
+/**
+ * Cartoon Toon material with GPU Vertex-Shader Wind Sway for foliage, palms, banners & shrubs!
+ */
+export function createWindToonMaterial(
+  color: THREE.ColorRepresentation,
+  options?: {
+    emissive?: THREE.ColorRepresentation;
+    emissiveIntensity?: number;
+    rimStrength?: number;
+    windAmp?: number;
+    windFreq?: number;
+    side?: THREE.Side;
+  }
+): THREE.MeshToonMaterial {
+  const rimStrength = options?.rimStrength ?? 0.3;
+  const windAmp = options?.windAmp ?? 0.14;
+  const windFreq = options?.windFreq ?? 2.2;
+  const mat = new THREE.MeshToonMaterial({
+    color,
+    gradientMap: getToonGradientMap(),
+    emissive: options?.emissive ? new THREE.Color(options.emissive) : new THREE.Color(0x000000),
+    emissiveIntensity: Math.min(0.45, options?.emissiveIntensity ?? 0),
+    side: options?.side ?? THREE.FrontSide,
+  });
+
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uWindTime = SHARED_WIND_UNIFORMS.uWindTime;
+    shader.uniforms.uWindAmp = { value: windAmp };
+    shader.uniforms.uWindFreq = { value: windFreq };
+    shader.uniforms.uRimStrength = { value: rimStrength };
+
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+         uniform float uWindTime;
+         uniform float uWindAmp;
+         uniform float uWindFreq;`
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         vec4 wPos = modelMatrix * vec4(transformed, 1.0);
+         float swayMask = clamp((transformed.y + 0.6) * 0.55, 0.0, 1.4);
+         float wave = sin(uWindTime * uWindFreq + wPos.x * 0.35 + wPos.z * 0.28);
+         float wave2 = cos(uWindTime * (uWindFreq * 0.72) + wPos.z * 0.42);
+         transformed.x += wave * uWindAmp * swayMask;
+         transformed.z += wave2 * (uWindAmp * 0.65) * swayMask;`
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+         uniform float uRimStrength;`
+      )
+      .replace(
+        '#include <dithering_fragment>',
+        `float softRim = pow(1.0 - max(dot(normalize(vNormal), normalize(vViewPosition)), 0.0), 2.1);
+         gl_FragColor.rgb += mix(diffuseColor.rgb, vec3(1.0, 0.97, 0.90), 0.58) * softRim * uRimStrength;
+         #include <dithering_fragment>`
+      );
+  };
+  mat.customProgramCacheKey = () => `wind_toon_${windAmp.toFixed(2)}_${windFreq.toFixed(2)}_${rimStrength.toFixed(2)}`;
+  return mat;
+}
+
+/**
  * Generates a plush, pillowy rounded box geometry centered at (0,0,0) —
  * used for rounded castle walls & chests, never harsh 90-degree cubes.
  */

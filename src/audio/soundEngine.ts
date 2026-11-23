@@ -203,6 +203,17 @@ class SoundEngine {
     this.playTone(95, 38, 0.72, 'square', 0.22, 0.05);
     this.playNoise(0.45, 0.25, 180, 0.04);
   }
+
+  public playPerfectDodge() {
+    this.playTone(620, 1240, 0.16, 'sine', 0.22);
+    this.playTone(930, 1560, 0.22, 'triangle', 0.2, 0.05);
+  }
+
+  public playGoblinLaugh() {
+    [740, 880, 698, 987, 830, 1108].forEach((f, i) =>
+      this.playTone(f, f * 1.06, 0.085, 'triangle', 0.22, i * 0.065)
+    );
+  }
 }
 
 export const soundEngine = new SoundEngine();

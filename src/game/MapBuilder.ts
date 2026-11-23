@@ -16,7 +16,10 @@ import {
   createPlushLathe,
   createRoundedBoxGeometry,
   createRunicCircleTexture,
+  createSoftBeamMaterial,
   createToonMaterial,
+  createWindToonMaterial,
+  getBiomeOutlineColor,
 } from './ComicMaterials';
 
 export interface BuiltMapHandles {
@@ -26,7 +29,7 @@ export interface BuiltMapHandles {
   leverMeshes: Map<string, THREE.Object3D>;
   chestMeshes: Map<string, { group: THREE.Group; lid: THREE.Object3D; glow: THREE.Mesh }>;
   shrineMeshes: Map<string, THREE.Mesh>;
-  obeliskVisual?: { crystal: THREE.Mesh; ring: THREE.Mesh };
+  obeliskVisual?: { crystal: THREE.Mesh; ring: THREE.Mesh; barrierRing?: THREE.Mesh };
   puzzleVisuals: Map<
     string,
     {
@@ -182,7 +185,13 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     8: '#3b82f6',
     9: '#10b981',
   };
-  const shrubMat = createToonMaterial(shrubColorByAct[map.location.act] || '#566482', { rimStrength: 0.28 });
+  const biomeOutline = getBiomeOutlineColor(map.location.act);
+  // GPU Vertex-Shader wind sway on decorative foliage/bushes!
+  const shrubMat = createWindToonMaterial(shrubColorByAct[map.location.act] || '#566482', {
+    rimStrength: 0.28,
+    windAmp: 0.09,
+    windFreq: 2.3,
+  });
 
   for (const w of map.walls) {
     if (w.gateId) {
@@ -268,11 +277,13 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
         cap.position.set(px, w.h + 0.08, pz);
         cap.castShadow = true;
 
-        // Soft decorative boulder / mossy puff nestled at pillar base
+        // Soft decorative boulder / mossy puff nestled at pillar base + grounding contact AO shadow!
         const puff = new THREE.Mesh(shrubGeo, shrubMat);
         puff.scale.set(1.12, 0.74, 1.12);
         puff.position.set(px + (isHoriz ? 0 : endSign * 0.45), 0.38, pz + (isHoriz ? endSign * 0.45 : 0));
-        root.add(pillar, cap, puff);
+        const aoShadow = createContactShadow(1.65, 0.34);
+        aoShadow.position.set(px, 0.02, pz);
+        root.add(pillar, cap, puff, aoShadow);
 
         // Warm comic glowing crystal/lantern finial atop alternating major pillars!
         if (endSign === 1 && len >= 9) {
@@ -512,17 +523,20 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     animatedProps.push(crystal);
   }
 
-  // Wave Challenge Obelisk (3-Wave Ambush Crystal!)
-  let obeliskVisual: { crystal: THREE.Mesh; ring: THREE.Mesh } | undefined;
+  // Cursed Altar (Przeklęty Ołtarz — 30s Risk & Reward Arena Barrier!)
+  let obeliskVisual: { crystal: THREE.Mesh; ring: THREE.Mesh; barrierRing?: THREE.Mesh } | undefined;
   if (map.obelisk) {
     const oGroup = new THREE.Group();
     oGroup.position.set(map.obelisk.x, 0, map.obelisk.z);
-    oGroup.add(createContactShadow(1.65, 0.44));
-    const ped = createComicMesh(new THREE.CylinderGeometry(1.15, 1.48, 0.9, 22), '#3b3754', 0.032);
+    oGroup.add(createContactShadow(1.8, 0.46));
+    const ped = createComicMesh(new THREE.CylinderGeometry(1.15, 1.48, 0.9, 22), '#3b3754', 0.032, {
+      outlineColor: biomeOutline,
+    });
     ped.position.y = 0.45;
     const obCrystal = createComicMesh(new THREE.SphereGeometry(0.74, 18, 14), '#38bdf8', 0.03, {
       emissive: '#0284c7',
       emissiveIntensity: 0.36,
+      outlineColor: biomeOutline,
     });
     obCrystal.scale.set(0.75, 1.65, 0.75);
     obCrystal.position.y = 2.45;
@@ -532,13 +546,136 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     });
     obRing.rotation.x = Math.PI / 2 - 0.25;
     obRing.position.y = 2.45;
-    const obLbl = makeSpriteLabel('🔮 OŁTARZ FAL [F]', '#38bdf8', '#e0f2fe');
-    obLbl.scale.set(3.2, 0.82, 1);
+
+    // 13.5m glowing arena containment barrier visible during the 30s Cursed Altar event!
+    const barrierRing = new THREE.Mesh(
+      new THREE.CylinderGeometry(13.5, 13.5, 3.2, 48, 1, true),
+      createSoftBeamMaterial('#f43f5e', 0.28)
+    );
+    barrierRing.position.y = 1.6;
+    barrierRing.visible = false;
+
+    const obLbl = makeSpriteLabel('🔮 PRZEKLĘTY OŁTARZ [F]', '#f43f5e', '#fde68a');
+    obLbl.scale.set(3.8, 0.86, 1);
     obLbl.position.y = 4.35;
-    oGroup.add(ped, obCrystal, obRing, obLbl);
+    oGroup.add(ped, obCrystal, obRing, barrierRing, obLbl);
     root.add(oGroup);
     animatedProps.push(obCrystal);
-    obeliskVisual = { crystal: obCrystal, ring: obRing };
+    obeliskVisual = { crystal: obCrystal, ring: obRing, barrierRing };
+  }
+
+  // =========================================================
+  // INTERACTIVE 3D CO-OP CAMP STATIONS (Wspólny Obóz Bohaterów!)
+  // =========================================================
+  if (map.isCamp && map.campStations) {
+    // Cozy Campfire Hearth at south plaza + GPU wind-waving Hero Banners!
+    const bannerMat = createWindToonMaterial('#e11d48', { windAmp: 0.22, windFreq: 3.1, side: THREE.DoubleSide });
+    for (const bx of [-10, 10]) {
+      const pole = createComicMesh(new THREE.CapsuleGeometry(0.12, 5.2, 8, 12), '#92400e', 0.024, {
+        outlineColor: biomeOutline,
+      });
+      pole.position.set(bx, 2.6, -15);
+      const cloth = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 2.4, 4, 6), bannerMat);
+      cloth.position.set(bx, 3.7, -14.85);
+      root.add(pole, cloth);
+    }
+
+    for (const st of map.campStations) {
+      const stGroup = new THREE.Group();
+      stGroup.position.set(st.x, 0, st.z);
+      stGroup.add(createContactShadow(2.2, 0.42));
+
+      // Glowing comic runic pad beneath each camp station
+      const pad = new THREE.Mesh(
+        new THREE.PlaneGeometry(5.6, 5.6),
+        new THREE.MeshBasicMaterial({
+          map: createRunicCircleTexture(st.color),
+          transparent: true,
+          opacity: 0.45,
+          depthWrite: false,
+        })
+      );
+      pad.rotation.x = -Math.PI / 2;
+      pad.position.y = 0.04;
+      stGroup.add(pad);
+
+      if (st.kind === 'blacksmith') {
+        const base = createComicMesh(new THREE.CylinderGeometry(1.1, 1.4, 0.75, 20), '#475569', 0.03, { outlineColor: biomeOutline });
+        base.position.y = 0.38;
+        const anvil = createComicMesh(createRoundedBoxGeometry(1.9, 0.75, 0.95, 0.18, 5), '#64748b', 0.03, { outlineColor: biomeOutline });
+        anvil.position.y = 1.15;
+        const hammer = createComicMesh(new THREE.CapsuleGeometry(0.24, 0.65, 10, 14), '#fbbf24', 0.024, {
+          emissive: '#f59e0b',
+          emissiveIntensity: 0.36,
+        });
+        hammer.rotation.z = Math.PI / 2;
+        hammer.position.y = 2.25;
+        stGroup.add(base, anvil, hammer);
+        animatedProps.push(hammer);
+      } else if (st.kind === 'runes') {
+        const ped = createComicMesh(new THREE.CylinderGeometry(0.95, 1.3, 0.95, 20), '#3b2d5e', 0.03, { outlineColor: biomeOutline });
+        ped.position.y = 0.48;
+        const mono = createComicMesh(new THREE.SphereGeometry(0.76, 18, 14), '#a855f7', 0.03, {
+          emissive: '#7c3aed',
+          emissiveIntensity: 0.42,
+        });
+        mono.scale.set(0.72, 1.6, 0.72);
+        mono.position.y = 2.35;
+        const ring = createComicMesh(new THREE.TorusGeometry(1.3, 0.11, 10, 26), '#e879f9', 0.02);
+        ring.rotation.x = Math.PI / 2 - 0.25;
+        ring.position.y = 2.35;
+        stGroup.add(ped, mono, ring);
+        animatedProps.push(mono);
+      } else if (st.kind === 'trade') {
+        const carpet = createComicMesh(createRoundedBoxGeometry(3.2, 0.18, 2.2, 0.08, 4), '#1d4ed8', 0.024, { outlineColor: biomeOutline });
+        carpet.position.y = 0.1;
+        const coin = createComicMesh(new THREE.TorusGeometry(0.65, 0.2, 12, 24), '#fbbf24', 0.024, {
+          emissive: '#d97706',
+          emissiveIntensity: 0.35,
+        });
+        coin.position.y = 1.95;
+        stGroup.add(carpet, coin);
+        animatedProps.push(coin);
+      } else if (st.kind === 'prestige') {
+        const ped = createComicMesh(new THREE.CylinderGeometry(1.0, 1.28, 0.9, 22), '#e2e8f0', 0.028, { outlineColor: biomeOutline });
+        ped.position.y = 0.45;
+        const crown = createComicMesh(new THREE.TorusGeometry(0.68, 0.16, 12, 24), '#fde047', 0.026, {
+          emissive: '#f59e0b',
+          emissiveIntensity: 0.42,
+        });
+        crown.rotation.x = Math.PI / 2;
+        crown.position.y = 2.05;
+        stGroup.add(ped, crown);
+        animatedProps.push(crown);
+      } else if (st.kind === 'rift') {
+        const ring = createComicMesh(new THREE.TorusGeometry(1.95, 0.28, 14, 32), '#a855f7', 0.032, {
+          emissive: '#7c3aed',
+          emissiveIntensity: 0.45,
+        });
+        ring.position.y = 2.25;
+        const core = new THREE.Mesh(
+          new THREE.CircleGeometry(1.7, 28),
+          new THREE.MeshBasicMaterial({
+            color: '#c084fc',
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.42,
+            depthWrite: false,
+          })
+        );
+        core.position.y = 2.25;
+        stGroup.add(ring, core);
+        animatedProps.push(ring);
+      }
+
+      if (st.kind !== 'portal') {
+        const lbl = makeSpriteLabel(st.label, st.color, '#fef08a');
+        lbl.scale.set(4.1, 0.86, 1);
+        lbl.position.y = 4.3;
+        stGroup.add(lbl);
+      }
+      root.add(stGroup);
+    }
   }
 
   // Exit Portal
@@ -623,13 +760,17 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
         break;
       }
       case 'palm_tree': {
-        pGroup.add(createContactShadow(1.2, 0.36));
-        const trunk = createComicMesh(new THREE.CapsuleGeometry(0.28, 3.6, 8, 12), '#85491c', 0.028);
+        pGroup.add(createContactShadow(1.25, 0.38));
+        const trunk = createComicMesh(new THREE.CapsuleGeometry(0.28, 3.6, 8, 12), '#85491c', 0.028, {
+          outlineColor: biomeOutline,
+        });
         trunk.position.y = 1.9;
         trunk.rotation.z = 0.15;
+        const frondMat = createWindToonMaterial('#248748', { windAmp: 0.16, windFreq: 2.6, rimStrength: 0.28 });
         for (let f = 0; f < 5; f++) {
           const a = (f / 5) * Math.PI * 2;
-          const frond = createComicMesh(new THREE.SphereGeometry(0.75, 12, 10), '#248748', 0.024);
+          const frond = new THREE.Mesh(new THREE.SphereGeometry(0.75, 14, 10), frondMat);
+          frond.castShadow = true;
           frond.scale.set(1.85, 0.32, 0.72);
           frond.position.set(0.32 + Math.cos(a) * 1.1, 3.9, Math.sin(a) * 1.1);
           frond.rotation.y = -a;
@@ -676,10 +817,12 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
       }
       case 'gnarled_tree':
       case 'elf_arch': {
-        pGroup.add(createContactShadow(1.4, 0.42));
-        const trunk = createComicMesh(new THREE.CapsuleGeometry(0.46, 2.8, 8, 14), '#4c3528', 0.03);
+        pGroup.add(createContactShadow(1.5, 0.42));
+        const trunk = createComicMesh(new THREE.CapsuleGeometry(0.46, 2.8, 8, 14), '#4c3528', 0.03, {
+          outlineColor: biomeOutline,
+        });
         trunk.position.y = 1.65;
-        // Lush multi-puff cartoon cloud canopy!
+        // Lush multi-puff cartoon cloud canopy with GPU Vertex-Shader Wind Sway!
         const puffs: Array<[number, number, number, number, string]> = [
           [0, 3.8, 0, 1.38, '#217541'],
           [-0.85, 3.45, 0.45, 0.98, '#298c4e'],
@@ -687,7 +830,9 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
           [0.15, 4.55, 0.2, 0.88, '#309e58'],
         ];
         for (const [px, py, pz, pr, col] of puffs) {
-          const leaf = createComicMesh(new THREE.SphereGeometry(pr, 16, 12), col, 0.026);
+          const leafMat = createWindToonMaterial(col, { windAmp: 0.12, windFreq: 2.0, rimStrength: 0.28 });
+          const leaf = new THREE.Mesh(new THREE.SphereGeometry(pr, 16, 12), leafMat);
+          leaf.castShadow = true;
           leaf.position.set(px, py, pz);
           pGroup.add(leaf);
         }
@@ -867,6 +1012,12 @@ export function syncWorldMapVisuals(
   if (handles.obeliskVisual && obelisk) {
     const cMat = handles.obeliskVisual.crystal.material as THREE.MeshToonMaterial;
     handles.obeliskVisual.ring.rotation.z = elapsedSec * (obelisk.state === 'active' ? 3.2 : 1.0);
+    if (handles.obeliskVisual.barrierRing) {
+      handles.obeliskVisual.barrierRing.visible = obelisk.state === 'active';
+      if (obelisk.state === 'active') {
+        handles.obeliskVisual.barrierRing.rotation.y = elapsedSec * 0.65;
+      }
+    }
     if (obelisk.state === 'active') {
       cMat.color.set('#f43f5e');
       cMat.emissive.set('#e11d48');

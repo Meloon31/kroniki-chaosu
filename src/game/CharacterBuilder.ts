@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getCosmeticById } from '../../shared/prestige';
 import type { ClassId, NetPlayerState } from '../../shared/types';
 import {
   createComicMesh,
@@ -8,6 +9,7 @@ import {
   createPlushLathe,
   createRoundedBoxGeometry,
   createRunicCircleTexture,
+  createSoftBeamMaterial,
   createSoftBladeGeometry,
   createSoftStarGeometry,
   createSoftWingGeometry,
@@ -33,7 +35,48 @@ export interface CharacterRig {
   stonePlatesGroup: THREE.Group;
   weaponGlowMesh: THREE.Mesh;
   armorGlowRing: THREE.Mesh;
+  downedBeacon: THREE.Group;
+  nameplateSprite: THREE.Sprite;
+  lastNameplateKey: string;
   classId: ClassId;
+}
+
+function makeHeroNameplateTexture(name: string, titleText?: string, titleColor = '#fde047', isMentor = false): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 420;
+  canvas.height = 112;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (titleText || isMentor) {
+    const badge = isMentor ? '🎓 MENTOR' : titleText!;
+    ctx.fillStyle = 'rgba(14, 16, 32, 0.84)';
+    ctx.strokeStyle = isMentor ? '#38bdf8' : titleColor;
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.roundRect(44, 6, 332, 40, 18);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = isMentor ? '#7dd3fc' : titleColor;
+    ctx.font = 'bold 23px Outfit, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(badge, 210, 27);
+  }
+
+  ctx.fillStyle = 'rgba(12, 14, 28, 0.78)';
+  ctx.beginPath();
+  ctx.roundRect(74, 54, 272, 42, 18);
+  ctx.fill();
+  ctx.fillStyle = '#f8fafc';
+  ctx.font = 'bold 25px Outfit, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(name, 210, 76);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }
 
 export function buildCharacterRig(
@@ -1026,6 +1069,38 @@ export function buildCharacterRig(
   }
   root.add(stonePlatesGroup);
 
+  // Downed State 3D Rescue Beacon (pulsing red-gold ring + vertical rescue beam!)
+  const downedBeacon = new THREE.Group();
+  downedBeacon.visible = false;
+  const rescueRing = new THREE.Mesh(
+    new THREE.RingGeometry(1.15, 1.48, 32),
+    new THREE.MeshBasicMaterial({
+      color: '#f43f5e',
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.82,
+      depthWrite: false,
+    })
+  );
+  rescueRing.rotation.x = -Math.PI / 2;
+  rescueRing.position.y = 0.08;
+  const rescueBeam = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.18, 0.55, 6.2, 16, 1, true),
+    createSoftBeamMaterial('#fb7185', 0.42)
+  );
+  rescueBeam.position.y = 3.1;
+  downedBeacon.add(rescueRing, rescueBeam);
+  root.add(downedBeacon);
+
+  // Floating Overhead Nameplate + Prestige Title Sprite (hidden in Lobby 3D Showcase)
+  const nameplateSprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ transparent: true, opacity: options?.hideSelectionRing ? 0 : 0.96, depthWrite: false })
+  );
+  nameplateSprite.scale.set(3.4, 0.92, 1);
+  nameplateSprite.position.y = 3.05;
+  nameplateSprite.visible = !options?.hideSelectionRing;
+  root.add(nameplateSprite);
+
   return {
     root,
     bodyGroup,
@@ -1043,6 +1118,9 @@ export function buildCharacterRig(
     stonePlatesGroup,
     weaponGlowMesh,
     armorGlowRing,
+    downedBeacon,
+    nameplateSprite,
+    lastNameplateKey: '',
     classId,
   };
 }
@@ -1053,14 +1131,35 @@ export function updateCharacterRig(
   elapsedSec: number,
   nowMs: number
 ) {
+  // Update Overhead Hero Nameplate + Prestige Title / Mentor badge cleanly on change!
+  if (rig.nameplateSprite.visible && state.name) {
+    const titleDef = getCosmeticById(state.equippedTitle);
+    const npKey = `${state.name}|${titleDef?.displayLabel || ''}|${state.isMentor ? '1' : '0'}`;
+    if (npKey !== rig.lastNameplateKey) {
+      rig.lastNameplateKey = npKey;
+      const mat = rig.nameplateSprite.material as THREE.SpriteMaterial;
+      if (mat.map) mat.map.dispose();
+      mat.map = makeHeroNameplateTexture(state.name, titleDef?.displayLabel, titleDef?.color, !!state.isMentor);
+      mat.needsUpdate = true;
+    }
+  }
+
   if (!state.alive) {
     rig.bodyGroup.rotation.x = Math.PI / 2;
     rig.bodyGroup.position.y = 0.22;
     (rig.shieldShell.material as THREE.MeshBasicMaterial).opacity = 0;
     (rig.shieldRing.material as THREE.MeshBasicMaterial).opacity = 0;
     rig.stonePlatesGroup.visible = false;
+    const isDowned = !!(state.downedUntil && state.downedUntil > nowMs);
+    rig.downedBeacon.visible = isDowned;
+    if (isDowned) {
+      const pulse = 1 + Math.sin(elapsedSec * 7.5) * 0.14;
+      rig.downedBeacon.scale.set(pulse, 1, pulse);
+      rig.downedBeacon.rotation.y = elapsedSec * 1.6;
+    }
     return;
   }
+  rig.downedBeacon.visible = false;
 
   rig.bodyGroup.rotation.x = 0;
 
@@ -1162,7 +1261,12 @@ export function updateCharacterRig(
 
   const aGlow = state.armorGlow || 0;
   const aMat = rig.armorGlowRing.material as THREE.MeshBasicMaterial;
-  if (aGlow >= 7) {
+  const auraCosmetic = getCosmeticById(state.equippedAura);
+  if (auraCosmetic) {
+    aMat.color.set(auraCosmetic.color);
+    aMat.opacity = 0.56 + Math.sin(elapsedSec * 4.8) * 0.12;
+    rig.armorGlowRing.rotation.z = elapsedSec * 1.1;
+  } else if (aGlow >= 7) {
     const glowCol = getUpgradeGlowColor(aGlow);
     if (glowCol) {
       if (aGlow >= 14) aMat.color.setHSL(0.46 + Math.sin(elapsedSec * 2.5) * 0.09, 0.92, 0.64);

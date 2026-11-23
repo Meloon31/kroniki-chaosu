@@ -14,18 +14,32 @@ import {
   RARITY_META,
   SLOT_LABELS,
 } from '../../shared/items';
-import type { EquipmentItem, PlayerProfile } from '../../shared/types';
+import type { EquipmentItem, PlayerProfile, Rarity } from '../../shared/types';
 import { soundEngine } from '../audio/soundEngine';
+
+const MENTOR_EXCHANGE_OFFERS: Array<{
+  rarity: Rarity;
+  mentorCost: number;
+  grantAmount: number;
+}> = [
+  { rarity: 'zwykly', mentorCost: 1, grantAmount: 3 },
+  { rarity: 'normalny', mentorCost: 1, grantAmount: 2 },
+  { rarity: 'mityczny', mentorCost: 2, grantAmount: 1 },
+  { rarity: 'legendarny', mentorCost: 4, grantAmount: 1 },
+  { rarity: 'boski', mentorCost: 8, grantAmount: 1 },
+];
 
 interface BlacksmithModalProps {
   profile: PlayerProfile;
   onUpgradeItem: (itemId: string) => { success: boolean; newLevel: number; chancePct: number } | null;
+  onExchangeMentorShards?: (targetRarity: Rarity, mentorCost: number, grantAmount: number) => void;
   onClose: () => void;
 }
 
 export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
   profile,
   onUpgradeItem,
+  onExchangeMentorShards,
   onClose,
 }) => {
   const allItems: Array<{ item: EquipmentItem; equipped: boolean }> = [
@@ -140,6 +154,58 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
             ✕ Zamknij [B]
           </button>
         </div>
+
+        {/* Mentor Shard Exchange Bar */}
+        {onExchangeMentorShards && (
+          <div
+            className="comic-panel-sm"
+            style={{
+              padding: '10px 14px',
+              marginBottom: 14,
+              borderColor: '#38bdf8',
+              background: 'linear-gradient(135deg, rgba(14, 116, 144, 0.28), rgba(15, 23, 42, 0.9))',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              flexWrap: 'wrap',
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 12.5, fontWeight: 900, color: '#7dd3fc' }}>
+                🎓 WYMIANA ODŁAMKÓW MENTORA{' '}
+                <span style={{ color: '#fde047' }}>(Masz: {profile.mentorShards || 0})</span>
+              </div>
+              <div style={{ fontSize: 10.5, color: '#cbd5e1', fontWeight: 600 }}>
+                Pomagaj znajomym z niższych Aktów (automatyczne skalowanie), aby zdobywać Odłamki Mentora!
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {MENTOR_EXCHANGE_OFFERS.map((offer) => {
+                const meta = RARITY_META[offer.rarity];
+                const canAfford = (profile.mentorShards || 0) >= offer.mentorCost;
+                return (
+                  <button
+                    key={offer.rarity}
+                    className="comic-btn comic-btn-dark"
+                    disabled={forging || !canAfford}
+                    onClick={() => onExchangeMentorShards(offer.rarity, offer.mentorCost, offer.grantAmount)}
+                    title={`Wymień ${offer.mentorCost} Odłamek Mentora na ${offer.grantAmount}× ${meta.shardName}`}
+                    style={{
+                      padding: '5px 9px',
+                      fontSize: 11,
+                      borderColor: canAfford ? meta.color : 'rgba(255,255,255,0.14)',
+                      color: canAfford ? meta.color : '#64748b',
+                      opacity: canAfford ? 1 : 0.55,
+                    }}
+                  >
+                    {offer.mentorCost}🎓 ➔ +{offer.grantAmount} {meta.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 16 }}>
           {/* Left: Item list */}
