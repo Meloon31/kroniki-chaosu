@@ -49,7 +49,7 @@ function saveLiveServerUrl(url) {
   return cleaned;
 }
 
-async function isServerReachable(url, timeoutMs = 15000) {
+async function isServerReachable(url, timeoutMs = 3500) {
   if (!url) return false;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);

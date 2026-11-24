@@ -106,7 +106,6 @@ import { GameEngine, ScreenFloatingText } from './game/GameEngine';
 
 const STORAGE_KEY = 'kroniki_chaosu_profile_v1';
 const SERVER_URL_KEY = 'kroniki_chaosu_server_url_v1';
-const SHARED_GLOBAL_SERVER_URL = 'https://kroniki-chaosu.onrender.com';
 
 interface DesktopBridge {
   isDesktopClient?: boolean;
@@ -122,13 +121,10 @@ function getDesktopBridge(): DesktopBridge | undefined {
 
 function loadSavedServerUrl(): string {
   try {
-    const saved = (localStorage.getItem(SERVER_URL_KEY) || '').trim().replace(/\/+$/, '');
-    if (saved) return saved;
+    return (localStorage.getItem(SERVER_URL_KEY) || '').trim();
   } catch {
-    // ignore
+    return '';
   }
-  // Always unify all players onto the same shared global server!
-  return SHARED_GLOBAL_SERVER_URL;
 }
 
 function createDefaultProfile(classId: ClassId = 'wojownik'): PlayerProfile {
@@ -511,17 +507,14 @@ export function App() {
       .catch(() => {});
   }, []);
 
-  // Socket.io connection setup (all players connect to the same shared global server!)
+  // Socket.io connection setup (reconnects cleanly whenever serverUrl changes)
   useEffect(() => {
     setConnected(false);
     setRoom(null);
-    const cleaned = (serverUrl.trim() || SHARED_GLOBAL_SERVER_URL).replace(/\/+$/, '');
-    const sameOrigin =
-      typeof window !== 'undefined' &&
-      window.location.origin.replace(/\/+$/, '') === cleaned;
-    const sock = sameOrigin
-      ? io({ transports: ['websocket', 'polling'] })
-      : io(cleaned, { transports: ['websocket', 'polling'] });
+    const targetUrl = serverUrl.trim();
+    const sock = targetUrl
+      ? io(targetUrl, { transports: ['websocket', 'polling'] })
+      : io({ transports: ['websocket', 'polling'] });
     socketRef.current = sock;
 
     sock.on('connect', () => {
@@ -2170,9 +2163,9 @@ export function App() {
   const readyBountyCount = countAllReadyRewards(profile).total;
 
   const handleChangeServerUrl = (nextUrl: string) => {
-    const cleaned = nextUrl.trim().replace(/\/+$/, '') || SHARED_GLOBAL_SERVER_URL;
+    const cleaned = nextUrl.trim().replace(/\/+$/, '');
     try {
-      if (cleaned !== SHARED_GLOBAL_SERVER_URL) localStorage.setItem(SERVER_URL_KEY, cleaned);
+      if (cleaned) localStorage.setItem(SERVER_URL_KEY, cleaned);
       else localStorage.removeItem(SERVER_URL_KEY);
     } catch {
       // ignore
