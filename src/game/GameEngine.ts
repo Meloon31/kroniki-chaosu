@@ -659,7 +659,11 @@ export class GameEngine {
 
     for (const ch of snap.chests) {
       if (!ch.opened && Math.hypot(local.x - ch.x, local.z - ch.z) <= 4.2) {
-        this.callbacks.onInteractHint('[F] Otwórz Zamkniętą Skrzynię (Zagadka Logiczna)');
+        this.callbacks.onInteractHint(
+          ch.isVaultChest
+            ? '[F] 👑 Otwórz Specjalną Skrzynię Skarbca (2× Mityk/Legenda/Boski!)'
+            : '[F] Otwórz Zamkniętą Skrzynię (Zagadka Logiczna)'
+        );
         return;
       }
     }
@@ -676,9 +680,17 @@ export class GameEngine {
         return;
       }
     }
+    const obeliskSymNames = ['🔥 Ogień', '❄️ Mróz', '⚡ Burza', '🌑 Cień'];
     for (const puz of snap.puzzles) {
       if (puz.solved) continue;
-      for (const node of puz.nodes) {
+      if (puz.cluePos && Math.hypot(local.x - puz.cluePos.x, local.z - puz.cluePos.z) <= 4.4) {
+        this.callbacks.onInteractHint(
+          `[F] 📜 Odczytaj Tablicę Szyfru Skarbca${puz.clueText ? ` (${puz.clueText})` : ''}`
+        );
+        return;
+      }
+      for (let ni = 0; ni < puz.nodes.length; ni++) {
+        const node = puz.nodes[ni];
         if (Math.hypot(local.x - node.x, local.z - node.z) <= 4.2) {
           if (puz.type === 'rotating_statues') {
             this.callbacks.onInteractHint('[F] Obróć Posąg o 90° (Skieruj do Kryształu)');
@@ -686,6 +698,26 @@ export class GameEngine {
           }
           if (puz.type === 'symbol_match') {
             this.callbacks.onInteractHint('[F] Zmień Symbol Runiczny Filaru');
+            return;
+          }
+          if (puz.type === 'ancient_obelisks') {
+            const curSym = obeliskSymNames[(puz.pillarSymbols[ni] || 0) % 4];
+            this.callbacks.onInteractHint(
+              `[F] 🗿 Obróć ${node.label || `Obelisk ${ni + 1}`} (Aktualnie: ${curSym})`
+            );
+            return;
+          }
+          if (puz.type === 'lights_out') {
+            const isOn = !!(puz.lightsState && puz.lightsState[ni]);
+            this.callbacks.onInteractHint(
+              `[F] ⚡ Przełącz Runę ${ni + 1} (${isOn ? 'ZAPALONA' : 'ZGASZONA'} — zmienia sąsiednie!)`
+            );
+            return;
+          }
+          if (puz.type === 'mirror_beam') {
+            this.callbacks.onInteractHint(
+              `[F] 🪞 Obróć Lustro ${ni + 1} o 90° (Skieruj Promień do Wrót Skarbca!)`
+            );
             return;
           }
         }

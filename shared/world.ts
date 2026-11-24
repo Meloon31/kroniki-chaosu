@@ -4,6 +4,9 @@ import { getRiftFloorAct } from './rift.js';
 import type {
   ActNumber,
   CampStation,
+  CorridorAlcoveInfo,
+  CorridorFieldData,
+  CorridorSegment,
   GeneratedMapData,
   LocationDefinition,
   LockedChestState,
@@ -450,16 +453,19 @@ export function generateCampMap(): GeneratedMapData {
   };
 }
 
+export function rollDynamicMapSeed(): number {
+  return ((Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) >>> 0) || 1337;
+}
+
 /**
- * Generates an Endless Chaos Rift procedural dungeon for Floor 1..∞!
+ * Generates an Endless Chaos Rift procedural organic corridor for Floor 1..∞!
  */
-export function generateRiftMap(floor: number): GeneratedMapData {
+export function generateRiftMap(floor: number, customSeed?: number): GeneratedMapData {
   const f = Math.max(1, Math.floor(floor));
   const act = getRiftFloorAct(f);
   const boss = getMainBossByAct(act);
-  // Base layout derived from a rotating location in that Act, with floor-specific boss & title!
   const baseGlobal = (act - 1) * 15 + (((f - 1) % 14) + 1);
-  const map = generateMapData(baseGlobal);
+  const map = generateMapData(baseGlobal, customSeed ?? rollDynamicMapSeed());
   return {
     ...map,
     riftFloor: f,
@@ -473,7 +479,7 @@ export function generateRiftMap(floor: number): GeneratedMapData {
       bossName: `${boss.name} (Piętro ${f})`,
       bossId: boss.id,
       recommendedLevel: 60,
-      seed: 900001 + f * 1337,
+      seed: map.mapSeed ?? (900001 + f * 1337),
     },
   };
 }
@@ -489,583 +495,831 @@ export function createSeededRng(seed: number): () => number {
   };
 }
 
+// =========================================================
+// SMOOTH 2D VALUE/SIMPLEX-STYLE NOISE & TAPERED CAPSULE SDF
+// =========================================================
+function hash2D(ix: number, iz: number, seed: number): number {
+  let h = (Math.imul(ix, 374761393) + Math.imul(iz, 668265263) + Math.imul(seed, 1442695041)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+export function smoothNoise2D(x: number, z: number, seed: number): number {
+  const ix = Math.floor(x);
+  const iz = Math.floor(z);
+  const fx = x - ix;
+  const fz = z - iz;
+  const u = fx * fx * (3 - 2 * fx);
+  const v = fz * fz * (3 - 2 * fz);
+  const a = hash2D(ix, iz, seed);
+  const b = hash2D(ix + 1, iz, seed);
+  const c = hash2D(ix, iz + 1, seed);
+  const d = hash2D(ix + 1, iz + 1, seed);
+  return (a + (b - a) * u) + ((c + (d - c) * u) - (a + (b - a) * u)) * v;
+}
+
+function distToSegmentSq(
+  px: number,
+  pz: number,
+  x1: number,
+  z1: number,
+  x2: number,
+  z2: number
+): { distSq: number; t: number } {
+  const dx = x2 - x1;
+  const dz = z2 - z1;
+  const lenSq = dx * dx + dz * dz;
+  if (lenSq < 1e-6) {
+    const ex = px - x1;
+    const ez = pz - z1;
+    return { distSq: ex * ex + ez * ez, t: 0 };
+  }
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (pz - z1) * dz) / lenSq));
+  const cx = x1 + dx * t;
+  const cz = z1 + dz * t;
+  const ex = px - cx;
+  const ez = pz - cz;
+  return { distSq: ex * ex + ez * ez, t };
+}
+
 /**
- * Generates a vast deterministic 3x3 macro-chamber dungeon (~136 x 136 world units)
- * for any of the 60 locations with:
- * - Guaranteed connected main path (Spawn -> Combat -> Puzzle Gate -> Combat -> Boss/Exit)
- * - 2 Secret Chambers hidden behind a Cracked Wall and a Hidden Lever behind a pillar
- * - In-world Logic Puzzle (rotates Pressure Plates / Rotating Statues / Symbol Match)
- * - 4-5 Locked Loot Chests with logic mini-puzzles
- * - 2 Healing Shrines
- * - Zero blocked paths or unreachable geometry
+ * Signed Distance Field to the organic walkable corridor + alcoves + clearings.
+ * Negative = inside walkable floor; Positive = inside solid canyon rock wall.
  */
-export function generateMapData(globalIndex: number): GeneratedMapData {
+export function sampleCorridorSdf(
+  x: number,
+  z: number,
+  field: CorridorFieldData,
+  solvedGateIds?: Set<string>,
+  ignoreGateLocks = false
+): number {
+  let minD = Infinity;
+  for (let i = 0; i < field.segments.length; i++) {
+    const seg = field.segments[i];
+    if (seg.gateId && !ignoreGateLocks && (!solvedGateIds || !solvedGateIds.has(seg.gateId))) {
+      continue;
+    }
+    const { distSq, t } = distToSegmentSq(x, z, seg.x1, seg.z1, seg.x2, seg.z2);
+    const r = seg.r1 + (seg.r2 - seg.r1) * t;
+    const d = Math.sqrt(distSq) - r;
+    if (d < minD) minD = d;
+  }
+  // Organic carved rock edge noise (subtle enough to never pinch narrow chokes shut!)
+  const n = (smoothNoise2D(x * field.noiseScale, z * field.noiseScale, field.mapSeed) - 0.5) * 2;
+  return minD + n * field.noiseAmp;
+}
+
+const OBELISK_SYMBOLS = ['🔥 Ogień', '❄️ Mróz', '⚡ Burza', '🌑 Cień'];
+
+/**
+ * Generates a brand-new, non-grid Organic Winding Corridor + Side Alcoves (Hybrid 1 + 2):
+ * - Dynamic fresh mapSeed on every single run (synchronized across 1–4 Co-op players!)
+ * - 14–18 control-point spline combining Catmull-Rom arcs + 45°/60°/120° irregular canyon bends (~320–420 units!)
+ * - Pulsating Perlin/Value-noise width: narrow chokes (6–8u) <-> wide oval clearings (15–22u)
+ * - 4–6 winding blind Side Alcoves (15–25u) for chests, Cursed Altars, Shrines & Vault Puzzle clues
+ * - 1 Hard Multi-Step Vault Puzzle (Ancient Obelisks / Lights Out / Mirror Beam) guarding the Vault Chamber (55–85%)
+ * - Spacious Organic Final Boss/Exit Arena at 100%
+ */
+export function generateMapData(globalIndex: number, customSeed?: number): GeneratedMapData {
   const location = getLocationDef(globalIndex);
-  const rng = createSeededRng(location.seed);
+  const mapSeed = customSeed ?? rollDynamicMapSeed();
+  const rng = createSeededRng(mapSeed);
   const theme = ACT_THEMES[location.act];
 
-  const CELL_STEP = 44; // distance between room centers
-  const ROOM_SIZE = 34; // interior size of each chamber
-  const HALF_ROOM = ROOM_SIZE / 2; // 17
-  const DOOR_WIDTH = 10; // wide, comfortable co-op corridors
-  const WALL_THICK = 2;
-  const WALL_H = 5.2;
+  // =========================================================
+  // 1. MAIN SPINE (14-18 Control Points, 45°/60°/120° + Smooth Arcs, ZERO Self-Intersection!)
+  // =========================================================
+  const numCtrl = 15 + Math.floor(rng() * 4); // 15..18 control points -> ~340..405 units!
+  const stepDistMin = 21.5;
+  const stepDistMax = 24.5;
+  const archetype = rng() < 0.36 ? 'snake' : rng() < 0.7 ? 'horseshoe' : 'spiral_canyon';
 
-  // 3x3 grid coordinates: gx in 0..2, gz in 0..2
-  // Room index = gz * 3 + gx (0..8)
-  // 0 = Spawn (top-left), 8 = Boss/Exit (bottom-right)
-  const roomCenter = (idx: number) => {
-    const gx = idx % 3;
-    const gz = Math.floor(idx / 3);
-    return {
-      gx,
-      gz,
-      cx: (gx - 1) * CELL_STEP,
-      cz: (gz - 1) * CELL_STEP,
-    };
+  const ctrlPts: Array<{ x: number; z: number; sharp: boolean }> = [{ x: 0, z: 0, sharp: false }];
+  let heading = rng() * Math.PI * 2;
+  const bendDir = rng() < 0.5 ? 1 : -1;
+  const sharpAnglesDeg = [45, 60, 120];
+
+  const isPointClearOfChain = (
+    px: number,
+    pz: number,
+    chain: Array<{ x: number; z: number }>,
+    skipLastCount: number,
+    minClearance: number
+  ): boolean => {
+    const minSq = minClearance * minClearance;
+    const limit = chain.length - skipLastCount;
+    for (let j = 0; j < limit - 1; j++) {
+      const res = distToSegmentSq(px, pz, chain[j].x, chain[j].z, chain[j + 1].x, chain[j + 1].z);
+      if (res.distSq < minSq) return false;
+    }
+    return true;
   };
 
-  // Pick one of 4 distinct meandering topologies for variety across the 60 locations!
-  // Each defines main path edges (0..8), puzzle room + gated edge, and 2 secret rooms + parent rooms.
-  const layouts = [
-    {
-      // Snake East -> South -> West -> South -> East, secrets at 6 & 2
-      mainEdges: [
-        [0, 1],
-        [1, 4],
-        [4, 3],
-        [3, 6],
-        [4, 5],
-        [5, 8],
-        [6, 7],
-      ] as Array<[number, number]>,
-      puzzleRoom: 4,
-      gatedEdge: [4, 5] as [number, number],
-      secret1: { parent: 1, room: 2, kind: 'cracked_wall' as const },
-      secret2: { parent: 7, room: 8, altParent: 6, altRoom: 7, kind: 'hidden_lever' as const },
-      // Simpler: always keep 2 dedicated dead-end secret rooms!
-      edgesClean: [
-        [0, 1],
-        [1, 4],
-        [4, 3],
-        [4, 5],
-        [5, 8],
-        [3, 6],
-      ] as Array<[number, number]>,
-      sec1: { from: 1, to: 2 }, // cracked wall
-      sec2: { from: 6, to: 7 }, // hidden lever
-      shrineRooms: [3, 5],
-    },
-    {
-      // Snake South -> East -> North -> East -> South
-      edgesClean: [
-        [0, 3],
-        [3, 4],
-        [4, 1],
-        [4, 7],
-        [7, 8],
-        [1, 2],
-      ] as Array<[number, number]>,
-      puzzleRoom: 4,
-      gatedEdge: [4, 7] as [number, number],
-      sec1: { from: 3, to: 6 },
-      sec2: { from: 2, to: 5 },
-      shrineRooms: [1, 7],
-    },
-    {
-      // Upper arc + central hub
-      edgesClean: [
-        [0, 1],
-        [1, 2],
-        [2, 5],
-        [5, 4],
-        [4, 7],
-        [7, 8],
-      ] as Array<[number, number]>,
-      puzzleRoom: 5,
-      gatedEdge: [5, 4] as [number, number],
-      sec1: { from: 0, to: 3 },
-      sec2: { from: 4, to: 6 }, // wait 4 and 6 not adjacent! use 7->6!
-      shrineRooms: [2, 7],
-    },
-    {
-      // Western loop into southern arena
-      edgesClean: [
-        [0, 3],
-        [3, 6],
-        [6, 7],
-        [7, 4],
-        [4, 5],
-        [5, 8],
-      ] as Array<[number, number]>,
-      puzzleRoom: 7,
-      gatedEdge: [7, 4] as [number, number],
-      sec1: { from: 0, to: 1 },
-      sec2: { from: 4, to: 2 }, // not adjacent -> fix below
-      shrineRooms: [3, 5],
-    },
-  ];
+  for (let i = 1; i < numCtrl; i++) {
+    const prev = ctrlPts[i - 1];
+    const dist = stepDistMin + rng() * (stepDistMax - stepDistMin);
 
-  // Ensure every single edge is strictly orthogonally adjacent!
-  const cleanLayouts = [
-    {
-      edges: [
-        [0, 1],
-        [1, 4],
-        [4, 3],
-        [3, 6],
-        [4, 5],
-        [5, 8],
-      ] as Array<[number, number]>,
-      puzzleRoom: 4,
-      gatedEdge: [4, 5] as [number, number],
-      sec1: { from: 1, to: 2 },
-      sec2: { from: 6, to: 7 },
-      leverRoom: 3,
-      shrineRooms: [3, 5],
-    },
-    {
-      edges: [
-        [0, 3],
-        [3, 4],
-        [4, 1],
-        [1, 2],
-        [4, 7],
-        [7, 8],
-      ] as Array<[number, number]>,
-      puzzleRoom: 4,
-      gatedEdge: [4, 7] as [number, number],
-      sec1: { from: 3, to: 6 },
-      sec2: { from: 2, to: 5 },
-      leverRoom: 1,
-      shrineRooms: [1, 7],
-    },
-    {
-      edges: [
-        [0, 1],
-        [1, 2],
-        [2, 5],
-        [5, 4],
-        [4, 7],
-        [7, 8],
-      ] as Array<[number, number]>,
-      puzzleRoom: 5,
-      gatedEdge: [5, 4] as [number, number],
-      sec1: { from: 0, to: 3 },
-      sec2: { from: 7, to: 6 },
-      leverRoom: 4,
-      shrineRooms: [2, 7],
-    },
-    {
-      edges: [
-        [0, 3],
-        [3, 6],
-        [6, 7],
-        [7, 4],
-        [4, 5],
-        [5, 8],
-      ] as Array<[number, number]>,
-      puzzleRoom: 7,
-      gatedEdge: [7, 4] as [number, number],
-      sec1: { from: 0, to: 1 },
-      sec2: { from: 5, to: 2 },
-      leverRoom: 4,
-      shrineRooms: [6, 5],
-    },
-  ];
-  void layouts;
+    // Build candidate turn angles mixing smooth Catmull-Rom arcs & sharp 45°/60°/120° canyon bends!
+    const wantSharp = i >= 2 && i <= numCtrl - 2 && rng() < 0.42;
+    let baseTurnRad = 0;
+    if (wantSharp) {
+      const deg = sharpAnglesDeg[Math.floor(rng() * sharpAnglesDeg.length)];
+      const sign =
+        archetype === 'horseshoe' || archetype === 'spiral_canyon'
+          ? rng() < 0.72
+            ? bendDir
+            : -bendDir
+          : (i % 2 === 0 ? 1 : -1) * bendDir;
+      baseTurnRad = (deg * Math.PI) / 180 * sign;
+    } else {
+      const arcDeg = 18 + rng() * 22;
+      const sign =
+        archetype === 'snake'
+          ? Math.sin(i * 0.75) >= 0
+            ? bendDir
+            : -bendDir
+          : bendDir;
+      baseTurnRad = (arcDeg * Math.PI) / 180 * sign;
+    }
 
-  const layout = cleanLayouts[(location.globalIndex - 1) % cleanLayouts.length];
+    const candidates = [
+      baseTurnRad,
+      baseTurnRad * 0.5,
+      -baseTurnRad * 0.65,
+      (45 * Math.PI) / 180,
+      (-45 * Math.PI) / 180,
+      (60 * Math.PI) / 180,
+      (-60 * Math.PI) / 180,
+      0,
+      (120 * Math.PI) / 180,
+      (-120 * Math.PI) / 180,
+    ];
 
-  const allEdges: Array<[number, number]> = [
-    ...layout.edges,
-    [layout.sec1.from, layout.sec1.to],
-    [layout.sec2.from, layout.sec2.to],
-  ];
+    let chosenX = prev.x + Math.cos(heading) * dist;
+    let chosenZ = prev.z + Math.sin(heading) * dist;
+    let chosenHeading = heading;
+    let chosenSharp = wantSharp;
 
-  const edgeKey = (a: number, b: number) => (a < b ? `${a}-${b}` : `${b}-${a}`);
-  const edgeSet = new Set(allEdges.map(([a, b]) => edgeKey(a, b)));
+    for (const turn of candidates) {
+      const tryH = heading + turn;
+      const nx = prev.x + Math.cos(tryH) * dist;
+      const nz = prev.z + Math.sin(tryH) * dist;
+      if (isPointClearOfChain(nx, nz, ctrlPts, 2, 29)) {
+        chosenX = nx;
+        chosenZ = nz;
+        chosenHeading = tryH;
+        chosenSharp = Math.abs(turn) >= (44 * Math.PI) / 180;
+        break;
+      }
+    }
 
-  // Build rooms metadata
-  const rooms: MapRoom[] = [];
-  for (let i = 0; i < 9; i++) {
-    const { cx, cz } = roomCenter(i);
-    let kind: MapRoom['kind'] = 'combat';
-    if (i === 0) kind = 'spawn';
-    else if (i === 8) kind = location.isMainBoss || location.isMiniBoss ? 'boss' : 'exit';
-    else if (i === layout.puzzleRoom) kind = 'puzzle';
-    else if (i === layout.sec1.to || i === layout.sec2.to) kind = 'secret';
-    else if (layout.shrineRooms.includes(i)) kind = 'shrine';
+    heading = chosenHeading;
+    ctrlPts.push({ x: chosenX, z: chosenZ, sharp: chosenSharp });
+  }
 
-    rooms.push({
-      index: i,
-      cx,
-      cz,
-      w: ROOM_SIZE,
-      d: ROOM_SIZE,
+  // Sample Hybrid Catmull-Rom + sharp-bend spine every ~5.5 units
+  const rawSpine: Array<{ x: number; z: number }> = [];
+  const catmull = (p0: number, p1: number, p2: number, p3: number, u: number) => {
+    const u2 = u * u;
+    const u3 = u2 * u;
+    return (
+      0.5 *
+      (2 * p1 +
+        (-p0 + p2) * u +
+        (2 * p0 - 5 * p1 + 4 * p2 - p3) * u2 +
+        (-p0 + 3 * p1 - 3 * p2 + p3) * u3)
+    );
+  };
+
+  for (let i = 0; i < ctrlPts.length - 1; i++) {
+    const p0 = ctrlPts[Math.max(0, i - 1)];
+    const p1 = ctrlPts[i];
+    const p2 = ctrlPts[i + 1];
+    const p3 = ctrlPts[Math.min(ctrlPts.length - 1, i + 2)];
+    const segLen = Math.hypot(p2.x - p1.x, p2.z - p1.z);
+    const subSteps = Math.max(3, Math.round(segLen / 5.5));
+    // Blend 65% Catmull-Rom + 35% linear on sharp 45/60/120 bends so angular canyon breaks stay distinct!
+    const blendLin = p1.sharp || p2.sharp ? 0.35 : 0.08;
+    for (let s = 0; s < subSteps; s++) {
+      const u = s / subSteps;
+      const cx = catmull(p0.x, p1.x, p2.x, p3.x, u);
+      const cz = catmull(p0.z, p1.z, p2.z, p3.z, u);
+      const lx = p1.x + (p2.x - p1.x) * u;
+      const lz = p1.z + (p2.z - p1.z) * u;
+      rawSpine.push({
+        x: cx * (1 - blendLin) + lx * blendLin,
+        z: cz * (1 - blendLin) + lz * blendLin,
+      });
+    }
+  }
+  rawSpine.push({ x: ctrlPts[ctrlPts.length - 1].x, z: ctrlPts[ctrlPts.length - 1].z });
+
+  // Compute cumulative arc length (~320..420 units) & pulsating Perlin width!
+  let totalLength = 0;
+  const cumLen: number[] = [0];
+  for (let i = 1; i < rawSpine.length; i++) {
+    totalLength += Math.hypot(rawSpine[i].x - rawSpine[i - 1].x, rawSpine[i].z - rawSpine[i - 1].z);
+    cumLen.push(totalLength);
+  }
+
+  // Choose 4 organic oval clearing centers along t in [0.18..0.82] + narrow chokes between them!
+  const clearingTs = [0.22 + rng() * 0.06, 0.44 + rng() * 0.06, 0.65 + rng() * 0.06, 0.82 + rng() * 0.04];
+
+  const spinePoints: Array<{ x: number; z: number; r: number; t: number }> = rawSpine.map((pt, idx) => {
+    const t = totalLength > 0 ? cumLen[idx] / totalLength : 0;
+    let r = 4.6;
+    if (t < 0.055) {
+      // Smooth start clearing
+      r = 10.5 - (t / 0.055) * 4.5;
+    } else if (t > 0.925) {
+      // Smooth opening into Final Boss/Exit Arena (diameter ~37)
+      const u = (t - 0.925) / 0.075;
+      r = 6.5 + u * u * 12.2;
+    } else {
+      // Pulsating width via 2D smooth noise + organic oval clearings (width 6-8 chokes <-> 15-22 clearings!)
+      const nVal = smoothNoise2D(pt.x * 0.035 + 11.3, pt.z * 0.035 - 7.1, mapSeed + 77);
+      // Base pulses smoothly between r=3.3 (6.6u choke) and r=6.6 (13.2u corridor)
+      r = 3.3 + nVal * 3.5;
+      for (const ct of clearingTs) {
+        const dt = Math.abs(t - ct);
+        if (dt < 0.065) {
+          const bump = Math.cos((dt / 0.065) * (Math.PI / 2));
+          r = Math.max(r, 4.5 + bump * bump * 6.2); // up to r=10.7 (21.4u wide oval clearing!)
+        }
+      }
+    }
+    return {
+      x: Number(pt.x.toFixed(2)),
+      z: Number(pt.z.toFixed(2)),
+      r: Number(r.toFixed(2)),
+      t,
+    };
+  });
+
+  const segments: CorridorSegment[] = [];
+  for (let i = 0; i < spinePoints.length - 1; i++) {
+    const a = spinePoints[i];
+    const b = spinePoints[i + 1];
+    const avgR = (a.r + b.r) / 2;
+    const kind: CorridorSegment['kind'] =
+      a.t < 0.05 ? 'spawn' : b.t > 0.93 ? 'arena' : avgR >= 7.4 ? 'clearing' : 'spine';
+    segments.push({
+      x1: a.x,
+      z1: a.z,
+      x2: b.x,
+      z2: b.z,
+      r1: a.r,
+      r2: b.r,
       kind,
     });
   }
 
-  // Determine Puzzle Gate coordinates
-  const [ga, gb] = layout.gatedEdge;
-  const gca = roomCenter(ga);
-  const gcb = roomCenter(gb);
-  const gateX = (gca.cx + gcb.cx) / 2;
-  const gateZ = (gca.cz + gcb.cz) / 2;
-  const gateHorizontal = gca.gx === gcb.gx; // connects N/S so gate spans X
+  // Ensure final arena is a spacious organic oval at the tip of the spine!
+  const endPt = spinePoints[spinePoints.length - 1];
+  const arenaRadius = 18.5;
+  segments.push({
+    x1: endPt.x,
+    z1: endPt.z,
+    x2: endPt.x + 0.2,
+    z2: endPt.z + 0.2,
+    r1: arenaRadius,
+    r2: arenaRadius,
+    kind: 'arena',
+  });
 
-  const puzzleTypes: PuzzleType[] = ['pressure_plates', 'rotating_statues', 'symbol_match'];
-  const puzzleType = puzzleTypes[(location.globalIndex + location.act) % 3];
-  const pCenter = roomCenter(layout.puzzleRoom);
+  // Helper to get spine point & tangent at normalized t in [0..1]
+  const sampleSpineAtT = (targetT: number) => {
+    let bestIdx = 0;
+    let bestDiff = Infinity;
+    for (let i = 0; i < spinePoints.length; i++) {
+      const diff = Math.abs(spinePoints[i].t - targetT);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestIdx = i;
+      }
+    }
+    const pt = spinePoints[bestIdx];
+    const prev = spinePoints[Math.max(0, bestIdx - 1)];
+    const next = spinePoints[Math.min(spinePoints.length - 1, bestIdx + 1)];
+    const tx = next.x - prev.x;
+    const tz = next.z - prev.z;
+    const tl = Math.hypot(tx, tz) || 1;
+    return {
+      idx: bestIdx,
+      x: pt.x,
+      z: pt.z,
+      r: pt.r,
+      t: pt.t,
+      dirX: tx / tl,
+      dirZ: tz / tl,
+      perpX: -tz / tl,
+      perpZ: tx / tl,
+    };
+  };
 
-  const puzzleId = `puz_${location.globalIndex}_main`;
-  const puzzleNodes =
-    puzzleType === 'pressure_plates'
-      ? [
-          { x: pCenter.cx - 8, z: pCenter.cz - 7, hintIndex: 0 },
-          { x: pCenter.cx + 8, z: pCenter.cz - 7, hintIndex: 1 },
-          { x: pCenter.cx + 8, z: pCenter.cz + 7, hintIndex: 2 },
-          { x: pCenter.cx - 8, z: pCenter.cz + 7, hintIndex: 3 },
-        ]
-      : puzzleType === 'rotating_statues'
-        ? [
-            { x: pCenter.cx - 8, z: pCenter.cz - 6, hintIndex: 0 },
-            { x: pCenter.cx + 8, z: pCenter.cz - 6, hintIndex: 1 },
-            { x: pCenter.cx, z: pCenter.cz + 8, hintIndex: 2 },
-          ]
-        : [
-            { x: pCenter.cx - 8, z: pCenter.cz, hintIndex: 0 },
-            { x: pCenter.cx, z: pCenter.cz - 7, hintIndex: 1 },
-            { x: pCenter.cx + 8, z: pCenter.cz, hintIndex: 2 },
-          ];
+  // Helper to check if a branch tip/mid stays clear of existing non-parent segments
+  const isBranchClear = (bx: number, bz: number, parentT: number, minClear: number): boolean => {
+    const minSq = minClear * minClear;
+    for (let i = 0; i < spinePoints.length; i++) {
+      if (Math.abs(spinePoints[i].t - parentT) < 0.085) continue;
+      const dx = bx - spinePoints[i].x;
+      const dz = bz - spinePoints[i].z;
+      const rad = spinePoints[i].r + minClear;
+      if (dx * dx + dz * dz < rad * rad) return false;
+    }
+    for (const seg of segments) {
+      if (seg.kind !== 'alcove' && seg.kind !== 'vault') continue;
+      const { distSq } = distToSegmentSq(bx, bz, seg.x1, seg.z1, seg.x2, seg.z2);
+      if (distSq < minSq) return false;
+    }
+    return true;
+  };
 
-  // Deterministic shuffled sequence for pressure plates
-  const seq = [0, 1, 2, 3];
-  for (let i = seq.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [seq[i], seq[j]] = [seq[j], seq[i]];
+  // =========================================================
+  // 2. VAULT CHAMBER (55% - 85% ALONG SPINE) + SEALED RUNIC GATE
+  // =========================================================
+  const puzzleId = `puz_${location.globalIndex}_vault`;
+  const vaultTargetT = 0.62 + rng() * 0.16; // cleanly in [62%..78%]
+  const vaultAnchor = sampleSpineAtT(vaultTargetT);
+
+  // Pick left or right side of spine with best clearance for the Vault Chamber!
+  let vaultSide = rng() < 0.5 ? 1 : -1;
+  const testVaultTip = (side: number) => ({
+    x: vaultAnchor.x + vaultAnchor.perpX * side * 22,
+    z: vaultAnchor.z + vaultAnchor.perpZ * side * 22,
+  });
+  if (!isBranchClear(testVaultTip(vaultSide).x, testVaultTip(vaultSide).z, vaultAnchor.t, 12)) {
+    vaultSide = -vaultSide;
   }
 
-  const targetSymbols = [
-    Math.floor(rng() * 4),
-    Math.floor(rng() * 4),
-    Math.floor(rng() * 4),
-  ];
-  const initialSymbols = targetSymbols.map((s) => (s + 1 + Math.floor(rng() * 3)) % 4);
-  const initialAngles = [1 + Math.floor(rng() * 3), 1 + Math.floor(rng() * 3), 1 + Math.floor(rng() * 3)];
+  const vDirX = vaultAnchor.perpX * vaultSide;
+  const vDirZ = vaultAnchor.perpZ * vaultSide;
+  const gateDist = vaultAnchor.r + 5.2;
+  const vaultGateX = Number((vaultAnchor.x + vDirX * gateDist).toFixed(2));
+  const vaultGateZ = Number((vaultAnchor.z + vDirZ * gateDist).toFixed(2));
+  const vaultGateAngle = Math.atan2(vDirZ, vDirX);
+  const vaultCenterX = Number((vaultAnchor.x + vDirX * (gateDist + 11.2)).toFixed(2));
+  const vaultCenterZ = Number((vaultAnchor.z + vDirZ * (gateDist + 11.2)).toFixed(2));
 
-  const puzzles: WorldPuzzleState[] = [
-    {
-      id: puzzleId,
-      type: puzzleType,
-      roomIndex: layout.puzzleRoom,
-      x: pCenter.cx,
-      z: pCenter.cz,
-      gateX,
-      gateZ,
-      gateHorizontal,
-      solved: false,
-      targetSequence: seq,
-      currentSequence: [],
-      statueAngles: initialAngles,
-      pillarSymbols: initialSymbols,
-      targetSymbols,
-      nodes: puzzleNodes,
-    },
-  ];
-
-  // Build Secret Passages (1 Cracked Wall + 1 Hidden Lever behind a pillar)
-  const s1a = roomCenter(layout.sec1.from);
-  const s1b = roomCenter(layout.sec1.to);
-  const sec1Id = `sec_${location.globalIndex}_cracked`;
-
-  const s2a = roomCenter(layout.sec2.from);
-  const s2b = roomCenter(layout.sec2.to);
-  const leverRoomCenter = roomCenter(layout.leverRoom);
-  const sec2Id = `sec_${location.globalIndex}_lever`;
-
-  const secrets: SecretPassageState[] = [
-    {
-      id: sec1Id,
-      kind: 'cracked_wall',
-      x: (s1a.cx + s1b.cx) / 2,
-      z: (s1a.cz + s1b.cz) / 2,
-      wallX: (s1a.cx + s1b.cx) / 2,
-      wallZ: (s1a.cz + s1b.cz) / 2,
-      revealed: false,
-      hp: 3,
-      maxHp: 3,
-    },
-    {
-      id: sec2Id,
-      kind: 'hidden_lever',
-      x: (s2a.cx + s2b.cx) / 2,
-      z: (s2a.cz + s2b.cz) / 2,
-      wallX: (s2a.cx + s2b.cx) / 2,
-      wallZ: (s2a.cz + s2b.cz) / 2,
-      leverX: leverRoomCenter.cx + 12.5,
-      leverZ: leverRoomCenter.cz - 12.5,
-      revealed: false,
-      hp: 1,
-      maxHp: 1,
-    },
-  ];
-
-  // Build Walls cleanly for all 9 rooms + corridors + gates + secrets
-  const walls: MapWall[] = [];
-  const halfSideLen = (ROOM_SIZE - DOOR_WIDTH) / 2; // 12
-
-  for (let i = 0; i < 9; i++) {
-    const { gx, gz, cx, cz } = roomCenter(i);
-
-    const hasNorth = gz > 0 && edgeSet.has(edgeKey(i, i - 3));
-    const hasSouth = gz < 2 && edgeSet.has(edgeKey(i, i + 3));
-    const hasWest = gx > 0 && edgeSet.has(edgeKey(i, i - 1));
-    const hasEast = gx < 2 && edgeSet.has(edgeKey(i, i + 1));
-
-    // North wall (z = cz - HALF_ROOM)
-    if (!hasNorth) {
-      walls.push({ x: cx, z: cz - HALF_ROOM, w: ROOM_SIZE + WALL_THICK, d: WALL_THICK, h: WALL_H });
-    } else {
-      walls.push({
-        x: cx - (DOOR_WIDTH / 2 + halfSideLen / 2),
-        z: cz - HALF_ROOM,
-        w: halfSideLen + WALL_THICK / 2,
-        d: WALL_THICK,
-        h: WALL_H,
-      });
-      walls.push({
-        x: cx + (DOOR_WIDTH / 2 + halfSideLen / 2),
-        z: cz - HALF_ROOM,
-        w: halfSideLen + WALL_THICK / 2,
-        d: WALL_THICK,
-        h: WALL_H,
-      });
-    }
-
-    // South wall (z = cz + HALF_ROOM)
-    if (!hasSouth) {
-      walls.push({ x: cx, z: cz + HALF_ROOM, w: ROOM_SIZE + WALL_THICK, d: WALL_THICK, h: WALL_H });
-    } else {
-      walls.push({
-        x: cx - (DOOR_WIDTH / 2 + halfSideLen / 2),
-        z: cz + HALF_ROOM,
-        w: halfSideLen + WALL_THICK / 2,
-        d: WALL_THICK,
-        h: WALL_H,
-      });
-      walls.push({
-        x: cx + (DOOR_WIDTH / 2 + halfSideLen / 2),
-        z: cz + HALF_ROOM,
-        w: halfSideLen + WALL_THICK / 2,
-        d: WALL_THICK,
-        h: WALL_H,
-      });
-      // Corridor side walls going south to room i+3
-      const corrMidZ = cz + CELL_STEP / 2;
-      const corrLen = CELL_STEP - ROOM_SIZE + WALL_THICK; // 12
-      walls.push({ x: cx - DOOR_WIDTH / 2 - WALL_THICK / 2, z: corrMidZ, w: WALL_THICK, d: corrLen, h: WALL_H });
-      walls.push({ x: cx + DOOR_WIDTH / 2 + WALL_THICK / 2, z: corrMidZ, w: WALL_THICK, d: corrLen, h: WALL_H });
-    }
-
-    // West wall (x = cx - HALF_ROOM)
-    if (!hasWest) {
-      walls.push({ x: cx - HALF_ROOM, z: cz, w: WALL_THICK, d: ROOM_SIZE + WALL_THICK, h: WALL_H });
-    } else {
-      walls.push({
-        x: cx - HALF_ROOM,
-        z: cz - (DOOR_WIDTH / 2 + halfSideLen / 2),
-        w: WALL_THICK,
-        d: halfSideLen + WALL_THICK / 2,
-        h: WALL_H,
-      });
-      walls.push({
-        x: cx - HALF_ROOM,
-        z: cz + (DOOR_WIDTH / 2 + halfSideLen / 2),
-        w: WALL_THICK,
-        d: halfSideLen + WALL_THICK / 2,
-        h: WALL_H,
-      });
-    }
-
-    // East wall (x = cx + HALF_ROOM)
-    if (!hasEast) {
-      walls.push({ x: cx + HALF_ROOM, z: cz, w: WALL_THICK, d: ROOM_SIZE + WALL_THICK, h: WALL_H });
-    } else {
-      walls.push({
-        x: cx + HALF_ROOM,
-        z: cz - (DOOR_WIDTH / 2 + halfSideLen / 2),
-        w: WALL_THICK,
-        d: halfSideLen + WALL_THICK / 2,
-        h: WALL_H,
-      });
-      walls.push({
-        x: cx + HALF_ROOM,
-        z: cz + (DOOR_WIDTH / 2 + halfSideLen / 2),
-        w: WALL_THICK,
-        d: halfSideLen + WALL_THICK / 2,
-        h: WALL_H,
-      });
-      // Corridor side walls going east to room i+1
-      const corrMidX = cx + CELL_STEP / 2;
-      const corrLen = CELL_STEP - ROOM_SIZE + WALL_THICK; // 12
-      walls.push({ x: corrMidX, z: cz - DOOR_WIDTH / 2 - WALL_THICK / 2, w: corrLen, d: WALL_THICK, h: WALL_H });
-      walls.push({ x: corrMidX, z: cz + DOOR_WIDTH / 2 + WALL_THICK / 2, w: corrLen, d: WALL_THICK, h: WALL_H });
-    }
-  }
-
-  // Add removable Puzzle Gate wall
-  walls.push({
-    id: `wall_${puzzleId}`,
-    x: gateX,
-    z: gateZ,
-    w: gateHorizontal ? DOOR_WIDTH : WALL_THICK * 1.1,
-    d: gateHorizontal ? WALL_THICK * 1.1 : DOOR_WIDTH,
-    h: WALL_H,
+  // Widen the clearing right in front of the Vault Gate so Lights Out / Mirror Beam have roomy space!
+  segments.push({
+    x1: vaultAnchor.x,
+    z1: vaultAnchor.z,
+    x2: vaultAnchor.x + vDirX * (gateDist - 2.6),
+    z2: vaultAnchor.z + vDirZ * (gateDist - 2.6),
+    r1: Math.max(vaultAnchor.r, 9.2),
+    r2: 5.0,
+    kind: 'clearing',
+  });
+  // Sealed Vault Chamber behind the Runic Gate (walkable ONLY once puzzleId is solved!)
+  segments.push({
+    x1: vaultGateX + vDirX * 1.4,
+    z1: vaultGateZ + vDirZ * 1.4,
+    x2: vaultCenterX,
+    z2: vaultCenterZ,
+    r1: 4.5,
+    r2: 9.2,
+    kind: 'vault',
     gateId: puzzleId,
   });
 
-  // Add removable Secret Passage walls
-  const sec1Horiz = s1a.gx === s1b.gx;
-  walls.push({
-    id: `wall_${sec1Id}`,
-    x: secrets[0].wallX,
-    z: secrets[0].wallZ,
-    w: sec1Horiz ? DOOR_WIDTH : WALL_THICK * 1.2,
-    d: sec1Horiz ? WALL_THICK * 1.2 : DOOR_WIDTH,
-    h: WALL_H,
-    destructible: true,
-    secretId: sec1Id,
+  // =========================================================
+  // 3. 4 TO 6 WINDING SIDE ALCOVES (LENGTH 15–25 UNITS)
+  // =========================================================
+  const desiredAlcoves = 4 + Math.floor(rng() * 3); // 4..6 alcoves!
+  const alcoves: CorridorAlcoveInfo[] = [];
+  const candidateAlcoveTs = [0.14, 0.26, 0.38, 0.50, 0.58, 0.84];
+  for (let ai = 0; ai < candidateAlcoveTs.length && alcoves.length < desiredAlcoves; ai++) {
+    const tCand = candidateAlcoveTs[ai] + (rng() - 0.5) * 0.04;
+    if (Math.abs(tCand - vaultAnchor.t) < 0.08) continue;
+    const anc = sampleSpineAtT(tCand);
+    const lenTotal = 16 + rng() * 8.5; // 16..24.5 units!
+    const trySides = rng() < 0.5 ? [1, -1] : [-1, 1];
+    let placed = false;
+
+    for (const side of trySides) {
+      const bendAng = ((rng() - 0.5) * 36 * Math.PI) / 180;
+      const baseAng = Math.atan2(anc.perpZ * side, anc.perpX * side);
+      const midAng = baseAng + bendAng * 0.5;
+      const tipAng = baseAng + bendAng;
+
+      const midX = anc.x + Math.cos(midAng) * (anc.r + lenTotal * 0.48);
+      const midZ = anc.z + Math.sin(midAng) * (anc.r + lenTotal * 0.48);
+      const tipX = midX + Math.cos(tipAng) * (lenTotal * 0.52);
+      const tipZ = midZ + Math.sin(tipAng) * (lenTotal * 0.52);
+
+      if (isBranchClear(tipX, tipZ, anc.t, 9.5) && isBranchClear(midX, midZ, anc.t, 6.5)) {
+        const pocketR = 5.6 + rng() * 1.6;
+        segments.push({
+          x1: anc.x,
+          z1: anc.z,
+          x2: midX,
+          z2: midZ,
+          r1: 4.0,
+          r2: 3.4,
+          kind: 'alcove',
+        });
+        segments.push({
+          x1: midX,
+          z1: midZ,
+          x2: tipX,
+          z2: tipZ,
+          r1: 3.5,
+          r2: pocketR,
+          kind: 'alcove',
+        });
+        alcoves.push({
+          id: `alcove_${alcoves.length}`,
+          entryX: Number(anc.x.toFixed(2)),
+          entryZ: Number(anc.z.toFixed(2)),
+          tipX: Number(tipX.toFixed(2)),
+          tipZ: Number(tipZ.toFixed(2)),
+          radius: Number(pocketR.toFixed(2)),
+          spineT: anc.t,
+        });
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) continue;
+  }
+
+  // =========================================================
+  // 4. ONE HARD MULTI-STEP VAULT PUZZLE (3 VARIANTS, RANDOMLY 1 PER LEVEL)
+  // =========================================================
+  const hardPuzzlePool: PuzzleType[] = ['ancient_obelisks', 'lights_out', 'mirror_beam'];
+  const puzzleType = hardPuzzlePool[Math.floor(rng() * hardPuzzlePool.length)];
+  const puzPerpX = -vDirZ;
+  const puzPerpZ = vDirX;
+
+  let puzzle: WorldPuzzleState;
+  if (puzzleType === 'ancient_obelisks') {
+    // 3 rotatable Obelisks hidden in 3 side alcoves BEFORE the Vault Gate + Clue Tablet beside the Vault Gate!
+    const preVaultAlcoves = alcoves.filter((a) => a.spineT < vaultAnchor.t + 0.04);
+    const obeliskSpots: Array<{ x: number; z: number }> = [];
+    for (let k = 0; k < 3; k++) {
+      if (preVaultAlcoves[k]) {
+        obeliskSpots.push({ x: preVaultAlcoves[k].tipX, z: preVaultAlcoves[k].tipZ });
+      } else {
+        const fallback = sampleSpineAtT(0.18 + k * 0.16);
+        obeliskSpots.push({
+          x: Number((fallback.x + fallback.perpX * 3.0).toFixed(2)),
+          z: Number((fallback.z + fallback.perpZ * 3.0).toFixed(2)),
+        });
+      }
+    }
+    const targetSymbols = [
+      Math.floor(rng() * 4),
+      Math.floor(rng() * 4),
+      Math.floor(rng() * 4),
+    ];
+    const initialSymbols = targetSymbols.map((s) => (s + 1 + Math.floor(rng() * 3)) % 4);
+    const clueX = Number((vaultGateX - vDirX * 2.2 + puzPerpX * 4.2).toFixed(2));
+    const clueZ = Number((vaultGateZ - vDirZ * 2.2 + puzPerpZ * 4.2).toFixed(2));
+    const clueText = `I: ${OBELISK_SYMBOLS[targetSymbols[0]]} • II: ${OBELISK_SYMBOLS[targetSymbols[1]]} • III: ${OBELISK_SYMBOLS[targetSymbols[2]]}`;
+
+    puzzle = {
+      id: puzzleId,
+      type: 'ancient_obelisks',
+      roomIndex: 1,
+      x: vaultAnchor.x,
+      z: vaultAnchor.z,
+      gateX: vaultGateX,
+      gateZ: vaultGateZ,
+      gateAngle: vaultGateAngle,
+      gateHorizontal: Math.abs(vDirZ) >= Math.abs(vDirX),
+      solved: false,
+      targetSequence: [],
+      currentSequence: [],
+      statueAngles: [],
+      pillarSymbols: initialSymbols,
+      targetSymbols,
+      cluePos: { x: clueX, z: clueZ },
+      clueText,
+      nodes: obeliskSpots.map((sp, i) => ({
+        x: sp.x,
+        z: sp.z,
+        hintIndex: i,
+        label: `Obelisk ${i === 0 ? 'I' : i === 1 ? 'II' : 'III'}`,
+      })),
+    };
+  } else if (puzzleType === 'lights_out') {
+    // 5 coupled Runic Switches (Lights Out) arrayed in front of the Vault Gate — guaranteed solvable!
+    const lightsState = [true, true, true, true, true];
+    const toggleIdx = (arr: boolean[], idx: number) => {
+      arr[idx] = !arr[idx];
+      if (idx > 0) arr[idx - 1] = !arr[idx - 1];
+      if (idx < arr.length - 1) arr[idx + 1] = !arr[idx + 1];
+    };
+    const scrambleMoves = 2 + Math.floor(rng() * 3); // 2..4 moves from solved!
+    const used = new Set<number>();
+    for (let m = 0; m < scrambleMoves; m++) {
+      let pick = Math.floor(rng() * 5);
+      while (used.has(pick)) pick = (pick + 1) % 5;
+      used.add(pick);
+      toggleIdx(lightsState, pick);
+    }
+    if (lightsState.every(Boolean)) toggleIdx(lightsState, 2);
+
+    const nodes = [-2, -1, 0, 1, 2].map((off, i) => ({
+      x: Number((vaultAnchor.x + vDirX * 2.2 + puzPerpX * off * 3.1).toFixed(2)),
+      z: Number((vaultAnchor.z + vDirZ * 2.2 + puzPerpZ * off * 3.1).toFixed(2)),
+      hintIndex: i,
+      label: `Runa ${i + 1}`,
+    }));
+
+    puzzle = {
+      id: puzzleId,
+      type: 'lights_out',
+      roomIndex: 1,
+      x: vaultAnchor.x,
+      z: vaultAnchor.z,
+      gateX: vaultGateX,
+      gateZ: vaultGateZ,
+      gateAngle: vaultGateAngle,
+      gateHorizontal: Math.abs(vDirZ) >= Math.abs(vDirX),
+      solved: false,
+      targetSequence: [],
+      currentSequence: [],
+      statueAngles: [],
+      pillarSymbols: [],
+      targetSymbols: [],
+      lightsState,
+      clueText: 'Zapal wszystkie 5 Run jednocześnie (każda przełącza sąsiednie!)',
+      nodes,
+    };
+  } else {
+    // mirror_beam: Emitter Crystal + 4 Rotatable Mirror Statues bouncing golden energy beam to Vault Gate Lock!
+    const emitterX = Number((vaultAnchor.x - vDirX * 4.2 - puzPerpX * 4.2).toFixed(2));
+    const emitterZ = Number((vaultAnchor.z - vDirZ * 4.2 - puzPerpZ * 4.2).toFixed(2));
+    const mirrorCoords = [
+      { x: vaultAnchor.x - vDirX * 4.2 + puzPerpX * 3.6, z: vaultAnchor.z - vDirZ * 4.2 + puzPerpZ * 3.6 },
+      { x: vaultAnchor.x - vDirX * 0.6 + puzPerpX * 4.2, z: vaultAnchor.z - vDirZ * 0.6 + puzPerpZ * 4.2 },
+      { x: vaultAnchor.x - vDirX * 0.6 - puzPerpX * 3.8, z: vaultAnchor.z - vDirZ * 0.6 - puzPerpZ * 3.8 },
+      { x: vaultAnchor.x + vDirX * 2.6 - puzPerpX * 0.2, z: vaultAnchor.z + vDirZ * 2.6 - puzPerpZ * 0.2 },
+    ];
+    const targetAngles = [0, 0, 0, 0];
+    const statueAngles = targetAngles.map(() => 1 + Math.floor(rng() * 3));
+
+    puzzle = {
+      id: puzzleId,
+      type: 'mirror_beam',
+      roomIndex: 1,
+      x: vaultAnchor.x,
+      z: vaultAnchor.z,
+      gateX: vaultGateX,
+      gateZ: vaultGateZ,
+      gateAngle: vaultGateAngle,
+      gateHorizontal: Math.abs(vDirZ) >= Math.abs(vDirX),
+      solved: false,
+      targetSequence: [],
+      currentSequence: [],
+      statueAngles,
+      targetAngles,
+      pillarSymbols: [],
+      targetSymbols: [],
+      beamEmitter: { x: emitterX, z: emitterZ },
+      beamLock: { x: vaultGateX, z: vaultGateZ },
+      clueText: 'Obróć 4 Posągi-Lustra, aby poprowadzić złoty promień prosto w Zamek Wrót!',
+      nodes: mirrorCoords.map((mc, i) => ({
+        x: Number(mc.x.toFixed(2)),
+        z: Number(mc.z.toFixed(2)),
+        hintIndex: i,
+        label: `Lustro ${i + 1}`,
+      })),
+    };
+  }
+
+  // =========================================================
+  // 5. COMPUTE COMPACT 2D WALKABILITY GRID (FOR 3D CANYON WALLS & FOG-OF-WAR MINIMAP)
+  // =========================================================
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const seg of segments) {
+    const pad = Math.max(seg.r1, seg.r2) + 14;
+    minX = Math.min(minX, seg.x1 - pad, seg.x2 - pad);
+    maxX = Math.max(maxX, seg.x1 + pad, seg.x2 + pad);
+    minZ = Math.min(minZ, seg.z1 - pad, seg.z2 - pad);
+    maxZ = Math.max(maxZ, seg.z1 + pad, seg.z2 + pad);
+  }
+  const gridCellSize = 2.6;
+  const gridCols = Math.ceil((maxX - minX) / gridCellSize);
+  const gridRows = Math.ceil((maxZ - minZ) / gridCellSize);
+
+  const fieldPartial: CorridorFieldData = {
+    mapSeed,
+    minX: Number(minX.toFixed(1)),
+    maxX: Number(maxX.toFixed(1)),
+    minZ: Number(minZ.toFixed(1)),
+    maxZ: Number(maxZ.toFixed(1)),
+    totalLength: Math.round(totalLength),
+    noiseScale: 0.095,
+    noiseAmp: 0.85,
+    segments,
+    spinePoints,
+    alcoves,
+    vaultCenter: { x: vaultCenterX, z: vaultCenterZ },
+    vaultGatePos: { x: vaultGateX, z: vaultGateZ, angle: vaultGateAngle, width: 9.2 },
+    arenaCenter: { x: endPt.x, z: endPt.z, radius: arenaRadius },
+    gridCellSize,
+    gridCols,
+    gridRows,
+    walkMask: '',
+  };
+
+  const emptySolved = new Set<string>();
+  const allSolved = new Set<string>([puzzleId]);
+  const maskChars: string[] = new Array(gridCols * gridRows);
+  for (let row = 0; row < gridRows; row++) {
+    const wz = fieldPartial.minZ + (row + 0.5) * gridCellSize;
+    for (let col = 0; col < gridCols; col++) {
+      const wx = fieldPartial.minX + (col + 0.5) * gridCellSize;
+      const dClosed = sampleCorridorSdf(wx, wz, fieldPartial, emptySolved);
+      if (dClosed <= 0) {
+        maskChars[row * gridCols + col] = '1';
+      } else {
+        const dOpen = sampleCorridorSdf(wx, wz, fieldPartial, allSolved);
+        maskChars[row * gridCols + col] = dOpen <= 0 ? '2' : '0';
+      }
+    }
+  }
+  fieldPartial.walkMask = maskChars.join('');
+
+  // =========================================================
+  // 6. ENCOUNTER NODES (PACED EVERY ~24 UNITS FOR COMBO FLOW!), CHESTS, SHRINES, PROPS
+  // =========================================================
+  const rooms: MapRoom[] = [];
+  rooms.push({ index: 0, cx: spinePoints[0].x, cz: spinePoints[0].z, w: 18, d: 18, kind: 'spawn' });
+
+  // Place combat encounter zones every ~24 units along the entire 320–420 unit spine!
+  let nextEncLen = 28;
+  for (let i = 1; i < spinePoints.length - 1; i++) {
+    const distSoFar = cumLen[i];
+    if (distSoFar >= nextEncLen && spinePoints[i].t < 0.89) {
+      const pt = spinePoints[i];
+      const isClearing = pt.r >= 7.2;
+      rooms.push({
+        index: rooms.length,
+        cx: pt.x,
+        cz: pt.z,
+        w: Math.round(pt.r * 1.8),
+        d: Math.round(pt.r * 1.8),
+        kind: isClearing ? 'shrine' : 'combat',
+      });
+      nextEncLen = distSoFar + 23 + rng() * 6; // 23..29 units pacing!
+    }
+  }
+  // Vault room marker
+  rooms.push({
+    index: rooms.length,
+    cx: vaultCenterX,
+    cz: vaultCenterZ,
+    w: 16,
+    d: 16,
+    kind: 'secret',
+  });
+  // Final Boss / Exit Arena marker (always last!)
+  rooms.push({
+    index: rooms.length,
+    cx: endPt.x,
+    cz: endPt.z,
+    w: 34,
+    d: 34,
+    kind: location.isMainBoss || location.isMiniBoss ? 'boss' : 'exit',
   });
 
-  const sec2Horiz = s2a.gx === s2b.gx;
-  walls.push({
-    id: `wall_${sec2Id}`,
-    x: secrets[1].wallX,
-    z: secrets[1].wallZ,
-    w: sec2Horiz ? DOOR_WIDTH : WALL_THICK * 1.2,
-    d: sec2Horiz ? WALL_THICK * 1.2 : DOOR_WIDTH,
-    h: WALL_H,
-    secretId: sec2Id,
-  });
+  // Only removable Runic Vault Gate wall (main walls are sculpted organically from corridorField!)
+  const walls: MapWall[] = [
+    {
+      id: `wall_${puzzleId}`,
+      x: vaultGateX,
+      z: vaultGateZ,
+      w: Math.abs(vDirZ) >= Math.abs(vDirX) ? 9.2 : 2.2,
+      d: Math.abs(vDirZ) >= Math.abs(vDirX) ? 2.2 : 9.2,
+      h: 5.8,
+      gateId: puzzleId,
+    },
+  ];
 
-  // Locked Loot Chests (2 Secret Golden Chests + 3 Random Chests in main rooms)
+  // Special Vault Chest (guaranteed 3-4 boosted drops + shards, 2× Mythic/Leg/Boski!) + Alcove Chests
   const variants: Array<'sequence' | 'rotate' | 'symbols'> = ['sequence', 'rotate', 'symbols'];
-  const chests: LockedChestState[] = [];
-
-  const sec1Room = roomCenter(layout.sec1.to);
-  chests.push({
-    id: `chest_${location.globalIndex}_sec1`,
-    x: sec1Room.cx,
-    z: sec1Room.cz,
-    isSecret: true,
-    puzzleSeed: Math.floor(rng() * 100000),
-    puzzleVariant: variants[Math.floor(rng() * variants.length)],
-    opened: false,
-  });
-
-  const sec2Room = roomCenter(layout.sec2.to);
-  chests.push({
-    id: `chest_${location.globalIndex}_sec2`,
-    x: sec2Room.cx,
-    z: sec2Room.cz,
-    isSecret: true,
-    puzzleSeed: Math.floor(rng() * 100000),
-    puzzleVariant: variants[Math.floor(rng() * variants.length)],
-    opened: false,
-  });
-
-  const candidateChestRooms = rooms
-    .filter((r) => r.index !== 0 && r.index !== 8 && r.kind !== 'secret')
-    .map((r) => r.index);
-  for (let c = 0; c < 3 && c < candidateChestRooms.length; c++) {
-    const rIdx = candidateChestRooms[(c + Math.floor(rng() * candidateChestRooms.length)) % candidateChestRooms.length];
-    const rc = roomCenter(rIdx);
-    const offsetX = (rng() > 0.5 ? 1 : -1) * (8 + rng() * 4);
-    const offsetZ = (rng() > 0.5 ? 1 : -1) * (8 + rng() * 4);
+  const chests: LockedChestState[] = [
+    {
+      id: `chest_${location.globalIndex}_vault_special`,
+      x: vaultCenterX,
+      z: vaultCenterZ,
+      isSecret: true,
+      isVaultChest: true,
+      puzzleSeed: Math.floor(rng() * 100000),
+      puzzleVariant: variants[Math.floor(rng() * variants.length)],
+      opened: false,
+    },
+  ];
+  for (let c = 0; c < Math.min(3, alcoves.length); c++) {
+    const al = alcoves[c];
     chests.push({
-      id: `chest_${location.globalIndex}_rnd_${c}`,
-      x: Number((rc.cx + offsetX).toFixed(1)),
-      z: Number((rc.cz + offsetZ).toFixed(1)),
+      id: `chest_${location.globalIndex}_alc_${c}`,
+      x: Number((al.tipX + (rng() - 0.5) * 2.5).toFixed(1)),
+      z: Number((al.tipZ + (rng() - 0.5) * 2.5).toFixed(1)),
       isSecret: false,
       puzzleSeed: Math.floor(rng() * 100000),
-      puzzleVariant: variants[(c + location.globalIndex) % 3],
+      puzzleVariant: variants[(c + Math.floor(rng() * 3)) % 3],
       opened: false,
     });
   }
 
-  // Healing Shrines
-  const shrines = layout.shrineRooms.map((rIdx, idx) => {
-    const rc = roomCenter(rIdx);
-    return {
-      id: `shrine_${location.globalIndex}_${idx}`,
-      x: rc.cx - 10,
-      z: rc.cz + 10,
-      used: false,
-    };
-  });
+  // 2 Healing Shrines placed nicely at ~35% & ~72% along spine clearings
+  const sh1 = sampleSpineAtT(0.35);
+  const sh2 = sampleSpineAtT(0.74);
+  const shrines = [
+    { id: `shrine_${location.globalIndex}_0`, x: Number((sh1.x + sh1.perpX * 2.8).toFixed(1)), z: Number((sh1.z + sh1.perpZ * 2.8).toFixed(1)), used: false },
+    { id: `shrine_${location.globalIndex}_1`, x: Number((sh2.x - sh2.perpX * 2.8).toFixed(1)), z: Number((sh2.z - sh2.perpZ * 2.8).toFixed(1)), used: false },
+  ];
 
-  // Decorative Props around corners of each room (never blocking center/corridors!)
-  const props: MapProp[] = [];
-  for (let i = 0; i < 9; i++) {
-    const { cx, cz } = roomCenter(i);
-    const corners = [
-      { x: cx - 13, z: cz - 13 },
-      { x: cx + 13, z: cz - 13 },
-      { x: cx - 13, z: cz + 13 },
-      { x: cx + 13, z: cz + 13 },
-    ];
-    for (const corner of corners) {
-      if (rng() < 0.85) {
-        const kind = theme.propKinds[Math.floor(rng() * theme.propKinds.length)];
-        props.push({
-          x: corner.x + (rng() - 0.5) * 2.2,
-          z: corner.z + (rng() - 0.5) * 2.2,
-          kind,
-          scale: 0.85 + rng() * 0.45,
-          rotY: rng() * Math.PI * 2,
-        });
-      }
-    }
-  }
-
-  const spawnRoom = roomCenter(0);
-  const exitRoom = roomCenter(8);
-
-  // Place a Wave Challenge Obelisk on wave_obelisk maps (and as a bonus event on every 4th non-boss map)
+  // Cursed Altar in a side alcove (Risk & Reward!)
   let obelisk: WaveObeliskState | undefined;
-  if (location.mutatorId === 'wave_obelisk' || (!location.isMainBoss && !location.isMiniBoss && location.locationInAct % 4 === 0)) {
-    const obRoom = rooms.find((r) => r.kind === 'combat' && r.index !== 0 && r.index !== 8) ?? rooms[1];
+  const altarAlcove = alcoves[alcoves.length - 1];
+  if (altarAlcove && (location.mutatorId === 'wave_obelisk' || rng() < 0.65)) {
     obelisk = {
       id: `obelisk_${location.globalIndex}`,
-      x: obRoom.cx,
-      z: obRoom.cz,
+      x: altarAlcove.tipX,
+      z: altarAlcove.tipZ,
       state: 'idle',
       currentWave: 0,
       maxWaves: 3,
     };
   }
 
+  // Organic Decorative Props + Wall Torches on Bends + Act Pillars in Wide Clearings!
+  const props: MapProp[] = [];
+  for (let i = 2; i < spinePoints.length - 3; i += 2) {
+    const pt = spinePoints[i];
+    const prev = spinePoints[i - 1];
+    const next = spinePoints[i + 1];
+    const tx = next.x - prev.x;
+    const tz = next.z - prev.z;
+    const tl = Math.hypot(tx, tz) || 1;
+    const px = -tz / tl;
+    const pz = tx / tl;
+
+    // Place decorative props tucked neatly along canyon walls (never blocking narrow chokes!)
+    if (pt.r >= 5.2 && rng() < 0.68) {
+      const side = rng() < 0.5 ? 1 : -1;
+      const offset = pt.r - 1.65;
+      const kind = theme.propKinds[Math.floor(rng() * theme.propKinds.length)];
+      props.push({
+        x: Number((pt.x + px * side * offset).toFixed(1)),
+        z: Number((pt.z + pz * side * offset).toFixed(1)),
+        kind,
+        scale: 0.85 + rng() * 0.45,
+        rotY: rng() * Math.PI * 2,
+      });
+    }
+    // Wall torches on bends for warm atmospheric lighting!
+    if (i % 5 === 0) {
+      const side = (i / 5) % 2 === 0 ? 1 : -1;
+      const offset = Math.max(2.6, pt.r - 0.9);
+      props.push({
+        x: Number((pt.x + px * side * offset).toFixed(1)),
+        z: Number((pt.z + pz * side * offset).toFixed(1)),
+        kind: 'torch',
+        scale: 1.0,
+        rotY: rng() * Math.PI * 2,
+      });
+    }
+  }
+
+  const exitPortal = {
+    x: Number((endPt.x + (endPt.x - spinePoints[spinePoints.length - 3].x) * 0.55).toFixed(1)),
+    z: Number((endPt.z + (endPt.z - spinePoints[spinePoints.length - 3].z) * 0.55).toFixed(1)),
+  };
+
   return {
     location,
-    width: CELL_STEP * 3 + 12,
-    height: CELL_STEP * 3 + 12,
-    spawn: { x: spawnRoom.cx, z: spawnRoom.cz },
-    exitPortal: { x: exitRoom.cx + 10, z: exitRoom.cz + 10 },
+    mapSeed,
+    width: Math.round(maxX - minX),
+    height: Math.round(maxZ - minZ),
+    spawn: { x: spinePoints[0].x, z: spinePoints[0].z },
+    exitPortal,
+    corridorField: fieldPartial,
     rooms,
     walls,
     props,
     shrines,
     obelisk,
-    puzzles,
-    secrets,
+    puzzles: [puzzle],
+    secrets: [],
     chests,
   };
 }
 
 /**
- * Resolves circle vs AABB wall collisions against active walls (ignoring opened gates/revealed secrets).
+ * Smooth Curved Wall Sliding collision resolver:
+ * - For organic corridors (corridorField present): evaluates continuous SDF + gradient normal push
+ *   so characters & Dashes slide smoothly along curved/diagonal canyon walls with ZERO snagging!
+ * - For Camp 3D (no corridorField): resolves circle vs AABB walls.
  */
 export function resolveWallCollisions(
   x: number,
@@ -1073,10 +1327,33 @@ export function resolveWallCollisions(
   radius: number,
   walls: MapWall[],
   solvedGateIds: Set<string>,
-  revealedSecretIds: Set<string>
+  revealedSecretIds: Set<string>,
+  corridorField?: CorridorFieldData
 ): { x: number; z: number } {
   let nx = x;
   let nz = z;
+
+  if (corridorField) {
+    const eps = 0.28;
+    for (let iter = 0; iter < 3; iter++) {
+      const d = sampleCorridorSdf(nx, nz, corridorField, solvedGateIds) + radius;
+      if (d <= 0) break;
+      const gx =
+        sampleCorridorSdf(nx + eps, nz, corridorField, solvedGateIds) -
+        sampleCorridorSdf(nx - eps, nz, corridorField, solvedGateIds);
+      const gz =
+        sampleCorridorSdf(nx, nz + eps, corridorField, solvedGateIds) -
+        sampleCorridorSdf(nx, nz - eps, corridorField, solvedGateIds);
+      const gLen = Math.hypot(gx, gz);
+      if (gLen > 1e-5) {
+        nx -= (gx / gLen) * (d + 0.04);
+        nz -= (gz / gLen) * (d + 0.04);
+      } else {
+        break;
+      }
+    }
+    return { x: nx, z: nz };
+  }
 
   for (let pass = 0; pass < 2; pass++) {
     for (const w of walls) {
@@ -1102,7 +1379,6 @@ export function resolveWallCollisions(
           nx += (dx / dist) * overlap;
           nz += (dz / dist) * overlap;
         } else {
-          // Center inside wall -> push out along shortest axis
           const penLeft = Math.abs(nx - minX);
           const penRight = Math.abs(maxX - nx);
           const penTop = Math.abs(nz - minZ);
@@ -1121,9 +1397,9 @@ export function resolveWallCollisions(
 }
 
 /**
- * Swept movement against all active walls/gates/secret walls in tiny sub-steps (0.4 units)
- * so Spacebar Dash, Warrior Charge, Elf Backflip, or any teleport/leap skill can NEVER
- * clip or tunnel through solid walls!
+ * Swept movement with buttery-smooth curved wall sliding:
+ * Spacebar Dash, Warrior Charge, Elf Backflip, and Knockback slide cleanly along curved canyon walls
+ * and NEVER clip or tunnel through rock!
  */
 export function moveWithWallSweep(
   startX: number,
@@ -1133,36 +1409,35 @@ export function moveWithWallSweep(
   radius: number,
   walls: MapWall[],
   solvedGateIds: Set<string>,
-  revealedSecretIds: Set<string>
+  revealedSecretIds: Set<string>,
+  corridorField?: CorridorFieldData
 ): { x: number; z: number } {
   const dx = targetX - startX;
   const dz = targetZ - startZ;
   const dist = Math.hypot(dx, dz);
   if (dist < 0.001) {
-    return resolveWallCollisions(startX, startZ, radius, walls, solvedGateIds, revealedSecretIds);
+    return resolveWallCollisions(startX, startZ, radius, walls, solvedGateIds, revealedSecretIds, corridorField);
   }
-  const stepSize = 0.4;
+  const stepSize = 0.45;
   const steps = Math.max(1, Math.ceil(dist / stepSize));
   let cx = startX;
   let cz = startZ;
   for (let i = 1; i <= steps; i++) {
     const nextX = cx + dx / steps;
     const nextZ = cz + dz / steps;
-    const res = resolveWallCollisions(nextX, nextZ, radius, walls, solvedGateIds, revealedSecretIds);
+    const res = resolveWallCollisions(nextX, nextZ, radius, walls, solvedGateIds, revealedSecretIds, corridorField);
     cx = res.x;
     cz = res.z;
-    // If pushed back hard against a wall along the intended axis, stop advancing through it
-    const pushed = Math.hypot(res.x - nextX, res.z - nextZ);
-    if (pushed > stepSize * 0.65) {
-      break;
+    if (!corridorField) {
+      const pushed = Math.hypot(res.x - nextX, res.z - nextZ);
+      if (pushed > stepSize * 0.65) {
+        break;
+      }
     }
   }
   return { x: cx, z: cz };
 }
 
-/**
- * Exact 2D Slab Ray-vs-AABB intersection: returns parametric t in [0, 1] of earliest hit, or null.
- */
 function segmentIntersectsWallT(
   x1: number,
   z1: number,
@@ -1215,10 +1490,6 @@ function segmentIntersectsWallT(
   return tmin >= 0 && tmin <= 1 ? tmin : null;
 }
 
-/**
- * Returns true if there is an unobstructed straight line of sight between (x1,z1) and (x2,z2)
- * with no active wall, closed rune gate, or unrevealed secret wall blocking it.
- */
 export function hasLineOfSight(
   x1: number,
   z1: number,
@@ -1226,8 +1497,23 @@ export function hasLineOfSight(
   z2: number,
   walls: MapWall[],
   solvedGateIds: Set<string>,
-  revealedSecretIds: Set<string>
+  revealedSecretIds: Set<string>,
+  corridorField?: CorridorFieldData
 ): boolean {
+  if (corridorField) {
+    const dist = Math.hypot(x2 - x1, z2 - z1);
+    const steps = Math.max(2, Math.ceil(dist / 1.25));
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const px = x1 + (x2 - x1) * t;
+      const pz = z1 + (z2 - z1) * t;
+      if (sampleCorridorSdf(px, pz, corridorField, solvedGateIds) > 0.25) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   for (const w of walls) {
     if (w.gateId && solvedGateIds.has(w.gateId)) continue;
     if (w.secretId && revealedSecretIds.has(w.secretId)) continue;
@@ -1238,10 +1524,6 @@ export function hasLineOfSight(
   return true;
 }
 
-/**
- * Clips a targeted skill point (targetX, targetZ) to stop cleanly just in front of the
- * first solid wall along the ray from (startX, startZ), preventing casting into other rooms!
- */
 export function clipPointToLineOfSight(
   startX: number,
   startZ: number,
@@ -1249,8 +1531,27 @@ export function clipPointToLineOfSight(
   targetZ: number,
   walls: MapWall[],
   solvedGateIds: Set<string>,
-  revealedSecretIds: Set<string>
+  revealedSecretIds: Set<string>,
+  corridorField?: CorridorFieldData
 ): { x: number; z: number; blocked: boolean } {
+  if (corridorField) {
+    const dist = Math.hypot(targetX - startX, targetZ - startZ);
+    const steps = Math.max(2, Math.ceil(dist / 1.0));
+    let lastGoodX = startX;
+    let lastGoodZ = startZ;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const px = startX + (targetX - startX) * t;
+      const pz = startZ + (targetZ - startZ) * t;
+      if (sampleCorridorSdf(px, pz, corridorField, solvedGateIds) > 0.1) {
+        return { x: lastGoodX, z: lastGoodZ, blocked: true };
+      }
+      lastGoodX = px;
+      lastGoodZ = pz;
+    }
+    return { x: targetX, z: targetZ, blocked: false };
+  }
+
   let bestT = 1;
   let blocked = false;
   for (const w of walls) {

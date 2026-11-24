@@ -693,6 +693,19 @@ export function App() {
       pushToast('💰 Hi-hi-hi! Pojawił się Goblin Skarbnik! Masz 20s!', '#fde047');
     });
 
+    sock.on('juice:vault_unlocked', () => {
+      soundEngine.playSecretOpen();
+      soundEngine.playLevelUp();
+      engineRef.current?.addScreenShake(0.62);
+      setBoskiFlashKey((k) => k + 1);
+      showBanner(
+        'boski',
+        '👑 WROTA SKARBCA OTWARTE!',
+        'Odbierz Specjalną Skrzynię Skarbca — 4 gwarantowane przedmioty z 2× szansą na Mityk/Legenda/Boski!',
+        4800
+      );
+    });
+
     sock.on('player:revive_credit', (payload: { allyName: string }) => {
       soundEngine.playHeal();
       setProfile((prev) => ({

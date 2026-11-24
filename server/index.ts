@@ -62,6 +62,7 @@ import {
   isHardcoreLocation,
   moveWithWallSweep,
   resolveWallCollisions,
+  rollDynamicMapSeed,
   TOTAL_LOCATIONS,
 } from '../shared/world.js';
 import {
@@ -645,7 +646,8 @@ function applyKnockbackWithWallSlam(
     enemy.radius,
     room.mapData.walls,
     getSolvedGateIds(room.mapData),
-    getRevealedSecretIds(room.mapData)
+    getRevealedSecretIds(room.mapData),
+    room.mapData.corridorField
   );
 
   const intendedDist = force;
@@ -1091,11 +1093,12 @@ function initializeLocation(room: GameRoom, globalLocation: number, riftFloor = 
       ? 60
       : Math.max(1, Math.min(TOTAL_LOCATIONS, globalLocation));
 
+  const dynamicSeed = rollDynamicMapSeed();
   const map = isCamp
     ? generateCampMap()
     : room.riftFloor > 0
-      ? generateRiftMap(room.riftFloor)
-      : generateMapData(room.globalLocation);
+      ? generateRiftMap(room.riftFloor, dynamicSeed)
+      : generateMapData(room.globalLocation, dynamicSeed);
 
   room.mapData = map;
   room.enemies.clear();
@@ -1274,9 +1277,9 @@ function initializeLocation(room: GameRoom, globalLocation: number, riftFloor = 
   const spawnedEnemies: ServerEnemy[] = [];
 
   for (const r of map.rooms) {
-    if (r.kind === 'spawn') continue;
+    if (r.kind === 'spawn' || r.kind === 'secret') continue;
 
-    if (r.index === 8) {
+    if (r.kind === 'boss' || r.kind === 'exit') {
       if (loc.isMainBoss) {
         const bossDef = getMainBossByAct(loc.act);
         const scaledHp = isRift
@@ -1434,18 +1437,30 @@ function initializeLocation(room: GameRoom, globalLocation: number, riftFloor = 
     }
 
     const basePackSize =
-      r.kind === 'secret' ? 3 : r.kind === 'puzzle' ? 4 : r.kind === 'shrine' ? 5 : 6;
+      r.kind === 'shrine' ? 5 : 4;
     const scaledCount = Math.max(2, Math.round(basePackSize * countMult));
+    const spreadMax = Math.max(2.2, Math.min(7.5, r.w * 0.36));
 
     for (let k = 0; k < scaledCount; k++) {
       const arch = actRoster[Math.floor(rng() * actRoster.length)];
       const isElite =
-        (k === 0 || (isBounty && k === 1)) && (r.kind === 'combat' || r.kind === 'secret' || (isBounty && r.kind === 'shrine'));
+        (k === 0 && r.kind === 'shrine') || (isBounty && k === 0);
       const affix = isElite ? pickEliteAffix(rng) : undefined;
       const angle = rng() * Math.PI * 2;
-      const dist = 3 + rng() * 9.5;
-      const ex = r.cx + Math.cos(angle) * dist;
-      const ez = r.cz + Math.sin(angle) * dist;
+      const dist = 1.4 + rng() * spreadMax;
+      const rawEx = r.cx + Math.cos(angle) * dist;
+      const rawEz = r.cz + Math.sin(angle) * dist;
+      const safePos = resolveWallCollisions(
+        rawEx,
+        rawEz,
+        arch.radius * 1.3,
+        map.walls,
+        new Set<string>(),
+        new Set<string>(),
+        map.corridorField
+      );
+      const ex = safePos.x;
+      const ez = safePos.z;
       const hp = Math.round(baseMobHp * arch.hpMult * (isElite ? 2.4 : 1.0));
       const dmg = Math.round(baseMobDmg * arch.dmgMult * (isElite ? 1.32 : 1.0));
 
@@ -1908,7 +1923,7 @@ function damageEnemy(
     const oz = originPos ? originPos.z : attacker.z;
     const solvedGates = getSolvedGateIds(room.mapData);
     const revealedSecrets = getRevealedSecretIds(room.mapData);
-    if (!hasLineOfSight(ox, oz, enemy.x, enemy.z, room.mapData.walls, solvedGates, revealedSecrets)) {
+    if (!hasLineOfSight(ox, oz, enemy.x, enemy.z, room.mapData.walls, solvedGates, revealedSecrets, room.mapData.corridorField)) {
       return 0;
     }
   }
@@ -2197,7 +2212,8 @@ function damageEnemy(
               0.85,
               room.mapData.walls,
               getSolvedGateIds(room.mapData),
-              getRevealedSecretIds(room.mapData)
+              getRevealedSecretIds(room.mapData),
+              room.mapData.corridorField
             );
             pl.x = pushed.x;
             pl.z = pushed.z;
@@ -2845,14 +2861,18 @@ function pickBossAbility(
   return weighted[0].ab;
 }
 
-function isInsideBossChamber(boss: ServerEnemy, x: number, z: number, margin = 17.8): boolean {
-  return Math.abs(x - boss.homeX) <= margin && Math.abs(z - boss.homeZ) <= margin;
+function isInsideBossChamber(boss: ServerEnemy, x: number, z: number, margin = 20.5): boolean {
+  return Math.hypot(x - boss.homeX, z - boss.homeZ) <= margin;
 }
 
-function clampToBossChamber(boss: ServerEnemy, x: number, z: number, halfLimit = 14.8): { x: number; z: number } {
+function clampToBossChamber(boss: ServerEnemy, x: number, z: number, halfLimit = 16.5): { x: number; z: number } {
+  const dx = x - boss.homeX;
+  const dz = z - boss.homeZ;
+  const d = Math.hypot(dx, dz);
+  if (d <= halfLimit) return { x, z };
   return {
-    x: Math.max(boss.homeX - halfLimit, Math.min(boss.homeX + halfLimit, x)),
-    z: Math.max(boss.homeZ - halfLimit, Math.min(boss.homeZ + halfLimit, z)),
+    x: boss.homeX + (dx / d) * halfLimit,
+    z: boss.homeZ + (dz / d) * halfLimit,
   };
 }
 
@@ -4589,7 +4609,8 @@ function tickRoom(room: GameRoom) {
         e.radius,
         map.walls,
         solvedGates,
-        revealedSecrets
+        revealedSecrets,
+        map.corridorField
       );
       e.x = resolved.x;
       e.z = resolved.z;
@@ -4790,7 +4811,7 @@ function tickRoom(room: GameRoom) {
     const aggroRange = e.tier === 'boss' || e.tier === 'miniboss' ? 23 : 19;
 
     if (!e.aggro && dist <= aggroRange) {
-      if (hasLineOfSight(e.x, e.z, target.x, target.z, map.walls, solvedGates, revealedSecrets)) {
+      if (hasLineOfSight(e.x, e.z, target.x, target.z, map.walls, solvedGates, revealedSecrets, map.corridorField)) {
         e.aggro = true;
         if (isBossUnit && !e.combatStartedAt) {
           e.combatStartedAt = now;
@@ -5175,7 +5196,7 @@ function tickRoom(room: GameRoom) {
       const step = e.speed * speedMult * dt;
       const nx = e.x + (dx / Math.max(0.01, dist)) * step;
       const nz = e.z + (dz / Math.max(0.01, dist)) * step;
-      const resolved = resolveWallCollisions(nx, nz, e.radius, map.walls, solvedGates, revealedSecrets);
+      const resolved = resolveWallCollisions(nx, nz, e.radius, map.walls, solvedGates, revealedSecrets, map.corridorField);
       if (isBossUnit) {
         const clamped = clampToBossChamber(e, resolved.x, resolved.z);
         e.x = clamped.x;
@@ -5374,7 +5395,8 @@ function tickRoom(room: GameRoom) {
               0.85,
               room.mapData.walls,
               solvedGates,
-              revealedSecrets
+              revealedSecrets,
+              room.mapData.corridorField
             );
             p.x = pushed.x;
             p.z = pushed.z;
@@ -5779,13 +5801,14 @@ function handlePressurePlateStep(room: GameRoom, puz: GeneratedMapData['puzzles'
 function solveWorldPuzzle(room: GameRoom, puz: GeneratedMapData['puzzles'][0]) {
   if (puz.solved) return;
   puz.solved = true;
-  pushVfx(room, { kind: 'puzzle_solve', x: puz.gateX, z: puz.gateZ, radius: 5, color: '#38bdf8' });
-  const bonusXp = Math.round(targetLocationXpPool(room.globalLocation) * 0.08);
-  io.to(room.code).emit('player:xp_gain', { amount: bonusXp, source: 'Zagadka Runiczna' });
+  pushVfx(room, { kind: 'puzzle_solve', x: puz.gateX, z: puz.gateZ, radius: 7.5, color: '#fde047' });
+  const bonusXp = Math.round(targetLocationXpPool(room.globalLocation) * 0.1);
+  io.to(room.code).emit('player:xp_gain', { amount: bonusXp, source: 'Zagadka Komnaty Skarbca' });
+  io.to(room.code).emit('juice:vault_unlocked');
   io.to(room.code).emit('game:banner', {
-    type: 'secret',
-    title: 'ZAGADKA ROZWIĄZANA!',
-    subtitle: 'Runiczna Brama została otwarta! Droga naprzód stoi otworem.',
+    type: 'boski',
+    title: '🔓 KOMNATA SKARBCA OTWARTA!',
+    subtitle: 'Runiczne Wrota rozsunęły się! W środku czeka Specjalna Skrzynia Skarbca (2× Szansa na Mityczny/Leg/Boski)!',
   });
 }
 
@@ -5839,7 +5862,8 @@ function handleSkillCast(
     rawTargetZ,
     map.walls,
     solvedGates,
-    revealedSecrets
+    revealedSecrets,
+    map.corridorField
   );
   const targetX = clippedTarget.x;
   const targetZ = clippedTarget.z;
@@ -5935,7 +5959,7 @@ function handleSkillCast(
 
     case 'szarza_z_ogluszeniem': {
       const dmg = player.stats.ad * (skillDef.damageScaleAd ?? 1.55) * rankMult;
-      const resolved = moveWithWallSweep(player.x, player.z, targetX, targetZ, 0.9, map.walls, solvedGates, revealedSecrets);
+      const resolved = moveWithWallSweep(player.x, player.z, targetX, targetZ, 0.9, map.walls, solvedGates, revealedSecrets, map.corridorField);
       pushVfx(room, { kind: 'charge', x: player.x, z: player.z, tx: resolved.x, tz: resolved.z, radius: skillDef.radius, color: '#d99e26', casterId: player.id });
       player.x = resolved.x;
       player.z = resolved.z;
@@ -6050,7 +6074,7 @@ function handleSkillCast(
       }
       const backX = player.x - dirX * 5.2;
       const backZ = player.z - dirZ * 5.2;
-      const resolved = moveWithWallSweep(player.x, player.z, backX, backZ, 0.9, map.walls, solvedGates, revealedSecrets);
+      const resolved = moveWithWallSweep(player.x, player.z, backX, backZ, 0.9, map.walls, solvedGates, revealedSecrets, map.corridorField);
       player.x = resolved.x;
       player.z = resolved.z;
       player.invulnUntil = now + 320;
@@ -6801,7 +6825,8 @@ io.on('connection', (socket: Socket) => {
         0.85,
         room.mapData.walls,
         getSolvedGateIds(room.mapData),
-        getRevealedSecretIds(room.mapData)
+        getRevealedSecretIds(room.mapData),
+        room.mapData.corridorField
       );
       let fx = resolved.x;
       let fz = resolved.z;
@@ -6918,7 +6943,8 @@ io.on('connection', (socket: Socket) => {
       0.85,
       room.mapData.walls,
       getSolvedGateIds(room.mapData),
-      getRevealedSecretIds(room.mapData)
+      getRevealedSecretIds(room.mapData),
+      room.mapData.corridorField
     );
     p.x = resolved.x;
     p.z = resolved.z;
@@ -7285,42 +7311,74 @@ io.on('connection', (socket: Socket) => {
 
     for (const puz of map.puzzles) {
       if (puz.solved) continue;
+      // Read Runic Clue Tablet beside the Vault Gate (for Ancient Obelisks puzzle!)
+      if (puz.cluePos && Math.hypot(p.x - puz.cluePos.x, p.z - puz.cluePos.z) <= 4.4) {
+        io.to(room.code).emit('game:banner', {
+          type: 'secret',
+          title: '📜 TABLICA SZYFRU SKARBCA',
+          subtitle: puz.clueText || 'Ustaw 3 Starożytne Obeliski w zaułkach zgodnie z szyfrem!',
+        });
+        return;
+      }
       for (let i = 0; i < puz.nodes.length; i++) {
         const node = puz.nodes[i];
-        if (Math.hypot(p.x - node.x, p.z - node.z) <= 4.2) {
-          if (puz.type === 'rotating_statues') {
-            puz.statueAngles[i] = (puz.statueAngles[i] + 1) % 4;
-            const aligned = puz.statueAngles[i] === 0;
-            pushCombatText(
-              room,
-              node.x,
-              3.0,
-              node.z,
-              aligned ? 'POSĄG WYRÓWNANY ✓' : 'OBRÓT 90°',
-              aligned ? 'heal' : 'shield',
-              false,
-              true
-            );
-            if (puz.statueAngles.every((a) => a === 0)) solveWorldPuzzle(room, puz);
-            return;
-          }
-          if (puz.type === 'symbol_match') {
+        if (Math.hypot(p.x - node.x, p.z - node.z) <= 4.4) {
+          if (puz.type === 'ancient_obelisks' || puz.type === 'symbol_match') {
             puz.pillarSymbols[i] = (puz.pillarSymbols[i] + 1) % 4;
-            const symbols = ['☀️', '🌙', '⚡', '🔥'];
+            const symbols = ['🔥 Ogień', '❄️ Mróz', '⚡ Burza', '🌑 Cień'];
             const matched = puz.pillarSymbols[i] === puz.targetSymbols[i];
             pushCombatText(
               room,
               node.x,
-              3.2,
+              3.4,
               node.z,
-              `${symbols[puz.pillarSymbols[i]]}${matched ? ' ✓' : ''}`,
+              `${node.label || `Obelisk ${i + 1}`}: ${symbols[puz.pillarSymbols[i]]}${matched ? ' ✓' : ''}`,
               matched ? 'heal' : 'magical',
-              false,
+              matched,
               true
             );
             if (puz.pillarSymbols.every((s, idx) => s === puz.targetSymbols[idx])) {
               solveWorldPuzzle(room, puz);
             }
+            return;
+          }
+          if (puz.type === 'lights_out' && puz.lightsState) {
+            // Coupled Switches: toggles i AND neighbors (i-1, i+1)!
+            puz.lightsState[i] = !puz.lightsState[i];
+            if (i > 0) puz.lightsState[i - 1] = !puz.lightsState[i - 1];
+            if (i < puz.lightsState.length - 1) puz.lightsState[i + 1] = !puz.lightsState[i + 1];
+            const litCount = puz.lightsState.filter(Boolean).length;
+            pushCombatText(
+              room,
+              node.x,
+              3.2,
+              node.z,
+              `⚡ ZAPALONE RUNY: ${litCount}/5`,
+              litCount === 5 ? 'heal' : 'shield',
+              litCount === 5,
+              true
+            );
+            if (puz.lightsState.every(Boolean)) {
+              solveWorldPuzzle(room, puz);
+            }
+            return;
+          }
+          if (puz.type === 'mirror_beam' || puz.type === 'rotating_statues') {
+            puz.statueAngles[i] = (puz.statueAngles[i] + 1) % 4;
+            const targetAng = puz.targetAngles ? puz.targetAngles[i] : 0;
+            const aligned = puz.statueAngles[i] === targetAng;
+            pushCombatText(
+              room,
+              node.x,
+              3.2,
+              node.z,
+              aligned ? '☀️ PROMIEŃ SKIEROWANY ✓' : '🔄 OBRÓT LUSTRA 90°',
+              aligned ? 'heal' : 'shield',
+              aligned,
+              true
+            );
+            const allAligned = puz.statueAngles.every((a, idx) => a === (puz.targetAngles ? puz.targetAngles[idx] : 0));
+            if (allAligned) solveWorldPuzzle(room, puz);
             return;
           }
         }
@@ -7485,11 +7543,24 @@ io.on('connection', (socket: Socket) => {
     if (!chest || chest.opened) return;
     chest.opened = true;
 
-    pushVfx(room, { kind: 'chest_open', x: chest.x, z: chest.z, radius: 4, color: '#d9a826' });
-    const rolls = chest.isSecret ? 3 : 2;
-    const luck = chest.isSecret ? 1.5 : 1.1;
+    pushVfx(room, { kind: 'chest_open', x: chest.x, z: chest.z, radius: chest.isVaultChest ? 6.5 : 4, color: '#fde047' });
+    const rolls = chest.isVaultChest ? 4 : chest.isSecret ? 3 : 2;
+    // Special Vault Chest guarantees 4 items + shard pack with 2x Mythic/Legendary/Boski chance!
+    const luck = chest.isVaultChest ? 2.15 : chest.isSecret ? 1.5 : 1.1;
     for (let i = 0; i < rolls; i++) {
-      spawnEquipmentDrop(room, chest.x, chest.z, room.globalLocation, i === 0, luck, p.classId);
+      spawnEquipmentDrop(room, chest.x, chest.z, room.globalLocation, chest.isVaultChest || i === 0, luck, p.classId);
+    }
+    if (chest.isVaultChest) {
+      const shardRar: Rarity = room.globalLocation >= 61 ? 'boski' : room.globalLocation >= 31 ? 'legendarny' : 'mityczny';
+      const shardAmt = room.globalLocation >= 61 ? 2 : 4;
+      for (const pl of room.players.values()) {
+        io.to(pl.socketId).emit('loot:granted', { shardDrop: { rarity: shardRar, amount: shardAmt } });
+      }
+      io.to(room.code).emit('game:banner', {
+        type: 'boski',
+        title: '👑 SPECJALNA SKRZYNIA SKARBCA OTWARTA!',
+        subtitle: `4 gwarantowane łupy (2× Szansa Mityczny/Leg/Boski) + ${shardAmt}× Odłamki dla drużyny!`,
+      });
     }
     const chestXp = Math.round(targetLocationXpPool(room.globalLocation) * 0.04);
     io.to(room.code).emit('player:xp_gain', { amount: chestXp, source: 'Skrzynia z Łupem' });

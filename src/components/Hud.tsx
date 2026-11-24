@@ -91,6 +91,8 @@ export const Hud: React.FC<HudProps> = ({
   onLeaveToLobby,
 }) => {
   const minimapRef = useRef<HTMLCanvasElement | null>(null);
+  const exploredMaskRef = useRef<Uint8Array | null>(null);
+  const exploredSeedKeyRef = useRef<string>('');
   const [hoveredPassive, setHoveredPassive] = useState<number | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
 
@@ -111,7 +113,7 @@ export const Hud: React.FC<HudProps> = ({
     (profile.runeShards.ignarok || 0) +
     (profile.runeShards.aeternus || 0);
 
-  // Render Minimap Canvas
+  // Render Minimap Canvas (Real-Shape Organic Corridor + Live Fog of War, plus Camp 3D fallback!)
   useEffect(() => {
     const canvas = minimapRef.current;
     if (!canvas || !mapData || !snapshot) return;
@@ -121,6 +123,265 @@ export const Hud: React.FC<HudProps> = ({
     const W = canvas.width;
     const H = canvas.height;
     ctx.clearRect(0, 0, W, H);
+
+    const field = mapData.corridorField;
+    const miniNow = Date.now();
+    const solvedGateIds = new Set(snapshot.puzzles.filter((p) => p.solved).map((p) => p.id));
+
+    if (field && field.walkMask && field.gridCols > 0 && field.gridRows > 0) {
+      // =========================================================
+      // REAL-SHAPE ORGANIC CORRIDOR + SIDE ALCOVES + FOG OF WAR
+      // =========================================================
+      const cols = field.gridCols;
+      const rows = field.gridRows;
+      const cellSize = field.gridCellSize;
+      const mask = field.walkMask;
+      const seedKey = `${mapData.location.globalIndex}_${field.mapSeed}_${cols}_${rows}`;
+
+      if (exploredSeedKeyRef.current !== seedKey || !exploredMaskRef.current || exploredMaskRef.current.length !== cols * rows) {
+        exploredSeedKeyRef.current = seedKey;
+        exploredMaskRef.current = new Uint8Array(cols * rows);
+      }
+      const explored = exploredMaskRef.current;
+
+      // Reveal Fog of War around every party member (radius ~28 world units)
+      const revealRadius = 28;
+      const rCells = Math.ceil(revealRadius / cellSize);
+      const revealAt = (wx: number, wz: number) => {
+        const cc = Math.floor((wx - field.minX) / cellSize);
+        const cr = Math.floor((wz - field.minZ) / cellSize);
+        const rSq = revealRadius * revealRadius;
+        const rMin = Math.max(0, cr - rCells);
+        const rMax = Math.min(rows - 1, cr + rCells);
+        const cMin = Math.max(0, cc - rCells);
+        const cMax = Math.min(cols - 1, cc + rCells);
+        for (let r = rMin; r <= rMax; r++) {
+          const wzCell = field.minZ + (r + 0.5) * cellSize;
+          const dz = wzCell - wz;
+          for (let c = cMin; c <= cMax; c++) {
+            const wxCell = field.minX + (c + 0.5) * cellSize;
+            const dx = wxCell - wx;
+            if (dx * dx + dz * dz <= rSq) {
+              explored[r * cols + c] = 1;
+            }
+          }
+        }
+      };
+
+      revealAt(mapData.spawn.x, mapData.spawn.z);
+      for (const p of snapshot.players) {
+        revealAt(p.x, p.z);
+      }
+
+      const isPointExplored = (wx: number, wz: number) => {
+        const c = Math.floor((wx - field.minX) / cellSize);
+        const r = Math.floor((wz - field.minZ) / cellSize);
+        if (c < 0 || c >= cols || r < 0 || r >= rows) return false;
+        return explored[r * cols + c] === 1;
+      };
+
+      // Deep Fog of War background
+      ctx.fillStyle = '#070a14';
+      ctx.fillRect(0, 0, W, H);
+
+      const spanX = Math.max(20, field.maxX - field.minX);
+      const spanZ = Math.max(20, field.maxZ - field.minZ);
+      const pad = 9;
+      const scale = Math.min((W - pad * 2) / spanX, (H - pad * 2) / spanZ);
+      const offsetX = (W - spanX * scale) * 0.5;
+      const offsetY = (H - spanZ * scale) * 0.5;
+      const toX = (wx: number) => offsetX + (wx - field.minX) * scale;
+      const toY = (wz: number) => offsetY + (wz - field.minZ) * scale;
+      const cellPx = Math.max(1.35, cellSize * scale + 0.45);
+      const vaultSolved = snapshot.puzzles.every((p) => p.solved);
+
+      // 1. Draw explored organic corridor contour (walls rim + walkable floor + vault chamber)
+      for (let r = 0; r < rows; r++) {
+        const py = offsetY + r * cellSize * scale;
+        for (let c = 0; c < cols; c++) {
+          const idx = r * cols + c;
+          if (explored[idx] === 0) continue;
+          const chCode = mask.charCodeAt(idx);
+          const px = offsetX + c * cellSize * scale;
+
+          if (chCode === 49) {
+            // '1' Walkable organic corridor & side alcoves
+            ctx.fillStyle = '#334155';
+            ctx.fillRect(px, py, cellPx, cellPx);
+          } else if (chCode === 50) {
+            // '2' Vault Chamber
+            ctx.fillStyle = vaultSolved ? 'rgba(250, 204, 21, 0.45)' : 'rgba(56, 189, 248, 0.22)';
+            ctx.fillRect(px, py, cellPx, cellPx);
+          } else {
+            // '0' Solid canyon rock — draw crisp rim outline ONLY if adjacent to explored walkable cell
+            let adjWalk = false;
+            if (c > 0 && mask.charCodeAt(idx - 1) !== 48 && explored[idx - 1]) adjWalk = true;
+            else if (c < cols - 1 && mask.charCodeAt(idx + 1) !== 48 && explored[idx + 1]) adjWalk = true;
+            else if (r > 0 && mask.charCodeAt(idx - cols) !== 48 && explored[idx - cols]) adjWalk = true;
+            else if (r < rows - 1 && mask.charCodeAt(idx + cols) !== 48 && explored[idx + cols]) adjWalk = true;
+            if (adjWalk) {
+              ctx.fillStyle = '#64748b';
+              ctx.fillRect(px, py, cellPx, cellPx);
+            }
+          }
+        }
+      }
+
+      // 2. Exit Portal / Branching Portals (visible when explored or unlocked)
+      if (snapshot.branchPortals && snapshot.branchPortals.length > 0) {
+        for (const bp of snapshot.branchPortals) {
+          ctx.fillStyle = bp.color || '#22d3ee';
+          ctx.beginPath();
+          ctx.arc(toX(bp.x), toY(bp.z), 4.0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else if (snapshot.exitUnlocked || isPointExplored(mapData.exitPortal.x, mapData.exitPortal.z)) {
+        ctx.fillStyle = snapshot.exitUnlocked ? '#22d3ee' : '#94a3b8';
+        ctx.beginPath();
+        ctx.arc(toX(mapData.exitPortal.x), toY(mapData.exitPortal.z), 4.2, 0, Math.PI * 2);
+        ctx.fill();
+        if (snapshot.exitUnlocked) {
+          ctx.strokeStyle = '#e0f2fe';
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+        }
+      }
+
+      // 3. Vault Gate + Puzzle Obelisks / Switches / Mirrors / Clue Tablet (when discovered!)
+      const vg = field.vaultGatePos;
+      if (vg && (vaultSolved || isPointExplored(vg.x, vg.z))) {
+        const vx = toX(vg.x);
+        const vy = toY(vg.z);
+        ctx.save();
+        ctx.translate(vx, vy);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = vaultSolved ? '#fde047' : '#38bdf8';
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 1.2;
+        ctx.fillRect(-3.4, -3.4, 6.8, 6.8);
+        ctx.strokeRect(-3.4, -3.4, 6.8, 6.8);
+        ctx.restore();
+      }
+
+      for (const puz of snapshot.puzzles) {
+        if (puz.solved) continue;
+        if (puz.cluePos && isPointExplored(puz.cluePos.x, puz.cluePos.z)) {
+          ctx.fillStyle = '#fde047';
+          ctx.fillRect(toX(puz.cluePos.x) - 2.3, toY(puz.cluePos.z) - 2.3, 4.6, 4.6);
+        }
+        for (const node of puz.nodes) {
+          if (!isPointExplored(node.x, node.z)) continue;
+          ctx.fillStyle = '#c084fc';
+          ctx.beginPath();
+          ctx.arc(toX(node.x), toY(node.z), 2.7, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // 4. Wandering Alchemist Varek (when discovered)
+      if (snapshot.merchant && isPointExplored(snapshot.merchant.x, snapshot.merchant.z)) {
+        ctx.fillStyle = '#e879f9';
+        ctx.beginPath();
+        ctx.arc(toX(snapshot.merchant.x), toY(snapshot.merchant.z), 3.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 5. Discovered Unopened Chests (Special Vault Chest glows gold!)
+      for (const ch of snapshot.chests) {
+        if (ch.opened) continue;
+        if (!isPointExplored(ch.x, ch.z) && !(ch.isVaultChest && vaultSolved)) continue;
+        ctx.fillStyle = ch.isVaultChest ? '#fde047' : ch.isSecret ? '#fbbf24' : '#f59e0b';
+        const sz = ch.isVaultChest ? 5.6 : 4.2;
+        ctx.fillRect(toX(ch.x) - sz / 2, toY(ch.z) - sz / 2, sz, sz);
+        if (ch.isVaultChest) {
+          ctx.strokeStyle = '#ef4444';
+          ctx.lineWidth = 1.2;
+          ctx.strokeRect(toX(ch.x) - sz / 2, toY(ch.z) - sz / 2, sz, sz);
+        }
+      }
+
+      // 6. Discovered Unused Shrines & Cursed Altar
+      for (const sh of snapshot.shrines) {
+        if (sh.used || !isPointExplored(sh.x, sh.z)) continue;
+        ctx.fillStyle = '#4ade80';
+        ctx.beginPath();
+        ctx.arc(toX(sh.x), toY(sh.z), 2.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (snapshot.obelisk && snapshot.obelisk.state !== 'completed' && isPointExplored(snapshot.obelisk.x, snapshot.obelisk.z)) {
+        ctx.fillStyle = snapshot.obelisk.state === 'active' ? '#f43f5e' : '#38bdf8';
+        ctx.beginPath();
+        ctx.arc(toX(snapshot.obelisk.x), toY(snapshot.obelisk.z), 3.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 7. Enemies inside revealed Fog of War
+      for (const e of snapshot.enemies) {
+        if (!e.alive || e.tier === 'root_trap' || e.tier === 'barrel') continue;
+        if (!isPointExplored(e.x, e.z)) continue;
+        ctx.fillStyle =
+          e.tier === 'goblin'
+            ? '#fde047'
+            : e.tier === 'totem'
+              ? '#c084fc'
+              : e.tier === 'boss' || e.tier === 'miniboss'
+                ? '#f43f5e'
+                : e.tier === 'elite'
+                  ? '#fb923c'
+                  : '#ef4444';
+        const r =
+          e.tier === 'boss'
+            ? 4.4
+            : e.tier === 'miniboss' || e.tier === 'goblin'
+              ? 3.5
+              : e.tier === 'totem' || e.tier === 'elite'
+                ? 2.4
+                : 1.6;
+        ctx.beginPath();
+        ctx.arc(toX(e.x), toY(e.z), r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 8. Players (Local Hero, Teammates, Downed Rescue Cross)
+      for (const p of snapshot.players) {
+        const isMe = p.id === localPlayerId;
+        const px = toX(p.x);
+        const pz = toY(p.z);
+        const isDowned = !p.alive && (p.downedUntil || 0) > miniNow;
+
+        if (isDowned) {
+          const pulse = 5.2 + Math.sin(miniNow * 0.012) * 2.0;
+          ctx.strokeStyle = '#f43f5e';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(px, pz, pulse, 0, Math.PI * 2);
+          ctx.stroke();
+
+          ctx.fillStyle = '#e11d48';
+          ctx.beginPath();
+          ctx.arc(px, pz, 3.8, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(px - 2.3, pz - 0.8, 4.6, 1.6);
+          ctx.fillRect(px - 0.8, pz - 2.3, 1.6, 4.6);
+          continue;
+        }
+
+        ctx.fillStyle = isMe ? '#fde047' : '#38bdf8';
+        ctx.strokeStyle = '#111118';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(px, pz, isMe ? 3.8 : 3.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      return;
+    }
+
+    // =========================================================
+    // FALLBACK MINIMAP (Camp 3D Hub & Legacy Maps)
+    // =========================================================
     ctx.fillStyle = '#0f1221';
     ctx.fillRect(0, 0, W, H);
 
@@ -130,12 +391,10 @@ export const Hud: React.FC<HudProps> = ({
     const toY = (wz: number) => H / 2 + wz * scale;
 
     const revealedSecIds = new Set(snapshot.secrets.filter((s) => s.revealed).map((s) => s.id));
-    const solvedGateIds = new Set(snapshot.puzzles.filter((p) => p.solved).map((p) => p.id));
 
     // Rooms
     for (const r of mapData.rooms) {
       if (r.kind === 'secret') {
-        // Only show secret room brightly once a secret is revealed (dim dashed hint otherwise)
         ctx.fillStyle = 'rgba(251, 191, 36, 0.14)';
       } else if (r.kind === 'boss') {
         ctx.fillStyle = 'rgba(244, 63, 94, 0.25)';
@@ -160,7 +419,7 @@ export const Hud: React.FC<HudProps> = ({
       );
     }
 
-    // Exit Portal & Branching Hades Portals
+    // Exit Portal & Branching Portals
     if (snapshot.branchPortals && snapshot.branchPortals.length > 0) {
       for (const bp of snapshot.branchPortals) {
         ctx.fillStyle = bp.color || '#22d3ee';
@@ -175,7 +434,7 @@ export const Hud: React.FC<HudProps> = ({
       ctx.fill();
     }
 
-    // Wandering Merchant (Charon)
+    // Wandering Merchant (Alchemik Varek)
     if (snapshot.merchant) {
       ctx.fillStyle = '#e879f9';
       ctx.beginPath();
@@ -251,7 +510,6 @@ export const Hud: React.FC<HudProps> = ({
     }
 
     // Players (Teammates + Local Hero + Pulsing Downed Rescue Marker!)
-    const miniNow = Date.now();
     for (const p of snapshot.players) {
       const isMe = p.id === localPlayerId;
       const px = toX(p.x);
@@ -271,7 +529,6 @@ export const Hud: React.FC<HudProps> = ({
         ctx.arc(px, pz, 4.2, 0, Math.PI * 2);
         ctx.fill();
 
-        // White medical cross
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(px - 2.6, pz - 0.9, 5.2, 1.8);
         ctx.fillRect(px - 0.9, pz - 2.6, 1.8, 5.2);
@@ -1335,12 +1592,12 @@ export const Hud: React.FC<HudProps> = ({
         <div className="comic-panel-sm" style={{ padding: 6 }}>
           <canvas
             ref={minimapRef}
-            width={164}
-            height={164}
+            width={184}
+            height={184}
             style={{ display: 'block', borderRadius: 6, border: '2px solid #111118' }}
           />
-          <div style={{ fontSize: 10, color: '#94a3b8', textAlign: 'center', marginTop: 4, fontWeight: 700 }}>
-            🟡 Ty • 🔵 Sojusznik • 🟠 Skrzynia • 🌀 Portal
+          <div style={{ fontSize: 9.5, color: '#94a3b8', textAlign: 'center', marginTop: 4, fontWeight: 700 }}>
+            🟡 Ty • 💎 Wrota • 🟣 Zagadka • 👑 Skarbiec
           </div>
         </div>
 

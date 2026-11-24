@@ -36,6 +36,7 @@ export interface BuiltMapHandles {
       type: WorldPuzzleState['type'];
       nodeMeshes: THREE.Object3D[];
       nodeIndicators: THREE.Mesh[];
+      beamMeshes?: THREE.Mesh[];
     }
   >;
   exitPortalRing: THREE.Mesh;
@@ -86,26 +87,34 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
       type: WorldPuzzleState['type'];
       nodeMeshes: THREE.Object3D[];
       nodeIndicators: THREE.Mesh[];
+      beamMeshes?: THREE.Mesh[];
     }
   >();
   const animatedProps: THREE.Object3D[] = [];
 
+  const field = map.corridorField;
+  const floorW = field ? Math.max(180, field.maxX - field.minX + 90) : 156;
+  const floorD = field ? Math.max(180, field.maxZ - field.minZ + 90) : 156;
+  const floorCX = field ? (field.minX + field.maxX) * 0.5 : 0;
+  const floorCZ = field ? (field.minZ + field.maxZ) * 0.5 : 0;
+
   if (map.location.act === 4) {
-    const lavaGeo = new THREE.PlaneGeometry(240, 240);
+    const lavaGeo = new THREE.PlaneGeometry(floorW + 120, floorD + 120);
     const lavaMat = new THREE.MeshBasicMaterial({ color: '#7f1d1d' });
     const lava = new THREE.Mesh(lavaGeo, lavaMat);
     lava.rotation.x = -Math.PI / 2;
-    lava.position.y = -1.2;
+    lava.position.set(floorCX, -1.2, floorCZ);
     root.add(lava);
   }
 
-  // Organic hand-painted Act floor (NO square checkerboard grid!)
+  // Organic hand-painted Act floor (dynamically sized to cover the entire winding corridor!)
   const floorTex = createComicFloorTexture(theme.floorColor, theme.floorAccentColor, map.location.act);
-  floorTex.repeat.set(17, 17);
-  const floorGeo = new THREE.PlaneGeometry(156, 156);
+  floorTex.repeat.set(Math.max(14, Math.round(floorW / 9.2)), Math.max(14, Math.round(floorD / 9.2)));
+  const floorGeo = new THREE.PlaneGeometry(floorW, floorD);
   const floorMat = new THREE.MeshLambertMaterial({ map: floorTex });
   const floorMesh = new THREE.Mesh(floorGeo, floorMat);
   floorMesh.rotation.x = -Math.PI / 2;
+  floorMesh.position.set(floorCX, 0, floorCZ);
   floorMesh.receiveShadow = true;
   root.add(floorMesh);
 
@@ -193,21 +202,222 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     windFreq: 2.3,
   });
 
+  // =========================================================
+  // ORGANIC 3D CARVED CANYON / CAVERN WALLS (SDF CONTOUR INSTANCED ROCKS)
+  // Zero rectangular tile boxes — irregular displaced polygonal rock cliffs per Act!
+  // =========================================================
+  if (field && field.walkMask && field.gridCols > 0 && field.gridRows > 0) {
+    const cols = field.gridCols;
+    const rows = field.gridRows;
+    const cellSize = field.gridCellSize;
+    const mask = field.walkMask;
+
+    const rimCells: Array<{ x: number; z: number; h: number; sx: number; sz: number; rot: number; hasCap: boolean }> = [];
+    const backCells: Array<{ x: number; z: number; h: number; sx: number; sz: number; rot: number }> = [];
+
+    const hash2 = (cx: number, cz: number, salt: number) => {
+      const s = Math.sin(cx * 127.1 + cz * 311.7 + (field.mapSeed % 9973) * 0.13 + salt * 74.7) * 43758.5453;
+      return s - Math.floor(s);
+    };
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (mask.charCodeAt(r * cols + c) !== 48) continue; // only solid ('0') cells
+
+        let minDistSq = 99;
+        for (let dr = -2; dr <= 2; dr++) {
+          const rr = r + dr;
+          if (rr < 0 || rr >= rows) continue;
+          for (let dc = -2; dc <= 2; dc++) {
+            const cc = c + dc;
+            if (cc < 0 || cc >= cols) continue;
+            if (mask.charCodeAt(rr * cols + cc) !== 48) {
+              const dSq = dr * dr + dc * dc;
+              if (dSq < minDistSq) minDistSq = dSq;
+            }
+          }
+        }
+        if (minDistSq > 5) continue;
+
+        const jx = (hash2(c, r, 1) - 0.5) * cellSize * 0.42;
+        const jz = (hash2(c, r, 2) - 0.5) * cellSize * 0.42;
+        const wx = field.minX + (c + 0.5) * cellSize + jx;
+        const wz = field.minZ + (r + 0.5) * cellSize + jz;
+        const rot = hash2(c, r, 3) * Math.PI * 2;
+        const sx = 1.05 + hash2(c, r, 4) * 0.46;
+        const sz = 1.05 + hash2(c, r, 5) * 0.46;
+
+        if (minDistSq <= 2) {
+          // Inner carved canyon rim wall
+          const h = 4.2 + hash2(c, r, 6) * 2.5;
+          rimCells.push({ x: wx, z: wz, h, sx, sz, rot, hasCap: hash2(c, r, 7) > 0.52 });
+        } else {
+          // Outer rocky ridge backdrop (prevents seeing empty void past walls)
+          const h = 5.6 + hash2(c, r, 8) * 3.1;
+          backCells.push({ x: wx, z: wz, h, sx: sx * 1.18, sz: sz * 1.18, rot });
+        }
+      }
+    }
+
+    // Build organic sculpted polygonal rock column geometry with deterministic vertex jitter!
+    const buildSculptedRockGeo = (radius: number, radialSegs: number, heightSegs: number, jitterAmp: number) => {
+      const geo = new THREE.CylinderGeometry(radius * 0.78, radius * 1.16, 1, radialSegs, heightSegs);
+      const pos = geo.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < pos.count; i++) {
+        const vx = pos.getX(i);
+        const vy = pos.getY(i);
+        const vz = pos.getZ(i);
+        const ang = Math.atan2(vz, vx);
+        const disp =
+          Math.sin(ang * 3.0 + vy * 5.2) * jitterAmp +
+          Math.cos(ang * 5.0 - vy * 3.7) * (jitterAmp * 0.55);
+        pos.setX(i, vx * (1 + disp));
+        pos.setZ(i, vz * (1 + disp));
+      }
+      geo.computeVertexNormals();
+      return geo;
+    };
+
+    // Act-tailored geological profile (Act 1 stone catacombs, Act 2 layered canyon, Act 3 root crags, Act 4 jagged obsidian!)
+    const segsByAct = map.location.act === 4 ? 6 : map.location.act === 2 ? 8 : 7;
+    const jitterByAct = map.location.act === 4 ? 0.24 : map.location.act === 3 ? 0.2 : 0.16;
+    const rimRockGeo = buildSculptedRockGeo(cellSize * 0.68, segsByAct, 3, jitterByAct);
+    const backRockGeo = buildSculptedRockGeo(cellSize * 0.78, 6, 2, 0.19);
+    const capRockGeo = new THREE.DodecahedronGeometry(cellSize * 0.54, 1);
+    {
+      const cPos = capRockGeo.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < cPos.count; i++) {
+        const vx = cPos.getX(i);
+        const vy = cPos.getY(i);
+        const vz = cPos.getZ(i);
+        const n = 1 + Math.sin(vx * 2.1 + vz * 2.7) * 0.14;
+        cPos.setXYZ(i, vx * n, vy * 0.52 * n, vz * n);
+      }
+      capRockGeo.computeVertexNormals();
+    }
+
+    const dummy = new THREE.Object3D();
+
+    if (rimCells.length > 0) {
+      const rimInst = new THREE.InstancedMesh(rimRockGeo, wallMat, rimCells.length);
+      rimInst.castShadow = true;
+      rimInst.receiveShadow = true;
+      const capItems = rimCells.filter((rc) => rc.hasCap);
+      const capInst =
+        capItems.length > 0 ? new THREE.InstancedMesh(capRockGeo, wallCapMat, capItems.length) : null;
+      if (capInst) {
+        capInst.castShadow = true;
+        capInst.receiveShadow = true;
+      }
+      let capIdx = 0;
+      for (let i = 0; i < rimCells.length; i++) {
+        const rc = rimCells[i];
+        dummy.position.set(rc.x, rc.h * 0.5 - 0.18, rc.z);
+        dummy.rotation.set(0, rc.rot, 0);
+        dummy.scale.set(rc.sx, rc.h, rc.sz);
+        dummy.updateMatrix();
+        rimInst.setMatrixAt(i, dummy.matrix);
+
+        if (rc.hasCap && capInst) {
+          dummy.position.set(rc.x, rc.h - 0.12, rc.z);
+          dummy.rotation.set(0, rc.rot * 1.4, 0);
+          dummy.scale.set(rc.sx * 1.05, 1.0, rc.sz * 1.05);
+          dummy.updateMatrix();
+          capInst.setMatrixAt(capIdx++, dummy.matrix);
+        }
+      }
+      rimInst.instanceMatrix.needsUpdate = true;
+      root.add(rimInst);
+      if (capInst) {
+        capInst.instanceMatrix.needsUpdate = true;
+        root.add(capInst);
+      }
+    }
+
+    if (backCells.length > 0) {
+      const backMat = createToonMaterial(theme.wallTopColor, { map: wallTex, rimStrength: 0.16 });
+      const backInst = new THREE.InstancedMesh(backRockGeo, backMat, backCells.length);
+      backInst.receiveShadow = true;
+      for (let i = 0; i < backCells.length; i++) {
+        const bc = backCells[i];
+        dummy.position.set(bc.x, bc.h * 0.5 - 0.2, bc.z);
+        dummy.rotation.set(0, bc.rot, 0);
+        dummy.scale.set(bc.sx, bc.h, bc.sz);
+        dummy.updateMatrix();
+        backInst.setMatrixAt(i, dummy.matrix);
+      }
+      backInst.instanceMatrix.needsUpdate = true;
+      root.add(backInst);
+    }
+
+    // Subtle glowing ground rim foliage / stones along inner rim for organic richness!
+    const decoSample = rimCells.filter((_, i) => i % 5 === 0);
+    if (decoSample.length > 0) {
+      const bushInst = new THREE.InstancedMesh(shrubGeo, shrubMat, decoSample.length);
+      for (let i = 0; i < decoSample.length; i++) {
+        const dc = decoSample[i];
+        dummy.position.set(dc.x, dc.h + 0.15, dc.z);
+        dummy.rotation.set(0, dc.rot, 0);
+        dummy.scale.set(1.25, 0.8, 1.25);
+        dummy.updateMatrix();
+        bushInst.setMatrixAt(i, dummy.matrix);
+      }
+      bushInst.instanceMatrix.needsUpdate = true;
+      root.add(bushInst);
+    }
+  }
+
   for (const w of map.walls) {
     if (w.gateId) {
       const gGroup = new THREE.Group();
       gGroup.position.set(w.x, 0, w.z);
-      const gateMesh = createComicMesh(
-        createRoundedBoxGeometry(w.w, w.h, w.d, 0.6, 5),
-        '#1a7594',
-        0.032,
-        { emissive: '#0284c7', emissiveIntensity: 0.28 }
-      );
-      gateMesh.position.y = w.h / 2;
-      gGroup.add(gateMesh);
-      const lbl = makeSpriteLabel('🔒 BRAMA RUN', '#38bdf8', '#bae6fd');
-      lbl.position.y = w.h + 1.1;
-      gGroup.add(lbl);
+      if (field && field.vaultGatePos) {
+        gGroup.rotation.y = -field.vaultGatePos.angle;
+        const gateSpan = Math.max(7.2, field.vaultGatePos.width || 8.4);
+        const gateMesh = createComicMesh(
+          createRoundedBoxGeometry(1.75, w.h + 1.1, gateSpan, 0.45, 5),
+          '#164e63',
+          0.036,
+          { emissive: '#0284c7', emissiveIntensity: 0.36 }
+        );
+        gateMesh.position.y = (w.h + 1.1) / 2;
+        gGroup.add(gateMesh);
+
+        // Twin glowing runic arch pillars flanking the Vault Gate!
+        for (const side of [-1, 1]) {
+          const pil = createComicMesh(
+            new THREE.CylinderGeometry(0.75, 0.95, w.h + 2.0, 12),
+            '#1e293b',
+            0.03,
+            { emissive: '#0369a1', emissiveIntensity: 0.25 }
+          );
+          pil.position.set(0, (w.h + 2.0) / 2, side * (gateSpan * 0.5 + 0.55));
+          const orb = createComicMesh(new THREE.OctahedronGeometry(0.55, 0), '#38bdf8', 0.02, {
+            emissive: '#38bdf8',
+            emissiveIntensity: 0.7,
+          });
+          orb.position.set(0, w.h + 2.55, side * (gateSpan * 0.5 + 0.55));
+          gGroup.add(pil, orb);
+          animatedProps.push(orb);
+        }
+
+        const lbl = makeSpriteLabel('🔒 WROTA SKARBCA', '#38bdf8', '#fde047');
+        lbl.scale.set(3.8, 0.92, 1);
+        lbl.position.y = w.h + 2.75;
+        gGroup.add(lbl);
+      } else {
+        const gateMesh = createComicMesh(
+          createRoundedBoxGeometry(w.w, w.h, w.d, 0.6, 5),
+          '#1a7594',
+          0.032,
+          { emissive: '#0284c7', emissiveIntensity: 0.28 }
+        );
+        gateMesh.position.y = w.h / 2;
+        gGroup.add(gateMesh);
+        const lbl = makeSpriteLabel('🔒 BRAMA RUN', '#38bdf8', '#bae6fd');
+        lbl.position.y = w.h + 1.1;
+        gGroup.add(lbl);
+      }
       root.add(gGroup);
       gateWalls.set(w.gateId, gGroup);
       continue;
@@ -320,11 +530,247 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     }
   }
 
-  // In-World Logic Puzzles (rounded soft pillars, plates & statues!)
+  // In-World Logic Puzzles (Legacy + 3 Hard Multi-Step Vault Puzzles!)
   const symbols = ['☀️', '🌙', '⚡', '🔥'];
+  const obeliskSymbolNames = ['🔥 OGIEŃ', '❄️ MRÓZ', '⚡ BURZA', '🌑 CIEŃ'];
+  const obeliskSymbolColors = ['#f97316', '#38bdf8', '#fde047', '#c084fc'];
+
   for (const puz of map.puzzles) {
     const nodeMeshes: THREE.Object3D[] = [];
     const nodeIndicators: THREE.Mesh[] = [];
+    const beamMeshes: THREE.Mesh[] = [];
+
+    if (puz.type === 'ancient_obelisks') {
+      // Runic Clue Tablet beside the closed Vault Gate showing the encrypted 3-symbol code!
+      if (puz.cluePos) {
+        const tGroup = new THREE.Group();
+        tGroup.position.set(puz.cluePos.x, 0, puz.cluePos.z);
+        tGroup.add(createContactShadow(1.3, 0.44));
+        const slab = createComicMesh(createRoundedBoxGeometry(2.1, 2.75, 0.58, 0.18, 5), '#312e81', 0.032, {
+          emissive: '#4f46e5',
+          emissiveIntensity: 0.28,
+        });
+        slab.position.y = 1.4;
+        const runeGlow = new THREE.Mesh(
+          new THREE.PlaneGeometry(1.5, 1.7),
+          new THREE.MeshBasicMaterial({ color: '#fde047', transparent: true, opacity: 0.3, side: THREE.DoubleSide })
+        );
+        runeGlow.position.set(0, 1.55, 0.32);
+        const clueLbl = makeSpriteLabel(`📜 ${puz.clueText || 'SZYFR OBELISKÓW [F]'}`, '#fde047', '#fef9c3');
+        clueLbl.scale.set(5.4, 1.05, 1);
+        clueLbl.position.y = 3.65;
+        tGroup.add(slab, runeGlow, clueLbl);
+        root.add(tGroup);
+      }
+
+      // 3 Rotatable Ancient Obelisks hidden in side alcoves!
+      puz.nodes.forEach((node, idx) => {
+        const nGroup = new THREE.Group();
+        nGroup.position.set(node.x, 0, node.z);
+        nGroup.add(createContactShadow(1.3, 0.45));
+
+        const ped = createComicMesh(new THREE.CylinderGeometry(0.95, 1.25, 0.65, 8), '#334155', 0.03);
+        ped.position.y = 0.32;
+        const obeliskBody = createComicMesh(new THREE.CylinderGeometry(0.55, 0.85, 3.1, 6), '#1e293b', 0.034, {
+          emissive: '#312e81',
+          emissiveIntensity: 0.22,
+        });
+        obeliskBody.position.y = 2.15;
+
+        const initSym = puz.pillarSymbols[idx] || 0;
+        const indicator = new THREE.Mesh(
+          new THREE.OctahedronGeometry(0.62, 0),
+          createToonMaterial(obeliskSymbolColors[initSym % 4], {
+            emissive: obeliskSymbolColors[initSym % 4],
+            emissiveIntensity: 0.65,
+          })
+        );
+        indicator.position.y = 4.25;
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(1.25, 1.55, 24),
+          new THREE.MeshBasicMaterial({
+            color: obeliskSymbolColors[initSym % 4],
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.55,
+          })
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.08;
+
+        const lbl = makeSpriteLabel(`🗿 ${node.label || `OBELISK ${idx + 1}`} [F]`, '#a855f7', '#fef08a');
+        lbl.scale.set(3.2, 0.82, 1);
+        lbl.position.y = 5.35;
+
+        nGroup.add(ped, obeliskBody, indicator, ring, lbl);
+        root.add(nGroup);
+        nodeMeshes.push(ring);
+        nodeIndicators.push(indicator);
+      });
+
+      puzzleVisuals.set(puz.id, { type: puz.type, nodeMeshes, nodeIndicators });
+      continue;
+    }
+
+    if (puz.type === 'lights_out') {
+      // 5 Coupled Runic Switches arrayed before the Vault Gate!
+      const headerLbl = makeSpriteLabel('⚡ ZAPAL WSZYSTKIE 5 RUN JEDNOCZEŚNIE [F]', '#38bdf8', '#fde047');
+      headerLbl.scale.set(5.4, 0.98, 1);
+      headerLbl.position.set(puz.x, 4.1, puz.z);
+      root.add(headerLbl);
+
+      puz.nodes.forEach((node, idx) => {
+        const nGroup = new THREE.Group();
+        nGroup.position.set(node.x, 0, node.z);
+        nGroup.add(createContactShadow(1.15, 0.42));
+
+        const pad = createComicMesh(new THREE.CylinderGeometry(1.18, 1.38, 0.36, 18), '#334155', 0.028);
+        pad.position.y = 0.18;
+
+        const isOn = !!(puz.lightsState && puz.lightsState[idx]);
+        const crystal = new THREE.Mesh(
+          new THREE.OctahedronGeometry(0.58, 0),
+          createToonMaterial(isOn ? '#22c55e' : '#475569', {
+            emissive: isOn ? '#16a34a' : '#0f172a',
+            emissiveIntensity: isOn ? 0.75 : 0.08,
+          })
+        );
+        crystal.scale.set(0.85, 1.45, 0.85);
+        crystal.position.y = 1.45;
+
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(1.22, 1.52, 24),
+          new THREE.MeshBasicMaterial({
+            color: isOn ? '#fde047' : '#475569',
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.72,
+          })
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.06;
+
+        const lbl = makeSpriteLabel(`RUNA ${idx + 1} [F]`, '#38bdf8', '#e0f2fe');
+        lbl.scale.set(2.2, 0.68, 1);
+        lbl.position.y = 2.75;
+
+        nGroup.add(pad, crystal, ring, lbl);
+        root.add(nGroup);
+        nodeMeshes.push(ring);
+        nodeIndicators.push(crystal);
+      });
+
+      puzzleVisuals.set(puz.id, { type: puz.type, nodeMeshes, nodeIndicators });
+      continue;
+    }
+
+    if (puz.type === 'mirror_beam') {
+      // Emitter Crystal + 4 Rotatable Mirror Statues + 5 Live Golden Laser Beam Segments!
+      const headerLbl = makeSpriteLabel('🪞 SKIERUJ PROMIEŃ ŚWIATŁA DO WROT [F]', '#fde047', '#fef9c3');
+      headerLbl.scale.set(5.4, 0.98, 1);
+      headerLbl.position.set(puz.x, 4.35, puz.z);
+      root.add(headerLbl);
+
+      if (puz.beamEmitter) {
+        const eGroup = new THREE.Group();
+        eGroup.position.set(puz.beamEmitter.x, 0, puz.beamEmitter.z);
+        eGroup.add(createContactShadow(1.25, 0.42));
+        const ePed = createComicMesh(new THREE.CylinderGeometry(0.85, 1.15, 0.9, 16), '#78350f', 0.03);
+        ePed.position.y = 0.45;
+        const eOrb = createComicMesh(new THREE.SphereGeometry(0.64, 16, 12), '#fde047', 0.025, {
+          emissive: '#f59e0b',
+          emissiveIntensity: 0.85,
+        });
+        eOrb.position.y = 1.85;
+        const eLbl = makeSpriteLabel('☀️ EMITER ŚWIATŁA', '#f59e0b', '#fef08a');
+        eLbl.scale.set(3.0, 0.78, 1);
+        eLbl.position.y = 3.15;
+        eGroup.add(ePed, eOrb, eLbl);
+        root.add(eGroup);
+        animatedProps.push(eOrb);
+      }
+
+      puz.nodes.forEach((node, idx) => {
+        const nGroup = new THREE.Group();
+        nGroup.position.set(node.x, 0, node.z);
+        nGroup.add(createContactShadow(1.2, 0.42));
+
+        const ped = createComicMesh(new THREE.CylinderGeometry(0.92, 1.12, 0.56, 18), '#475569', 0.028);
+        ped.position.y = 0.28;
+        const statueBody = new THREE.Group();
+        statueBody.position.y = 0.56;
+        const torso = createComicMesh(new THREE.CapsuleGeometry(0.42, 1.05, 8, 14), '#94a3b8', 0.028);
+        torso.position.y = 0.95;
+        // Reflective golden mirror shield mounted on front of statue!
+        const mirrorFrame = createComicMesh(createRoundedBoxGeometry(1.38, 1.28, 0.2, 0.08, 4), '#f59e0b', 0.024, {
+          emissive: '#b45309',
+          emissiveIntensity: 0.28,
+        });
+        mirrorFrame.position.set(0, 1.25, 0.58);
+        const mirrorGlass = new THREE.Mesh(
+          new THREE.PlaneGeometry(1.12, 1.02),
+          new THREE.MeshBasicMaterial({ color: '#fef9c3', side: THREE.DoubleSide })
+        );
+        mirrorGlass.position.set(0, 1.25, 0.7);
+        const pointer = createComicMesh(new THREE.ConeGeometry(0.24, 0.7, 10), '#fde047', 0.02, {
+          emissive: '#eab308',
+          emissiveIntensity: 0.6,
+        });
+        pointer.rotation.x = Math.PI / 2;
+        pointer.position.set(0, 1.25, 1.12);
+        statueBody.add(torso, mirrorFrame, mirrorGlass, pointer);
+
+        const indicator = new THREE.Mesh(
+          new THREE.RingGeometry(1.18, 1.44, 24),
+          new THREE.MeshBasicMaterial({
+            color: '#d97706',
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.65,
+          })
+        );
+        indicator.rotation.x = -Math.PI / 2;
+        indicator.position.y = 0.06;
+
+        const lbl = makeSpriteLabel(`🪞 LUSTRO ${idx + 1} [F]`, '#f59e0b', '#fef08a');
+        lbl.scale.set(2.4, 0.72, 1);
+        lbl.position.y = 3.25;
+
+        nGroup.add(ped, statueBody, indicator, lbl);
+        root.add(nGroup);
+        nodeMeshes.push(statueBody);
+        nodeIndicators.push(indicator);
+      });
+
+      // Build 5 live golden laser beam segments: Emitter -> M0 -> M1 -> M2 -> M3 -> Vault Lock!
+      const chainPts: Array<{ x: number; z: number }> = [];
+      if (puz.beamEmitter) chainPts.push(puz.beamEmitter);
+      for (const nd of puz.nodes) chainPts.push({ x: nd.x, z: nd.z });
+      chainPts.push(puz.beamLock || { x: puz.gateX, z: puz.gateZ });
+
+      for (let segIdx = 0; segIdx < chainPts.length - 1; segIdx++) {
+        const a = chainPts[segIdx];
+        const b = chainPts[segIdx + 1];
+        const dist = Math.max(0.2, Math.hypot(b.x - a.x, b.z - a.z));
+        const beam = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.14, 0.14, dist, 10),
+          new THREE.MeshBasicMaterial({
+            color: '#fde047',
+            transparent: true,
+            opacity: 0.85,
+          })
+        );
+        beam.position.set((a.x + b.x) * 0.5, 1.85, (a.z + b.z) * 0.5);
+        beam.rotation.z = Math.PI / 2;
+        beam.rotation.y = -Math.atan2(b.z - a.z, b.x - a.x);
+        beam.visible = segIdx === 0;
+        root.add(beam);
+        beamMeshes.push(beam);
+      }
+
+      puzzleVisuals.set(puz.id, { type: puz.type, nodeMeshes, nodeIndicators, beamMeshes });
+      continue;
+    }
 
     const centerCrystal = createComicMesh(new THREE.SphereGeometry(0.75, 16, 12), '#2a9fd6', 0.028, {
       emissive: '#0284c7',
@@ -341,7 +787,7 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     } else if (puz.type === 'rotating_statues') {
       hintText = 'OBRÓĆ POSĄGI DO KRYSZTAŁU [F]';
     } else {
-      hintText = `SYMBOLE: ${puz.targetSymbols.map((s) => symbols[s]).join(' ')}`;
+      hintText = `SYMBOLE: ${puz.targetSymbols.map((s) => symbols[s] || obeliskSymbolNames[s % 4]).join(' ')}`;
     }
     const hintSprite = makeSpriteLabel(hintText, '#38bdf8', '#fde047');
     hintSprite.scale.set(4.8, 1.0, 1);
@@ -446,15 +892,18 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     puzzleVisuals.set(puz.id, { type: puz.type, nodeMeshes, nodeIndicators });
   }
 
-  // Plump Barrel-Lidded Cartoon Treasure Chests (NO blocky boxes!)
+  // Plump Barrel-Lidded Cartoon Treasure Chests (including Special Vault Chest 2× Drop!)
   for (const ch of map.chests) {
     const cGroup = new THREE.Group();
     cGroup.position.set(ch.x, 0, ch.z);
-    cGroup.add(createContactShadow(1.15, 0.44));
+    if (ch.isVaultChest) cGroup.scale.setScalar(1.32);
+    cGroup.add(createContactShadow(ch.isVaultChest ? 1.55 : 1.15, 0.46));
 
-    const baseColor = ch.isSecret ? '#cf8d1b' : '#854519';
-    const trimColor = ch.isSecret ? '#f0ca56' : '#d6a442';
-    const body = createComicMesh(createRoundedBoxGeometry(1.55, 0.85, 1.1, 0.22, 6), baseColor, 0.028);
+    const baseColor = ch.isVaultChest ? '#b91c1c' : ch.isSecret ? '#cf8d1b' : '#854519';
+    const trimColor = ch.isVaultChest ? '#fde047' : ch.isSecret ? '#f0ca56' : '#d6a442';
+    const body = createComicMesh(createRoundedBoxGeometry(1.55, 0.85, 1.1, 0.22, 6), baseColor, 0.028,
+      ch.isVaultChest ? { emissive: '#991b1b', emissiveIntensity: 0.24 } : undefined
+    );
     body.position.y = 0.44;
 
     // Domed barrel lid!
@@ -464,7 +913,10 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
       new THREE.CylinderGeometry(0.55, 0.55, 1.56, 16, 1, false, 0, Math.PI),
       trimColor,
       0.025,
-      { emissive: ch.isSecret ? '#b45309' : '#000000', emissiveIntensity: ch.isSecret ? 0.18 : 0 }
+      {
+        emissive: ch.isVaultChest ? '#eab308' : ch.isSecret ? '#b45309' : '#000000',
+        emissiveIntensity: ch.isVaultChest ? 0.36 : ch.isSecret ? 0.18 : 0,
+      }
     );
     lidDome.rotation.z = Math.PI / 2;
     lidDome.rotation.x = -Math.PI / 2;
@@ -473,12 +925,12 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     lidGroup.add(lidDome, lock);
 
     const glow = new THREE.Mesh(
-      new THREE.RingGeometry(1.18, 1.42, 28),
+      new THREE.RingGeometry(1.18, ch.isVaultChest ? 1.72 : 1.42, 28),
       new THREE.MeshBasicMaterial({
-        color: ch.isSecret ? '#e6c253' : '#56b4e9',
+        color: ch.isVaultChest ? '#fde047' : ch.isSecret ? '#e6c253' : '#56b4e9',
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: 0.36,
+        opacity: ch.isVaultChest ? 0.65 : 0.36,
         depthWrite: false,
       })
     );
@@ -486,12 +938,16 @@ export function buildWorldMap(map: GeneratedMapData): BuiltMapHandles {
     glow.position.y = 0.05;
 
     const lbl = makeSpriteLabel(
-      ch.isSecret ? '✨ ZŁOTA SKRZYNIA [F]' : '🔐 SKRZYNIA [F]',
-      ch.isSecret ? '#f59e0b' : '#38bdf8',
+      ch.isVaultChest
+        ? '👑 SKRZYNIA SKARBCA (2× DROP) [F]'
+        : ch.isSecret
+          ? '✨ ZŁOTA SKRZYNIA [F]'
+          : '🔐 SKRZYNIA [F]',
+      ch.isVaultChest ? '#fde047' : ch.isSecret ? '#f59e0b' : '#38bdf8',
       '#fef08a'
     );
-    lbl.scale.set(2.9, 0.78, 1);
-    lbl.position.y = 2.2;
+    lbl.scale.set(ch.isVaultChest ? 4.3 : 2.9, ch.isVaultChest ? 0.92 : 0.78, 1);
+    lbl.position.y = ch.isVaultChest ? 2.55 : 2.2;
 
     cGroup.add(body, lidGroup, glow, lbl);
     root.add(cGroup);
@@ -952,6 +1408,7 @@ export function syncWorldMapVisuals(
   }
 
   const symbolColors = ['#d9a826', '#2a9fd6', '#8b4bc9', '#d9641e'];
+  const obeliskSymbolColors = ['#f97316', '#38bdf8', '#fde047', '#c084fc'];
   for (const puz of puzzles) {
     const gate = handles.gateWalls.get(puz.id);
     if (gate) gate.visible = !puz.solved;
@@ -981,6 +1438,70 @@ export function syncWorldMapVisuals(
         mat.color.set(puz.solved ? '#22a355' : symbolColors[sym % 4]);
         ind.rotation.y = elapsedSec * 1.6;
       });
+    } else if (puz.type === 'ancient_obelisks') {
+      vis.nodeIndicators.forEach((ind, idx) => {
+        const sym = puz.pillarSymbols[idx] || 0;
+        const col = puz.solved ? '#22c55e' : obeliskSymbolColors[sym % 4];
+        const mat = ind.material as THREE.MeshToonMaterial;
+        mat.color.set(col);
+        mat.emissive.set(col);
+        ind.rotation.y = elapsedSec * 1.8;
+        ind.position.y = 4.25 + Math.sin(elapsedSec * 2.5 + idx) * 0.16;
+        const ring = vis.nodeMeshes[idx] as THREE.Mesh | undefined;
+        if (ring) {
+          (ring.material as THREE.MeshBasicMaterial).color.set(col);
+        }
+      });
+    } else if (puz.type === 'lights_out') {
+      vis.nodeIndicators.forEach((ind, idx) => {
+        const on = puz.solved || !!(puz.lightsState && puz.lightsState[idx]);
+        const mat = ind.material as THREE.MeshToonMaterial;
+        mat.color.set(on ? '#22c55e' : '#475569');
+        mat.emissive.set(on ? '#16a34a' : '#0f172a');
+        mat.emissiveIntensity = on ? 0.85 : 0.08;
+        ind.rotation.y = elapsedSec * (on ? 2.4 : 0.4);
+        ind.position.y = on ? 1.6 + Math.sin(elapsedSec * 3 + idx) * 0.14 : 1.18;
+        const ring = vis.nodeMeshes[idx] as THREE.Mesh | undefined;
+        if (ring) {
+          (ring.material as THREE.MeshBasicMaterial).color.set(on ? '#fde047' : '#334155');
+        }
+      });
+    } else if (puz.type === 'mirror_beam') {
+      const targets = puz.targetAngles || [0, 0, 0, 0];
+      let chainAlignedCount = 0;
+      let chainBroken = false;
+      vis.nodeMeshes.forEach((statue, idx) => {
+        const node = puz.nodes[idx];
+        const nextPt =
+          idx + 1 < puz.nodes.length
+            ? puz.nodes[idx + 1]
+            : puz.beamLock || { x: puz.gateX, z: puz.gateZ };
+        const idealRotY = Math.atan2(nextPt.x - node.x, nextPt.z - node.z);
+        const curStep = puz.statueAngles[idx] || 0;
+        const targetStep = targets[idx] || 0;
+        const deltaStep = (curStep - targetStep + 4) % 4;
+        statue.rotation.y = idealRotY + deltaStep * (Math.PI / 2);
+
+        const isAligned = puz.solved || deltaStep === 0;
+        if (!chainBroken && isAligned) {
+          chainAlignedCount++;
+        } else {
+          chainBroken = true;
+        }
+        const ind = vis.nodeIndicators[idx];
+        if (ind) {
+          (ind.material as THREE.MeshBasicMaterial).color.set(isAligned ? '#22c55e' : '#d97706');
+        }
+      });
+      if (vis.beamMeshes) {
+        vis.beamMeshes.forEach((beam, segIdx) => {
+          // Segment 0 (Emitter -> M0) is always on; Segment k+1 lights up as soon as mirrors 0..k are aligned!
+          beam.visible = puz.solved || segIdx <= chainAlignedCount;
+          const bMat = beam.material as THREE.MeshBasicMaterial;
+          bMat.color.set(puz.solved ? '#4ade80' : '#fde047');
+          bMat.opacity = 0.72 + Math.sin(elapsedSec * 7 + segIdx) * 0.16;
+        });
+      }
     }
   }
 

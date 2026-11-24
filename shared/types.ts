@@ -311,7 +311,13 @@ export interface GroundLoot {
   pickedUp: boolean;
 }
 
-export type PuzzleType = 'pressure_plates' | 'rotating_statues' | 'symbol_match';
+export type PuzzleType =
+  | 'pressure_plates'
+  | 'rotating_statues'
+  | 'symbol_match'
+  | 'ancient_obelisks'
+  | 'lights_out'
+  | 'mirror_beam';
 
 export interface WorldPuzzleState {
   id: string;
@@ -321,18 +327,28 @@ export interface WorldPuzzleState {
   z: number;
   gateX: number;
   gateZ: number;
+  gateAngle?: number;
   gateHorizontal: boolean;
   solved: boolean;
   // For pressure_plates: sequence of indices [0,1,2,3] to step on in order
   targetSequence: number[];
   currentSequence: number[];
-  // For rotating_statues: angles 0..3 (x90 deg), target is all 0 (facing center)
+  // For rotating_statues / mirror_beam: discrete orientations 0..3
   statueAngles: number[];
-  // For symbol_match: 3 pillars with symbol index 0..3 matching targetSymbols
+  targetAngles?: number[];
+  // For symbol_match / ancient_obelisks: 3 pillars with symbol index 0..3 matching targetSymbols
   pillarSymbols: number[];
   targetSymbols: number[];
+  // For lights_out: 5 coupled runic switches (all true = solved!)
+  lightsState?: boolean[];
+  // For mirror_beam: emitter crystal source & lock receiver coordinates
+  beamEmitter?: Vec2;
+  beamLock?: Vec2;
+  // Clue tablet beside Vault Gate (shows encrypted symbol hint for ancient_obelisks!)
+  cluePos?: Vec2;
+  clueText?: string;
   // Element positions
-  nodes: Array<{ x: number; z: number; hintIndex: number }>;
+  nodes: Array<{ x: number; z: number; hintIndex: number; label?: string }>;
 }
 
 export interface SecretPassageState {
@@ -354,6 +370,7 @@ export interface LockedChestState {
   x: number;
   z: number;
   isSecret: boolean;
+  isVaultChest?: boolean;
   puzzleSeed: number;
   puzzleVariant: 'sequence' | 'rotate' | 'symbols';
   opened: boolean;
@@ -432,8 +449,51 @@ export interface CampStation {
   color: string;
 }
 
+export interface CorridorSegment {
+  x1: number;
+  z1: number;
+  x2: number;
+  z2: number;
+  r1: number;
+  r2: number;
+  kind: 'spine' | 'clearing' | 'alcove' | 'vault' | 'spawn' | 'arena';
+  gateId?: string;
+}
+
+export interface CorridorAlcoveInfo {
+  id: string;
+  entryX: number;
+  entryZ: number;
+  tipX: number;
+  tipZ: number;
+  radius: number;
+  spineT: number;
+}
+
+export interface CorridorFieldData {
+  mapSeed: number;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  totalLength: number;
+  noiseScale: number;
+  noiseAmp: number;
+  segments: CorridorSegment[];
+  spinePoints: Array<{ x: number; z: number; r: number; t: number }>;
+  alcoves: CorridorAlcoveInfo[];
+  vaultCenter: Vec2;
+  vaultGatePos: { x: number; z: number; angle: number; width: number };
+  arenaCenter: { x: number; z: number; radius: number };
+  gridCellSize: number;
+  gridCols: number;
+  gridRows: number;
+  walkMask: string; // '0' solid, '1' walkable corridor/alcove, '2' vault chamber behind gate
+}
+
 export interface GeneratedMapData {
   location: LocationDefinition;
+  mapSeed?: number;
   width: number;
   height: number;
   spawn: Vec2;
@@ -441,6 +501,7 @@ export interface GeneratedMapData {
   isCamp?: boolean;
   riftFloor?: number;
   campStations?: CampStation[];
+  corridorField?: CorridorFieldData;
   rooms: MapRoom[];
   walls: MapWall[];
   props: MapProp[];
