@@ -206,7 +206,9 @@ export type EnemyTier =
   | 'goblin'
   | 'totem'
   | 'barrel'
-  | 'dummy';
+  | 'dummy'
+  | 'bone_wall'
+  | 'flower_totem';
 
 export type HazardKind =
   | 'barrel'
@@ -239,6 +241,14 @@ export interface EnemyState {
   maxEliteArmor?: number;
   bossPhase?: 1 | 2 | 3;
   phaseInvulnUntil?: number;
+  // Advanced Reactive Boss AI: Fixate, Soft Enrage, Interrupt Shield, Delayed Slam Freeze
+  fixateTargetId?: string | null;
+  fixateUntil?: number;
+  enrageStacks?: number;
+  interruptShield?: number;
+  maxInterruptShield?: number;
+  interruptEndsAt?: number;
+  delayedSlamUntil?: number;
   cursedUntil?: number;
   dummyDps?: number;
   dummyMaxCrit?: number;
@@ -283,6 +293,10 @@ export interface TelegraphZone {
   abilityId: string;
   vx?: number;
   vz?: number;
+  isInvertedSafeCenter?: boolean;
+  isQuicksand?: boolean;
+  isDelayedSlam?: boolean;
+  isSoakOrb?: boolean;
 }
 
 export interface GroundLoot {
@@ -504,7 +518,13 @@ export interface SkillVfxEvent {
     | 'frost_nova'
     | 'fire_trail'
     | 'soak_resolve'
-    | 'tether_break';
+    | 'tether_break'
+    | 'feint_spin'
+    | 'bone_wall_rise'
+    | 'pillar_shatter'
+    | 'interrupt_success'
+    | 'enrage_pulse'
+    | 'quicksand';
   x: number;
   z: number;
   tx?: number;
@@ -564,10 +584,12 @@ export interface MvpCard {
 
 export interface BossTetherState {
   id: string;
+  kind: 'red' | 'blue';
   playerAId: string;
   playerBId: string;
   breakDist: number;
   explodesAt: number;
+  nextTickAt?: number;
 }
 
 export interface WanderingMerchantState {

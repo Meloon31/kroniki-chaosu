@@ -15,7 +15,18 @@ import {
   SLOT_LABELS,
 } from '../../shared/items';
 import type { EquipmentItem, PlayerProfile, Rarity } from '../../shared/types';
+import transmutationConfig from '../../shared/transmutation.json';
 import { soundEngine } from '../audio/soundEngine';
+
+const TRANSMUTE_RATIO: number = transmutationConfig.transmutationRatio;
+const TRANSMUTE_HIERARCHY = transmutationConfig.rarityHierarchy as Rarity[];
+const TRANSMUTE_STEPS = transmutationConfig.steps as Array<{
+  from: Rarity;
+  to: Rarity;
+  ratio: number;
+  sparkColor: string;
+  anvilTier: number;
+}>;
 
 const MENTOR_EXCHANGE_OFFERS: Array<{
   rarity: Rarity;
@@ -33,6 +44,7 @@ interface BlacksmithModalProps {
   profile: PlayerProfile;
   onUpgradeItem: (itemId: string) => { success: boolean; newLevel: number; chancePct: number } | null;
   onExchangeMentorShards?: (targetRarity: Rarity, mentorCost: number, grantAmount: number) => void;
+  onTransmuteShards?: (fromRarity: Rarity, toRarity: Rarity, count: number) => void;
   onClose: () => void;
 }
 
@@ -40,8 +52,18 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
   profile,
   onUpgradeItem,
   onExchangeMentorShards,
+  onTransmuteShards,
   onClose,
 }) => {
+  const [activeTab, setActiveTab] = useState<'forge' | 'transmute'>('forge');
+  const [transmuteFx, setTransmuteFx] = useState<{
+    key: number;
+    toRarity: Rarity;
+    gained: number;
+    spent: number;
+    fromRarity: Rarity;
+    sparkColor: string;
+  } | null>(null);
   const allItems: Array<{ item: EquipmentItem; equipped: boolean }> = [
     ...EQUIP_SLOTS.map((s) => profile.equipped[s])
       .filter((i): i is EquipmentItem => i !== null)
@@ -125,6 +147,40 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
   const chanceColor =
     chancePct >= 60 ? '#4ade80' : chancePct >= 35 ? '#fde047' : chancePct >= 20 ? '#fb923c' : '#fb7185';
 
+  const totalAvailableTransmutes = TRANSMUTE_STEPS.reduce(
+    (acc, step) => acc + Math.floor((profile.shards[step.from] || 0) / step.ratio),
+    0
+  );
+
+  const handleDoTransmute = (
+    step: (typeof TRANSMUTE_STEPS)[number],
+    count: number
+  ) => {
+    if (!onTransmuteShards || count <= 0) return;
+    const owned = profile.shards[step.from] || 0;
+    const maxPossible = Math.floor(owned / step.ratio);
+    const actual = Math.min(count, maxPossible);
+    if (actual <= 0) return;
+
+    onTransmuteShards(step.from, step.to, actual);
+    soundEngine.playAnvilStrike(step.anvilTier);
+    if (step.to === 'boski') {
+      soundEngine.playLootDrop('boski');
+    }
+    const fxKey = Date.now() + Math.random();
+    setTransmuteFx({
+      key: fxKey,
+      fromRarity: step.from,
+      toRarity: step.to,
+      gained: actual,
+      spent: actual * step.ratio,
+      sparkColor: step.sparkColor,
+    });
+    window.setTimeout(() => {
+      setTransmuteFx((cur) => (cur?.key === fxKey ? null : cur));
+    }, 3200);
+  };
+
   return (
     <div className="modal-backdrop" onClick={() => !forging && onClose()}>
       <div
@@ -132,7 +188,7 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
         onClick={(e) => e.stopPropagation()}
         style={{ width: 'min(960px, 95vw)', maxHeight: '90vh', overflowY: 'auto', padding: 20 }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div>
             <h2 className="comic-title" style={{ margin: 0, fontSize: 32, color: '#fbbf24' }}>
               🔨 KUŹNIA KOWALA (+0 → {hcProgress.unlocked ? '+20 HARDCORE' : '+13'})
@@ -154,6 +210,204 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
             ✕ Zamknij [B]
           </button>
         </div>
+
+        {/* 2-Tab Switcher: Forge vs Shard Transmutation (30:1) */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          <button
+            className={`mmo-tab-btn ${activeTab === 'forge' ? 'active' : ''}`}
+            disabled={forging}
+            onClick={() => setActiveTab('forge')}
+            style={{ flex: 1, padding: '9px 12px', fontSize: 13 }}
+          >
+            🔨 Kucie Ekwipunku
+          </button>
+          <button
+            className={`mmo-tab-btn ${activeTab === 'transmute' ? 'active' : ''}`}
+            disabled={forging}
+            onClick={() => setActiveTab('transmute')}
+            style={{ flex: 1, padding: '9px 12px', fontSize: 13 }}
+          >
+            ⚗️ Przemiana Odłamków ({TRANSMUTE_RATIO}:1)
+            {totalAvailableTransmutes > 0 && (
+              <span
+                style={{
+                  marginLeft: 6,
+                  background: '#22c55e',
+                  color: '#052e16',
+                  borderRadius: 99,
+                  padding: '1px 7px',
+                  fontSize: 11,
+                  fontWeight: 900,
+                }}
+              >
+                +{totalAvailableTransmutes}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {activeTab === 'transmute' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {/* All 5 Shard Counts Overview */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8 }}>
+              {TRANSMUTE_HIERARCHY.map((rar) => {
+                const m = RARITY_META[rar];
+                const qty = profile.shards[rar] || 0;
+                const isJustCreated = transmuteFx?.toRarity === rar;
+                return (
+                  <div
+                    key={rar}
+                    className={`comic-panel-sm ${isJustCreated && rar === 'boski' ? 'boski-shimmer' : ''}`}
+                    style={{
+                      padding: '10px 8px',
+                      textAlign: 'center',
+                      borderColor: isJustCreated ? '#fde047' : m.color,
+                      background: isJustCreated
+                        ? `radial-gradient(circle, ${m.color}44 0%, #131627 75%)`
+                        : '#131627',
+                      boxShadow: isJustCreated ? `0 0 22px ${m.color}88` : undefined,
+                      transition: 'all 0.2s ease',
+                    }}
+                  >
+                    <div style={{ fontSize: 11, fontWeight: 900, color: m.color }}>💎 {m.name}</div>
+                    <div className="comic-title" style={{ fontSize: 28, color: '#fff', lineHeight: 1.1, marginTop: 2 }}>
+                      {qty.toLocaleString('pl-PL')}
+                    </div>
+                    <div style={{ fontSize: 9.5, color: '#94a3b8', fontWeight: 700 }}>{m.shardName}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Dopamine Spark Burst Feedback Banner */}
+            {transmuteFx && (
+              <div
+                key={transmuteFx.key}
+                className={`comic-panel-sm ${transmuteFx.toRarity === 'boski' ? 'boski-shimmer' : ''}`}
+                style={{
+                  padding: '11px 16px',
+                  textAlign: 'center',
+                  borderColor: transmuteFx.sparkColor,
+                  background:
+                    transmuteFx.toRarity === 'boski'
+                      ? 'linear-gradient(90deg, rgba(136,19,55,0.85), rgba(124,58,237,0.85), rgba(180,83,9,0.85))'
+                      : `linear-gradient(90deg, ${transmuteFx.sparkColor}38, rgba(15, 18, 36, 0.94), ${transmuteFx.sparkColor}38)`,
+                  boxShadow: `0 0 28px ${transmuteFx.sparkColor}66`,
+                }}
+              >
+                <div className="comic-title" style={{ fontSize: 22, color: '#fde047' }}>
+                  ✨🔨 PRZEMIANA ZAKOŃCZONA! +{transmuteFx.gained}× {RARITY_META[transmuteFx.toRarity].shardName.toUpperCase()}!
+                </div>
+                <div style={{ fontSize: 11.5, color: '#e2e8f0', fontWeight: 800 }}>
+                  Przetopiono {transmuteFx.spent}× {RARITY_META[transmuteFx.fromRarity].shardName} w przeliczniku {TRANSMUTE_RATIO}:1!
+                </div>
+              </div>
+            )}
+
+            {/* 4-Step 30:1 Transmutation Ladder */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {TRANSMUTE_STEPS.map((step) => {
+                const fromMeta = RARITY_META[step.from];
+                const toMeta = RARITY_META[step.to];
+                const owned = profile.shards[step.from] || 0;
+                const maxCraft = Math.floor(owned / step.ratio);
+                const progressPct = Math.min(100, Math.round(((owned % step.ratio) / step.ratio) * 100));
+                const canCraft = maxCraft >= 1;
+
+                return (
+                  <div
+                    key={`${step.from}_${step.to}`}
+                    className="comic-panel-sm"
+                    style={{
+                      padding: '12px 16px',
+                      borderColor: canCraft ? toMeta.color : '#2b3052',
+                      background: canCraft
+                        ? `linear-gradient(135deg, ${toMeta.color}18 0%, rgba(16, 19, 36, 0.96) 100%)`
+                        : '#131627',
+                      display: 'grid',
+                      gridTemplateColumns: '1fr auto',
+                      alignItems: 'center',
+                      gap: 14,
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 14, fontWeight: 900, color: fromMeta.color }}>
+                          {step.ratio}× {fromMeta.shardName}
+                        </span>
+                        <span style={{ fontSize: 18, color: '#fde047', fontWeight: 900 }}>➔</span>
+                        <span style={{ fontSize: 15, fontWeight: 900, color: toMeta.color }}>
+                          1× {toMeta.shardName}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: 10.5,
+                            fontWeight: 900,
+                            padding: '1px 8px',
+                            borderRadius: 99,
+                            background: canCraft ? 'rgba(34, 197, 94, 0.2)' : 'rgba(148, 163, 184, 0.14)',
+                            color: canCraft ? '#4ade80' : '#94a3b8',
+                            border: `1px solid ${canCraft ? '#4ade80' : '#475569'}`,
+                          }}
+                        >
+                          Masz: {owned} ({maxCraft > 0 ? `możesz ×${maxCraft}` : `brakuje ${step.ratio - owned}`})
+                        </span>
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 7,
+                          height: 7,
+                          background: '#0f1221',
+                          borderRadius: 99,
+                          overflow: 'hidden',
+                          border: '1px solid #2b3052',
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: `${canCraft ? 100 : progressPct}%`,
+                            height: '100%',
+                            background: `linear-gradient(90deg, ${fromMeta.color}, ${toMeta.color})`,
+                            transition: 'width 0.2s ease',
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        className="comic-btn comic-btn-gold"
+                        disabled={!canCraft}
+                        onClick={() => handleDoTransmute(step, 1)}
+                        style={{
+                          padding: '8px 13px',
+                          fontSize: 12,
+                          opacity: canCraft ? 1 : 0.45,
+                        }}
+                      >
+                        ⚗️ Przemień ×1
+                      </button>
+                      <button
+                        className="comic-btn comic-btn-purple"
+                        disabled={!canCraft}
+                        onClick={() => handleDoTransmute(step, maxCraft)}
+                        style={{
+                          padding: '8px 13px',
+                          fontSize: 12,
+                          borderColor: canCraft ? toMeta.color : undefined,
+                          opacity: canCraft ? 1 : 0.45,
+                        }}
+                      >
+                        🔥 Przemień Maks.{maxCraft > 0 ? ` (×${maxCraft})` : ''}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+        <>
 
         {/* Mentor Shard Exchange Bar */}
         {onExchangeMentorShards && (
@@ -509,6 +763,8 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
             )}
           </div>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

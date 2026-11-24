@@ -144,6 +144,46 @@ export function buildEnemyRig(enemy: EnemyState): EnemyRig {
     );
     helm.position.y = 2.34;
     body.add(base, post, crossBar, strawTorso, bullseyeOut, bullseyeIn, head, helm);
+  } else if (enemy.tier === 'bone_wall') {
+    // Act 1 Malakor Destructible Bone Wall Segment (physically divides the arena for 10s!)
+    const mound = createComicMesh(new THREE.BoxGeometry(3.4, 0.55, 1.3), '#475569', 0.03);
+    mound.position.y = 0.28;
+    body.add(mound);
+    for (let i = -2; i <= 2; i++) {
+      const h = i % 2 === 0 ? 3.2 : 2.55;
+      const rib = createComicMesh(new THREE.ConeGeometry(0.38, h, 8), '#e2e8f0', 0.03, {
+        emissive: '#38bdf8',
+        emissiveIntensity: 0.14,
+      });
+      rib.position.set(i * 0.65, h / 2 + 0.25, (i % 2) * 0.16);
+      rib.rotation.z = i * 0.07;
+      body.add(rib);
+    }
+    const skull = createComicMesh(new THREE.SphereGeometry(0.52, 14, 12), '#f8fafc', 0.03);
+    skull.position.set(0, 1.8, 0.42);
+    body.add(skull);
+  } else if (enemy.tier === 'flower_totem') {
+    // Act 3 Sylvara Healing & Spore-Spewing Flower Totem
+    const stem = createComicMesh(new THREE.CylinderGeometry(0.24, 0.36, 2.2, 10), '#15803d', 0.028);
+    stem.position.y = 1.1;
+    body.add(stem);
+    const bulb = createComicMesh(new THREE.SphereGeometry(0.68, 14, 12), '#a3e635', 0.03, {
+      emissive: '#84cc16',
+      emissiveIntensity: 0.42,
+    });
+    bulb.position.y = 2.3;
+    body.add(bulb);
+    for (let p = 0; p < 6; p++) {
+      const ang = (p / 6) * Math.PI * 2;
+      const petal = createComicMesh(new THREE.ConeGeometry(0.36, 0.95, 7), '#d946ef', 0.024, {
+        emissive: '#a21caf',
+        emissiveIntensity: 0.25,
+      });
+      petal.position.set(Math.cos(ang) * 0.65, 2.35, Math.sin(ang) * 0.65);
+      petal.rotation.z = -Math.cos(ang) * 0.95;
+      petal.rotation.x = Math.sin(ang) * 0.95;
+      body.add(petal);
+    }
   } else if (enemy.tier === 'barrel') {
     // =========================================================
     // ACT-THEMED INTERACTIVE ENVIRONMENTAL HAZARDS!

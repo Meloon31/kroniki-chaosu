@@ -962,10 +962,11 @@ export class GameEngine {
       child.rotation.y = this.elapsedSec * 0.85;
     }
 
-    // 3. Boss Breakable Tether Laser Beams
+    // 3. Boss Energy Tethers (Red = run apart, Blue = stack together!) + Boss Fixate Hunter Line!
     while (this.tetherGroup.children.length > 0) {
       this.tetherGroup.remove(this.tetherGroup.children[0]);
     }
+    const nowWall = Date.now();
     if (snap.activeTethers && snap.activeTethers.length > 0) {
       for (const teth of snap.activeTethers) {
         const pA = snap.players.find((pl) => pl.id === teth.playerAId);
@@ -974,14 +975,43 @@ export class GameEngine {
         const dx = pB.x - pA.x;
         const dz = pB.z - pA.z;
         const len = Math.max(0.2, Math.hypot(dx, dz));
+        const col = teth.kind === 'blue' ? '#38bdf8' : '#f43f5e';
         const beam = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.12, 0.12, len, 6),
-          new THREE.MeshBasicMaterial({ color: len >= teth.breakDist * 0.78 ? '#38bdf8' : '#f43f5e', transparent: true, opacity: 0.9 })
+          new THREE.CylinderGeometry(0.14, 0.14, len, 6),
+          new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.92 })
         );
         beam.position.set((pA.x + pB.x) / 2, 1.3, (pA.z + pB.z) / 2);
         beam.rotation.z = Math.PI / 2;
         beam.rotation.y = -Math.atan2(dz, dx);
         this.tetherGroup.add(beam);
+      }
+    }
+    // Draw crimson Fixate Hunter Line from Boss -> Fixated Player + Mid-Air Delayed Slam visual lift!
+    for (const en of snap.enemies) {
+      if (!en.alive) continue;
+      if (en.fixateTargetId && en.fixateUntil && en.fixateUntil > nowWall) {
+        const tgt = snap.players.find((pl) => pl.id === en.fixateTargetId && pl.alive);
+        if (tgt) {
+          const dx = tgt.x - en.x;
+          const dz = tgt.z - en.z;
+          const len = Math.max(0.2, Math.hypot(dx, dz));
+          const fixLine = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.08, 0.08, len, 6),
+            new THREE.MeshBasicMaterial({ color: '#ef4444', transparent: true, opacity: 0.85 })
+          );
+          fixLine.position.set((en.x + tgt.x) / 2, 1.65, (en.z + tgt.z) / 2);
+          fixLine.rotation.z = Math.PI / 2;
+          fixLine.rotation.y = -Math.atan2(dz, dx);
+          this.tetherGroup.add(fixLine);
+        }
+      }
+      const rig = this.enemyRigs.get(en.id);
+      if (rig) {
+        if (en.delayedSlamUntil && en.delayedSlamUntil > nowWall) {
+          rig.root.position.y = 2.4;
+        } else if (rig.root.position.y > 0.05) {
+          rig.root.position.y = 0;
+        }
       }
     }
   }

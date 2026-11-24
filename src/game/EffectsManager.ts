@@ -1569,28 +1569,36 @@ export class EffectsManager {
       case 'fire_trail':
       case 'dash_strike':
       case 'soak_resolve':
-      case 'tether_break': {
+      case 'tether_break':
+      case 'feint_spin':
+      case 'bone_wall_rise':
+      case 'pillar_shatter':
+      case 'interrupt_success':
+      case 'enrage_pulse':
+      case 'quicksand': {
         const col =
           ev.color ||
-          (ev.kind === 'frost_nova'
+          (ev.kind === 'frost_nova' || ev.kind === 'interrupt_success'
             ? '#38bdf8'
-            : ev.kind === 'fire_trail'
+            : ev.kind === 'fire_trail' || ev.kind === 'enrage_pulse'
               ? '#f97316'
-              : '#fde047');
-        this.addExpandingRing(ev.x, ev.z, Math.max(2.6, radius), col, 420, 0.7, 0.2);
+              : ev.kind === 'quicksand'
+                ? '#eab308'
+                : '#fde047');
+        this.addExpandingRing(ev.x, ev.z, Math.max(2.6, radius), col, 440, 0.74, 0.22);
         this.spawnParticles({
-          kind: ev.kind === 'frost_nova' ? 'shard' : 'spark',
+          kind: ev.kind === 'frost_nova' || ev.kind === 'pillar_shatter' || ev.kind === 'bone_wall_rise' ? 'shard' : 'spark',
           x: ev.x,
-          y: 0.8,
+          y: 0.9,
           z: ev.z,
-          count: 14,
+          count: ev.kind === 'pillar_shatter' || ev.kind === 'interrupt_success' ? 20 : 14,
           color: col,
-          speedMin: 2.0,
-          speedMax: 5.8,
+          speedMin: 2.2,
+          speedMax: 6.2,
           upMin: 2.0,
-          upMax: 5.0,
-          durationMs: 460,
-          opacity: 0.88,
+          upMax: 5.4,
+          durationMs: 480,
+          opacity: 0.9,
         });
         break;
       }
@@ -1666,12 +1674,13 @@ export class EffectsManager {
           fill.position.set(len / 2, 0.11, 0);
           group.add(border, fill);
         } else if (tel.shape === 'ring') {
+          const innerR = tel.isInvertedSafeCenter ? 3.5 : Math.max(0.5, tel.radius - 1.3);
           const outer = new THREE.Mesh(
-            new THREE.RingGeometry(Math.max(0.5, tel.radius - 1.3), tel.radius + 0.2, 36),
+            new THREE.RingGeometry(innerR, tel.radius + 0.2, 36),
             new THREE.MeshBasicMaterial({
               color: col,
               transparent: true,
-              opacity: 0.42,
+              opacity: tel.isInvertedSafeCenter ? 0.34 : 0.42,
               side: THREE.DoubleSide,
               depthWrite: false,
             })
@@ -1680,6 +1689,23 @@ export class EffectsManager {
           outer.position.y = 0.1;
           fill = outer;
           group.add(outer);
+
+          if (tel.isInvertedSafeCenter) {
+            // Vivid green safe-zone disc directly under the boss!
+            const safeCenter = new THREE.Mesh(
+              new THREE.CircleGeometry(3.4, 28),
+              new THREE.MeshBasicMaterial({
+                color: '#22c55e',
+                transparent: true,
+                opacity: 0.3,
+                side: THREE.DoubleSide,
+                depthWrite: false,
+              })
+            );
+            safeCenter.rotation.x = -Math.PI / 2;
+            safeCenter.position.y = 0.12;
+            group.add(safeCenter);
+          }
         } else {
           // Crisp low-glare outer ring + soft filling interior
           const ring = new THREE.Mesh(

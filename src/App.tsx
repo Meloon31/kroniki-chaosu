@@ -53,6 +53,7 @@ import {
 import { createStarterRunes, createStarterRuneShards, RUNE_MAX_LEVEL, RUNES } from '../shared/runes';
 import { BoonId, CHAOS_BOONS } from '../shared/mutators';
 import type { BoonRarity } from '../shared/hades';
+import transmutationConfig from '../shared/transmutation.json';
 import { computePlayerStats } from '../shared/stats';
 import type {
   ActNumber,
@@ -1255,6 +1256,34 @@ export function App() {
     pushToast(`🎓 Wymieniono ${mentorCost} Odł. Mentora ➔ +${grantAmount} × ${meta.shardName}!`, meta.color);
   };
 
+  const handleTransmuteShards = (fromRarity: Rarity, toRarity: Rarity, count: number) => {
+    const ratio = transmutationConfig.transmutationRatio || 30;
+    const cur = profileRef.current;
+    const owned = cur.shards[fromRarity] || 0;
+    const actual = Math.min(Math.max(0, Math.floor(count)), Math.floor(owned / ratio));
+    if (actual <= 0) return;
+
+    const spent = actual * ratio;
+    const toMeta = RARITY_META[toRarity];
+    setProfile((prev) => {
+      const curOwned = prev.shards[fromRarity] || 0;
+      const safeActual = Math.min(actual, Math.floor(curOwned / ratio));
+      if (safeActual <= 0) return prev;
+      return {
+        ...prev,
+        shards: {
+          ...prev.shards,
+          [fromRarity]: curOwned - safeActual * ratio,
+          [toRarity]: (prev.shards[toRarity] || 0) + safeActual,
+        },
+      };
+    });
+    pushToast(
+      `⚗️ Przemiana (${spent}➔${actual}): +${actual} × ${toMeta.shardName}!`,
+      toMeta.color
+    );
+  };
+
   const handleEquipCosmetic = (slot: CosmeticSlot, id: string | null) => {
     soundEngine.playPuzzleTick();
     setProfile((prev) => ({
@@ -2450,6 +2479,7 @@ export function App() {
               profile={profile}
               onUpgradeItem={handleUpgradeItem}
               onExchangeMentorShards={handleExchangeMentorShards}
+              onTransmuteShards={handleTransmuteShards}
               onClose={() => setActivePanel(null)}
             />
           )}

@@ -265,6 +265,18 @@ interface ServerEnemy extends EnemyState {
   cursedBy?: string;
   dummyRecentHits?: Array<{ t: number; dmg: number }>;
   nextSpecialAt?: number;
+  // Advanced Reactive Boss AI & Destructible Arenas
+  combatStartedAt?: number;
+  nextEnrageTickAt?: number;
+  clumpSeconds?: number;
+  nextFixateAt?: number;
+  feintCheckedForCast?: boolean;
+  delayedSlamApplied?: boolean;
+  nextArenaHazardAt?: number;
+  boneWallExpiresAt?: number;
+  nextTotemPulseAt?: number;
+  interruptTriggeredPhases?: number[];
+  vaelgorPillarsInitialized?: boolean;
 }
 
 interface ActiveTelegraph extends TelegraphZone {
@@ -282,6 +294,7 @@ interface ActiveTelegraph extends TelegraphZone {
   extraMaxHpPct?: number;
   bossRequiredPower?: number;
   hitsEnemies?: boolean;
+  knockbackForce?: number;
 }
 
 interface GameRoom {
@@ -2091,6 +2104,44 @@ function damageEnemy(
     attacker.matchDamageDealt += dmg;
   }
 
+  // Interrupt Check Shield (5s destructive boss spell — Stagger skills deal 3× bonus damage!)
+  if ((enemy.interruptShield || 0) > 0 && enemy.interruptEndsAt && now < enemy.interruptEndsAt) {
+    const stagMult = (combatOpts?.staggerDmg || 0) >= 12 ? 3.2 : 1.0;
+    const shieldHit = Math.round(dmg * stagMult);
+    enemy.interruptShield = Math.max(0, (enemy.interruptShield || 0) - shieldHit);
+    if (enemy.interruptShield <= 0) {
+      enemy.interruptEndsAt = 0;
+      enemy.stunnedUntil = Math.max(enemy.stunnedUntil, now + 3200);
+      enemy.castingAbility = undefined;
+      for (const [tid, tel] of room.telegraphs.entries()) {
+        if (tel.ownerId === enemy.id && tel.abilityId === 'interrupt_cataclysm') {
+          room.telegraphs.delete(tid);
+        }
+      }
+      pushVfx(room, { kind: 'interrupt_success', x: enemy.x, z: enemy.z, radius: 6.5, color: '#38bdf8', casterId: attacker.id });
+      pushCombatText(room, enemy.x, 5.2, enemy.z, '💫 PRZERWANO CZAR BOSSA!', 'shield', true, true, 'OGŁUSZONY 3s!');
+      io.to(room.code).emit('juice:armor_break');
+      io.to(room.code).emit('game:banner', {
+        type: 'secret',
+        title: `💫 KRYTYCZNE PRZERWANIE: ${enemy.name.toUpperCase()}!`,
+        subtitle: 'Tarcza przerwana umiejętnościami Przełamania — Boss ogłuszony na 3 sekundy!',
+      });
+    } else {
+      pushCombatText(
+        room,
+        enemy.x,
+        3.5,
+        enemy.z,
+        `🛡️ -${shieldHit}`,
+        'shield',
+        stagMult > 1,
+        false,
+        stagMult > 1 ? '3× STAGGER!' : undefined
+      );
+    }
+    return shieldHit;
+  }
+
   if (enemy.shield > 0) {
     const absorbed = Math.min(enemy.shield, dmg);
     enemy.shield -= absorbed;
@@ -2109,62 +2160,135 @@ function damageEnemy(
   if (dmg > 0) {
     enemy.hp = Math.max(0, enemy.hp - dmg);
 
-    // Boss 2-3 Phase Transitions at 66% HP (FAZA II) & 33% HP (FAZA III) with Raid Mechanics!
+    // Boss Dynamic Phases at 65% HP (FAZA II) & 30% HP (FAZA III) with Shockwave, Mutated Skills & Co-op Mechanics!
     if (enemy.tier === 'boss' && enemy.hp > 0) {
       const hpRatio = enemy.hp / Math.max(1, enemy.maxHp);
       const curPhase = enemy.bossPhase || 1;
-      const nextPhase: 1 | 2 | 3 = hpRatio <= 0.33 ? 3 : hpRatio <= 0.66 ? 2 : 1;
+      const nextPhase: 1 | 2 | 3 = hpRatio <= 0.30 ? 3 : hpRatio <= 0.65 ? 2 : 1;
       if (nextPhase > curPhase) {
         enemy.bossPhase = nextPhase;
-        enemy.phaseInvulnUntil = now + 1600;
+        enemy.phaseInvulnUntil = now + 1500;
         enemy.castingAbility = undefined;
+        // Cancel regular telegraphs on phase break
+        for (const [tid, tel] of room.telegraphs.entries()) {
+          if (tel.ownerId === enemy.id && tel.abilityId !== 'interrupt_cataclysm') {
+            room.telegraphs.delete(tid);
+          }
+        }
+        // Phase Shockwave pushes nearby players back safely
         pushVfx(room, {
           kind: 'boss_phase',
           x: enemy.x,
           z: enemy.z,
-          radius: 9.5,
+          radius: 10.5,
           color: nextPhase === 3 ? '#f43f5e' : '#f97316',
         });
+        const living = Array.from(room.players.values()).filter((pl) => pl.alive && isInsideBossChamber(enemy, pl.x, pl.z));
+        for (const pl of living) {
+          const pdx = pl.x - enemy.x;
+          const pdz = pl.z - enemy.z;
+          const pdist = Math.hypot(pdx, pdz) || 1;
+          if (pdist < 7.5 && room.mapData) {
+            const pushed = moveWithWallSweep(
+              pl.x,
+              pl.z,
+              pl.x + (pdx / pdist) * 4.5,
+              pl.z + (pdz / pdist) * 4.5,
+              0.85,
+              room.mapData.walls,
+              getSolvedGateIds(room.mapData),
+              getRevealedSecretIds(room.mapData)
+            );
+            pl.x = pushed.x;
+            pl.z = pushed.z;
+          }
+        }
+
         io.to(room.code).emit('juice:boss_phase', { phase: nextPhase });
         io.to(room.code).emit('game:banner', {
           type: 'boss',
-          title: `🔥 ${enemy.name.toUpperCase()} — FAZA ${nextPhase === 2 ? 'II' : 'III'}!`,
+          title: `🔥 ${enemy.name.toUpperCase()} — FAZA ${nextPhase === 2 ? 'II (65% HP)' : 'III (30% HP)'}!`,
           subtitle:
             nextPhase === 2
-              ? 'Boss przyspiesza! Uwaga na Złoty Krąg Wspólnej Tarczy (stańcie razem!)'
-              : 'OSTATECZNA FURIA BOSSA! Zrywajcie Łańcuchy i unikajcie ataków!',
+              ? 'Umiejętności zmutowane! Zbij Tarczę Przerwania (Stagger) lub zajmij Sfery Przejęcia!'
+              : 'OSTATECZNA FURIA BOSSA! Zmutowane skille + Więź Energetyczna + Krytyczne Przerwanie!',
         });
 
-        // Spawn MMO Raid Signature Mechanic on Phase Transition!
-        const living = Array.from(room.players.values()).filter((pl) => pl.alive);
-        if (living.length >= 2 && nextPhase === 3) {
-          // Breakable Tether between 2 teammates!
+        // 1. Trigger Interrupt Check (once per phase: 5s shield broken by Stagger skills!)
+        const triggered = enemy.interruptTriggeredPhases || [];
+        if (!triggered.includes(nextPhase)) {
+          enemy.interruptTriggeredPhases = [...triggered, nextPhase];
+          const shMax = Math.round(enemy.maxHp * 0.085);
+          enemy.interruptShield = shMax;
+          enemy.maxInterruptShield = shMax;
+          enemy.interruptEndsAt = now + 5200;
+          const catId = nextId('tel');
+          room.telegraphs.set(catId, {
+            id: catId,
+            shape: 'circle',
+            x: enemy.x,
+            z: enemy.z,
+            radius: 19,
+            color: '#e11d48',
+            label: '🛡️ PRZERWIJ CZAR! BIJ SKILLAMI PRZEŁAMANIA (5s)!',
+            createdAt: now,
+            triggerAt: now + 5200,
+            ownerId: enemy.id,
+            abilityId: 'interrupt_cataclysm',
+            resolved: false,
+            damage: Math.round(enemy.damage * 2.5),
+            damageType: 'magical',
+            extraMaxHpPct: 32,
+          });
+        }
+
+        // 2. Co-op Boss Mechanics (2–4 players): Red/Blue Tether + 2–3 Unstable Soak Orbs (4s)!
+        if (living.length >= 2) {
+          const tetherKind: 'red' | 'blue' = nextPhase === 2 ? 'blue' : 'red';
           room.activeTethers.push({
             id: nextId('tether'),
+            kind: tetherKind,
             playerAId: living[0].id,
             playerBId: living[1].id,
             breakDist: 9.5,
-            explodesAt: now + 4200,
+            explodesAt: now + 4800,
+            nextTickAt: now + 800,
           });
-          pushCombatText(room, living[0].x, 3.2, living[0].z, '⛓️ ZERWIJ ŁAŃCUCH! ODBIEGNIJCIE!', 'magical', true, true);
-        } else if (living.length >= 1) {
-          // Golden Shared-Shield Circle (group-share damage + +25 Fury if stacked!)
-          const targetP = living[Math.floor(Math.random() * living.length)];
+          pushCombatText(
+            room,
+            living[0].x,
+            3.3,
+            living[0].z,
+            tetherKind === 'red'
+              ? '🔴 CZERWONA WIĘŹ — ODBIEGNIJCIE OD SIEBIE!'
+              : '🔵 NIEBIESKA WIĘŹ — ZBIEGNIJCIE SIĘ RAZEM!',
+            'magical',
+            true,
+            true
+          );
+        }
+
+        // Spawn 2–3 Unstable Energy Soak Orbs (4s countdown; each orb needs >=1 player inside!)
+        const orbCount = Math.min(3, Math.max(2, living.length));
+        for (let oi = 0; oi < orbCount; oi++) {
+          const ang = (oi / orbCount) * Math.PI * 2 + Math.random() * 0.7;
+          const ox = clampToBossChamber(enemy, enemy.homeX + Math.cos(ang) * 8.2, enemy.homeZ + Math.sin(ang) * 8.2);
           const soakId = nextId('soak');
           room.telegraphs.set(soakId, {
             id: soakId,
             shape: 'soak',
-            x: targetP.x,
-            z: targetP.z,
-            radius: 4.5,
+            isSoakOrb: true,
+            x: ox.x,
+            z: ox.z,
+            radius: 3.3,
             color: '#fde047',
-            label: '☀️ KRĄG TARCZY — STAŃCIE RAZEM!',
+            label: '☀️ SFERA PRZEJĘCIA (4s) — STAŃ W ŚRODKU!',
             createdAt: now,
-            triggerAt: now + 3200,
+            triggerAt: now + 4000,
             ownerId: enemy.id,
-            abilityId: 'raid_soak',
+            abilityId: 'raid_soak_orb',
             resolved: false,
-            damage: Math.round(enemy.damage * 1.8),
+            damage: Math.round(enemy.damage * 1.65),
             damageType: 'magical',
           });
         }
@@ -2345,6 +2469,16 @@ function handleEnemyDeath(
   }
 
   if (enemy.tier === 'summon') return;
+  if (enemy.tier === 'bone_wall') {
+    pushVfx(room, { kind: 'secret_break', x: enemy.x, z: enemy.z, radius: 3.0, color: '#e2e8f0' });
+    pushCombatText(room, enemy.x, 2.6, enemy.z, '🦴 MUR ROZBITY!', 'physical', true, true);
+    return;
+  }
+  if (enemy.tier === 'flower_totem') {
+    pushVfx(room, { kind: 'heal_wave', x: enemy.x, z: enemy.z, radius: 3.2, color: '#84cc16' });
+    pushCombatText(room, enemy.x, 2.6, enemy.z, '🌺 TOTEM ZNISZCZONY!', 'poison', true, true);
+    return;
+  }
 
   // Grant Esencja Chaosu (in-run Charon currency) + Fury to all party members!
   const baseEssence =
@@ -2674,11 +2808,28 @@ function pickBossAbility(
 
   if (ready.length === 0) return null;
 
+  const GAP_CLOSER_AND_RANGED_IDS = new Set([
+    'skok_z_uderzeniem',
+    'nurkowanie_w_piasku',
+    'rozdarcie_wymiaru',
+    'fala_kosci',
+    'sloneczny_promien',
+    'chwytajace_korzenie',
+    'deszcz_obsydianu',
+    'siec_jadu',
+  ]);
+  const isRangedKiting =
+    dist >= 9.0 || (dist >= 7.0 && (target.classId === 'elf' || target.classId === 'czarnoksieznik'));
+
   const weighted = ready.map((ab) => {
     let w = ab.baseWeight;
     if (ab.id === boss.lastAbilityId) w *= 0.25;
     if (ab.preferredMinDist && dist >= ab.preferredMinDist) w *= 1.45;
     if (ab.preferredMaxDist && dist <= ab.preferredMaxDist) w *= 1.5;
+    // Reactive AI: Anti-Range Gap-Closer boost when ranged players kite!
+    if (isRangedKiting && GAP_CLOSER_AND_RANGED_IDS.has(ab.id)) {
+      w *= 2.8;
+    }
     if (ab.id === 'pancerz_kory' && hpRatio < 0.55) w *= 1.5;
     if (ab.id === 'wybuch_chaosu' && hpRatio < 0.55) w *= 1.5;
     w *= 0.65 + Math.random() * 0.85;
@@ -2718,14 +2869,27 @@ function startBossAbility(
   if (alivePlayers.length === 0) return;
 
   const randomTarget = alivePlayers[Math.floor(Math.random() * alivePlayers.length)];
+  const fixatedTarget =
+    boss.fixateTargetId && boss.fixateUntil && now < boss.fixateUntil
+      ? room.players.get(boss.fixateTargetId)
+      : null;
   const target =
-    (ab.id === 'uderzenie_zadlem' || ab.id === 'kat_ciecie') && isInsideBossChamber(boss, primaryTarget.x, primaryTarget.z)
-      ? primaryTarget
-      : randomTarget;
+    fixatedTarget && fixatedTarget.alive && isInsideBossChamber(boss, fixatedTarget.x, fixatedTarget.z)
+      ? fixatedTarget
+      : (ab.id === 'uderzenie_zadlem' || ab.id === 'kat_ciecie') && isInsideBossChamber(boss, primaryTarget.x, primaryTarget.z)
+        ? primaryTarget
+        : randomTarget;
   const clampedTarget = clampToBossChamber(boss, target.x, target.z);
 
+  const enrageStacks = boss.enrageStacks || 0;
+  const enrageDmgMult = 1 + enrageStacks * 0.1;
+  const enrageSpeedMult = 1 + enrageStacks * 0.05;
+  const phase = boss.bossPhase || 1;
+
   boss.lastAbilityId = ab.id;
-  boss.abilityCooldowns[ab.id] = now + ab.cooldownMs;
+  boss.feintCheckedForCast = false;
+  boss.delayedSlamApplied = false;
+  boss.abilityCooldowns[ab.id] = now + Math.round(ab.cooldownMs / enrageSpeedMult);
   boss.animState = 'cast';
   boss.castingAbility = {
     id: ab.id,
@@ -2746,27 +2910,34 @@ function startBossAbility(
   switch (ab.id) {
     case 'fala_kosci':
     case 'ryk_wydm': {
-      const id = nextId('tel');
-      room.telegraphs.set(id, {
-        id,
-        shape: 'line',
-        x: boss.x,
-        z: boss.z,
-        radius: 2.2,
-        length: 16,
-        width: ab.id === 'ryk_wydm' ? 4.4 : 3.4,
-        angle: angleToTarget,
-        color: ab.color,
-        label: ab.name,
-        createdAt: now,
-        triggerAt: now + ab.telegraphMs,
-        ownerId: boss.id,
-        abilityId: ab.id,
-        resolved: false,
-        damage: boss.damage * 1.42,
-        damageType: 'physical',
-        ...bossMeta,
-      });
+      // Phase II/III Mutation: Malakor's Bone Wave splits into 3 directions!
+      const angles =
+        ab.id === 'fala_kosci' && phase >= 2
+          ? [angleToTarget - 0.42, angleToTarget, angleToTarget + 0.42]
+          : [angleToTarget];
+      for (const ang of angles) {
+        const id = nextId('tel');
+        room.telegraphs.set(id, {
+          id,
+          shape: 'line',
+          x: boss.x,
+          z: boss.z,
+          radius: 2.2,
+          length: 16,
+          width: ab.id === 'ryk_wydm' ? 4.4 : 3.4,
+          angle: ang,
+          color: ab.color,
+          label: phase >= 2 && ab.id === 'fala_kosci' ? `${ab.name} (3× FAZA)` : ab.name,
+          createdAt: now,
+          triggerAt: now + ab.telegraphMs,
+          ownerId: boss.id,
+          abilityId: ab.id,
+          resolved: false,
+          damage: boss.damage * 1.42 * enrageDmgMult,
+          damageType: 'physical',
+          ...bossMeta,
+        });
+      }
       break;
     }
 
@@ -2794,25 +2965,31 @@ function startBossAbility(
 
     case 'pieczec_dusz':
     case 'mlot_magmy': {
+      // Inverted Safe-Center Ring (in Phase II+ or 40% chance): ONLY safe directly under the boss!
+      const invert = phase >= 2 || Math.random() < 0.4;
       const id = nextId('tel');
       room.telegraphs.set(id, {
         id,
-        shape: 'circle',
+        shape: invert ? 'ring' : 'circle',
+        isInvertedSafeCenter: invert,
         x: boss.x,
         z: boss.z,
-        radius: 6.5,
-        color: ab.color,
-        label: ab.name,
+        radius: invert ? 13.5 : 6.5,
+        color: invert ? '#fb7185' : ab.color,
+        label: invert ? '🎯 BEZPIECZNIE POD BOSSEM!' : ab.name,
         createdAt: now,
         triggerAt: now + ab.telegraphMs,
         ownerId: boss.id,
         abilityId: ab.id,
         resolved: false,
-        damage: boss.damage * 1.45,
+        damage: boss.damage * 1.45 * enrageDmgMult,
         damageType: ab.id === 'pieczec_dusz' ? 'magical' : 'physical',
         appliesSlow: ab.id === 'pieczec_dusz',
         ...bossMeta,
       });
+      if (invert) {
+        pushCombatText(room, boss.x, 4.4, boss.z, '🎯 WBIEGNIJ POD BOSSA!', 'shield', true, true);
+      }
       break;
     }
 
@@ -2947,9 +3124,11 @@ function startBossAbility(
       break;
     }
 
-    case 'burza_piaskowa':
-      for (let t = 0; t < 3; t++) {
-        const ang = Math.random() * Math.PI * 2;
+    case 'burza_piaskowa': {
+      // Phase II/III Mutation: Azirath summons 2 extra violent tornadoes (5 total)!
+      const tornadoCount = phase >= 2 ? 5 : 3;
+      for (let t = 0; t < tornadoCount; t++) {
+        const ang = (t / tornadoCount) * Math.PI * 2 + Math.random() * 0.5;
         const id = nextId('tel');
         room.telegraphs.set(id, {
           id,
@@ -2965,16 +3144,17 @@ function startBossAbility(
           expiresAt: now + ab.telegraphMs + 6000,
           ownerId: boss.id,
           abilityId: ab.id,
-          vx: Math.cos(ang + 0.6) * 4.8,
-          vz: Math.sin(ang + 0.6) * 4.8,
+          vx: Math.cos(ang + 0.6) * (phase >= 2 ? 5.8 : 4.8),
+          vz: Math.sin(ang + 0.6) * (phase >= 2 ? 5.8 : 4.8),
           resolved: false,
-          damage: boss.damage * 0.45,
+          damage: boss.damage * 0.45 * enrageDmgMult,
           damageType: 'physical',
           armorPenPct: boss.armorPenPct,
           bossRequiredPower: boss.requiredPower,
         });
       }
       break;
+    }
 
     case 'uderzenie_zadlem': {
       const id = nextId('tel');
@@ -3098,10 +3278,38 @@ function startBossAbility(
         ownerId: boss.id,
         abilityId: ab.id,
         resolved: false,
-        damage: boss.damage * 1.5,
+        damage: boss.damage * 1.5 * enrageDmgMult,
         damageType: 'magical',
         ...bossMeta,
       });
+      // Phase II/III Mutation: Vaelgor's Rift Slash leaves a burning fire trail on the floor!
+      if (phase >= 2) {
+        for (let s = 1; s <= 3; s++) {
+          const frac = s / 3;
+          const fx = boss.x + (target.x - boss.x) * frac;
+          const fz = boss.z + (target.z - boss.z) * frac;
+          const fid = nextId('tel');
+          room.telegraphs.set(fid, {
+            id: fid,
+            shape: 'circle',
+            x: fx,
+            z: fz,
+            radius: 3.1,
+            color: '#f97316',
+            label: '🔥 Płonący Ślad Wymiaru',
+            createdAt: now,
+            triggerAt: now + ab.telegraphMs,
+            duration: 5000,
+            expiresAt: now + ab.telegraphMs + 5000,
+            ownerId: boss.id,
+            abilityId: 'rift_fire_trail',
+            resolved: false,
+            damage: boss.damage * 0.42 * enrageDmgMult,
+            damageType: 'magical',
+            armorPenPct: boss.armorPenPct,
+          });
+        }
+      }
       break;
     }
 
@@ -3160,16 +3368,21 @@ function startBossAbility(
     }
 
     case 'wybuch_chaosu': {
-      room.pillars = [];
-      for (let p = 0; p < 3; p++) {
-        const ang = (p / 3) * Math.PI * 2 + Math.random() * 0.6;
-        room.pillars.push({
-          id: nextId('pillar'),
-          x: boss.homeX + Math.cos(ang) * 9.5,
-          z: boss.homeZ + Math.sin(ang) * 9.5,
-          radius: 1.9,
-          expiresAt: now + ab.telegraphMs + 1400,
-        });
+      // Act 4 Destructible Arena: Vaelgor spawns 4 SINGLE-USE Obsidian Pillars ONCE for the whole fight!
+      // Each pillar that shields players SHATTERS permanently, forcing rotation and a hard DPS clock!
+      if (!boss.vaelgorPillarsInitialized) {
+        boss.vaelgorPillarsInitialized = true;
+        room.pillars = [];
+        for (let p = 0; p < 4; p++) {
+          const ang = (p / 4) * Math.PI * 2 + 0.45;
+          room.pillars.push({
+            id: nextId('pillar'),
+            x: boss.homeX + Math.cos(ang) * 9.8,
+            z: boss.homeZ + Math.sin(ang) * 9.8,
+            radius: 1.95,
+            expiresAt: now + 900_000, // permanent until shattered by blocking Chaos Burst!
+          });
+        }
       }
       const id = nextId('tel');
       room.telegraphs.set(id, {
@@ -3179,14 +3392,14 @@ function startBossAbility(
         z: boss.z,
         radius: 24,
         color: ab.color,
-        label: 'WYBUCH CHAOSU — SCHOWAJ SIĘ ZA FILAREM!',
+        label: `WYBUCH CHAOSU — FILARY JEDNORAZOWE (${room.pillars.length} POZOSTAŁO)!`,
         createdAt: now,
         triggerAt: now + ab.telegraphMs,
         ownerId: boss.id,
         abilityId: ab.id,
         resolved: false,
         isChaosBurst: true,
-        damage: boss.damage * 2.8,
+        damage: boss.damage * 2.8 * enrageDmgMult,
         damageType: 'magical',
         armorPenPct: 50,
         extraMaxHpPct: 45,
@@ -3194,8 +3407,8 @@ function startBossAbility(
       });
       io.to(room.code).emit('game:banner', {
         type: 'warning',
-        title: 'VAELGOR ŁADUJE WYBUCH CHAOSU!',
-        subtitle: 'Schowaj się za Obsydianowym Filarem lub użyj Bariery Światła Wróżki!',
+        title: `VAELGOR ŁADUJE WYBUCH CHAOSU! (${room.pillars.length} filary)`,
+        subtitle: 'Każdy wykorzystany Filar PĘKA na stałe! Schowaj się i rotuj po arenie!',
       });
       break;
     }
@@ -4432,6 +4645,108 @@ function tickRoom(room: GameRoom) {
       continue;
     }
 
+    // Handle Destructible Boss Arena Props: Malakor Bone Walls (10s) & Sylvara Healing Flower Totems!
+    if (e.tier === 'bone_wall') {
+      if (e.boneWallExpiresAt && now >= e.boneWallExpiresAt) {
+        e.alive = false;
+        e.animState = 'dead';
+        room.enemies.delete(e.id);
+      }
+      continue;
+    }
+    if (e.tier === 'flower_totem') {
+      if (!e.nextTotemPulseAt || now >= e.nextTotemPulseAt) {
+        e.nextTotemPulseAt = now + 2600;
+        // Slowly heal Sylvara + release poison spores!
+        for (const b of room.enemies.values()) {
+          if (b.alive && b.tier === 'boss' && b.hp < b.maxHp) {
+            const healAmt = Math.max(40, Math.round(b.maxHp * 0.018));
+            b.hp = Math.min(b.maxHp, b.hp + healAmt);
+            pushCombatText(room, b.x, 4.4, b.z, `🌺 +${healAmt} HP`, 'heal', false, true);
+          }
+        }
+        const sporeId = nextId('tel');
+        room.telegraphs.set(sporeId, {
+          id: sporeId,
+          shape: 'circle',
+          x: e.x,
+          z: e.z,
+          radius: 4.0,
+          color: '#84cc16',
+          label: '🌺 Zarodniki Kwiatu',
+          createdAt: now,
+          triggerAt: now + 1100,
+          ownerId: e.id,
+          abilityId: 'flower_spores',
+          resolved: false,
+          damage: Math.round(e.damage * 0.85),
+          damageType: 'poison',
+          appliesPoison: true,
+        });
+      }
+      continue;
+    }
+
+    // Delayed Slam (0.7s mid-air freeze + 2x DMG!) & Acts 3-4 Feint (20% chance mid-cast 360° spin!)
+    if (e.castingAbility && (e.tier === 'boss' || e.tier === 'miniboss')) {
+      const cast = e.castingAbility;
+      const totalDur = Math.max(400, cast.executeAt - cast.startedAt);
+      const elapsedCast = now - cast.startedAt;
+
+      // 1. Feint (Acts 3 & 4, 20% chance halfway through cast -> cancel & instant 360° spin slash!)
+      if (
+        !e.feintCheckedForCast &&
+        e.act >= 3 &&
+        elapsedCast >= totalDur * 0.48 &&
+        cast.id !== 'wybuch_chaosu' &&
+        cast.id !== 'pancerz_kory'
+      ) {
+        e.feintCheckedForCast = true;
+        if (Math.random() < 0.2) {
+          for (const [tid, tel] of room.telegraphs.entries()) {
+            if (tel.ownerId === e.id && tel.abilityId === cast.id && !tel.resolved) {
+              room.telegraphs.delete(tid);
+            }
+          }
+          e.castingAbility = undefined;
+          // Quick side step + 360° spin slash!
+          const sideAng = (e.rotY || 0) + (Math.random() < 0.5 ? Math.PI / 2 : -Math.PI / 2);
+          const sideTarget = clampToBossChamber(e, e.x + Math.cos(sideAng) * 4.0, e.z + Math.sin(sideAng) * 4.0);
+          e.x = sideTarget.x;
+          e.z = sideTarget.z;
+          pushVfx(room, { kind: 'feint_spin', x: e.x, z: e.z, radius: 5.8, color: '#fb7185' });
+          pushCombatText(room, e.x, 4.8, e.z, '🌀 ZMYŁKA! OBROTOWE CIĘCIE 360°!', 'physical', true, true);
+          for (const pl of eligiblePlayers) {
+            if (Math.hypot(pl.x - e.x, pl.z - e.z) <= 5.8) {
+              damagePlayer(room, pl, Math.round(e.damage * 1.35 * (1 + (e.enrageStacks || 0) * 0.1)), 'physical', now, {
+                sourceLabel: '🌀 ZMYŁKA 360°!',
+              });
+            }
+          }
+          continue;
+        }
+      }
+
+      // 2. Delayed Slam (0.7s mid-air freeze right before impact -> 2x damage!)
+      const DELAYABLE = new Set(['skok_z_uderzeniem', 'kat_ciecie', 'mlot_magmy', 'uderzenie_zadlem']);
+      if (!e.delayedSlamApplied && DELAYABLE.has(cast.id) && cast.executeAt - now <= 220 && cast.executeAt - now > 0) {
+        e.delayedSlamApplied = true;
+        if (Math.random() < 0.42) {
+          cast.executeAt += 700;
+          e.delayedSlamUntil = now + 700;
+          for (const tel of room.telegraphs.values()) {
+            if (tel.ownerId === e.id && tel.abilityId === cast.id && !tel.resolved) {
+              tel.triggerAt += 700;
+              tel.damage = Math.round(tel.damage * 1.9);
+              tel.isDelayedSlam = true;
+              tel.label = '⏳ OPÓŹNIONY CIOS (2× DMG)!';
+            }
+          }
+          pushCombatText(room, e.x, 5.1, e.z, '⏳ ZASTYGŁ W POWIETRZU! (0.7s • 2× DMG)', 'physical', true, true);
+        }
+      }
+    }
+
     if (e.castingAbility && now >= e.castingAbility.executeAt) {
       executeBossAbilityImpact(room, e, now);
     }
@@ -4441,8 +4756,18 @@ function tickRoom(room: GameRoom) {
       continue;
     }
 
+    // Reactive AI Target Priority: Fixate (Taunt-immune 5s!) > Taunt > Closest
     let target: ServerPlayer | null = null;
-    if (e.tauntedBy && now < e.tauntedUntil) {
+    if (e.fixateTargetId && e.fixateUntil && now < e.fixateUntil) {
+      const fixP = room.players.get(e.fixateTargetId);
+      if (fixP && fixP.alive && (!isBossUnit || isInsideBossChamber(e, fixP.x, fixP.z))) {
+        target = fixP;
+      } else {
+        e.fixateTargetId = null;
+        e.fixateUntil = 0;
+      }
+    }
+    if (!target && e.tauntedBy && now < e.tauntedUntil) {
       const taunter = room.players.get(e.tauntedBy);
       if (taunter && taunter.alive && (!isBossUnit || isInsideBossChamber(e, taunter.x, taunter.z))) {
         target = taunter;
@@ -4467,6 +4792,12 @@ function tickRoom(room: GameRoom) {
     if (!e.aggro && dist <= aggroRange) {
       if (hasLineOfSight(e.x, e.z, target.x, target.z, map.walls, solvedGates, revealedSecrets)) {
         e.aggro = true;
+        if (isBossUnit && !e.combatStartedAt) {
+          e.combatStartedAt = now;
+          e.nextFixateAt = now + 22000 + Math.random() * 6000;
+          e.nextArenaHazardAt = now + 14000;
+          e.nextEnrageTickAt = now + 210_000; // Soft Enrage starts at 3.5 min!
+        }
       }
     }
     if (!e.aggro) {
@@ -4474,8 +4805,261 @@ function tickRoom(room: GameRoom) {
       continue;
     }
 
+    // Reactive Boss Systems: Anti-Clumping, Fixate, Soft Enrage & Destructible Arenas (Acts 1–4)!
+    if (isBossUnit) {
+      // A. Anti-Clumping: if 3+ players stand within 5.5m of each other for >3s -> instant AOE + knockback!
+      if (eligiblePlayers.length >= 3) {
+        let cx = 0;
+        let cz = 0;
+        for (const pl of eligiblePlayers) {
+          cx += pl.x;
+          cz += pl.z;
+        }
+        cx /= eligiblePlayers.length;
+        cz /= eligiblePlayers.length;
+        const clumpedCount = eligiblePlayers.filter((pl) => Math.hypot(pl.x - cx, pl.z - cz) <= 5.5).length;
+        if (clumpedCount >= 3) {
+          e.clumpSeconds = (e.clumpSeconds || 0) + dt;
+          if (e.clumpSeconds >= 3.0) {
+            e.clumpSeconds = 0;
+            const clumpId = nextId('tel');
+            room.telegraphs.set(clumpId, {
+              id: clumpId,
+              shape: 'circle',
+              x: cx,
+              z: cz,
+              radius: 6.0,
+              color: '#f43f5e',
+              label: '💥 KARA ZA ZBICIE W GRUPĘ!',
+              createdAt: now,
+              triggerAt: now + 950,
+              ownerId: e.id,
+              abilityId: 'anti_clump_blast',
+              resolved: false,
+              damage: Math.round(e.damage * 1.55 * (1 + (e.enrageStacks || 0) * 0.1)),
+              damageType: 'magical',
+              knockbackForce: 5.5,
+            });
+            pushCombatText(room, cx, 3.6, cz, '💥 ROZPROSZCIE SIĘ! (ANTI-CLUMP)', 'magical', true, true);
+          }
+        } else {
+          e.clumpSeconds = Math.max(0, (e.clumpSeconds || 0) - dt * 1.5);
+        }
+      }
+
+      // B. Polowanie (Fixate): every 25-30s, 5s Taunt-immune chase prioritizing Wróżka / Czarnoksiężnik!
+      if (e.nextFixateAt && now >= e.nextFixateAt && eligiblePlayers.length >= 1) {
+        e.nextFixateAt = now + 25000 + Math.random() * 5000;
+        const priorityPool = eligiblePlayers.filter(
+          (pl) => pl.classId === 'wrozka' || pl.classId === 'czarnoksieznik'
+        );
+        const pickPool = priorityPool.length > 0 ? priorityPool : eligiblePlayers;
+        const chosen = pickPool[Math.floor(Math.random() * pickPool.length)];
+        e.fixateTargetId = chosen.id;
+        e.fixateUntil = now + 5000;
+        e.tauntedBy = null;
+        e.tauntedUntil = 0;
+        pushCombatText(room, chosen.x, 3.4, chosen.z, `🎯 POLOWANIE: ${chosen.name}! (5s)`, 'physical', true, true);
+        io.to(room.code).emit('game:banner', {
+          type: 'warning',
+          title: `🎯 ${e.name.toUpperCase()} POLUJE NA: ${chosen.name.toUpperCase()}!`,
+          subtitle: 'Odporny na Prowokację przez 5 sekund — uciekaj i unikaj!',
+        });
+      }
+
+      // C. Soft Enrage after 3.5 min (+10% DMG, +5% ASPD every 15s + perimeter hazards!)
+      if (e.tier === 'boss' && e.nextEnrageTickAt && now >= e.nextEnrageTickAt) {
+        e.nextEnrageTickAt = now + 15000;
+        e.enrageStacks = (e.enrageStacks || 0) + 1;
+        pushVfx(room, { kind: 'enrage_pulse', x: e.x, z: e.z, radius: 12, color: '#ef4444' });
+        io.to(room.code).emit('game:banner', {
+          type: 'warning',
+          title: `🔥 SZAŁ BOSSA ×${e.enrageStacks}! (+${e.enrageStacks * 10}% DMG, +${e.enrageStacks * 5}% ASPD)`,
+          subtitle: 'Krawędzie areny płoną! Wykończ bossa jak najszybciej!',
+        });
+        // Perimeter flame hazards closing in!
+        for (let k = 0; k < 4; k++) {
+          const ang = (k / 4) * Math.PI * 2 + e.enrageStacks * 0.5;
+          const rEdge = Math.max(7.5, 14.5 - e.enrageStacks * 0.8);
+          const eid = nextId('tel');
+          room.telegraphs.set(eid, {
+            id: eid,
+            shape: 'circle',
+            x: e.homeX + Math.cos(ang) * rEdge,
+            z: e.homeZ + Math.sin(ang) * rEdge,
+            radius: 3.6,
+            color: '#dc2626',
+            label: '🔥 Krawędź Szału',
+            createdAt: now,
+            triggerAt: now + 900,
+            duration: 14000,
+            expiresAt: now + 14900,
+            ownerId: e.id,
+            abilityId: 'enrage_edge',
+            resolved: false,
+            damage: Math.round(e.damage * 0.65 * (1 + e.enrageStacks * 0.1)),
+            damageType: 'magical',
+          });
+        }
+      }
+
+      // D. Destructible & Changing Arenas for the 4 Main Act Bosses (Malakor, Azirath, Sylvara, Vaelgor)!
+      if (e.tier === 'boss' && e.nextArenaHazardAt && now >= e.nextArenaHazardAt) {
+        e.nextArenaHazardAt = now + 19500;
+        if (e.bossId === 'malakor') {
+          // Act 1 Malakor: raises a 10s destructible Bone Wall dividing the arena in half!
+          const horizontal = Math.random() < 0.5;
+          const segHp = Math.max(180, Math.round(e.maxHp * 0.025));
+          for (let s = -2; s <= 2; s++) {
+            const wx = e.homeX + (horizontal ? s * 3.8 : 0);
+            const wz = e.homeZ + (horizontal ? 0 : s * 3.8);
+            const wid = nextId('bwall');
+            room.enemies.set(wid, {
+              id: wid,
+              archetype: 'bone_wall',
+              name: '🦴 Kościany Mur Malakora',
+              tier: 'bone_wall',
+              act: 1,
+              x: wx,
+              z: wz,
+              homeX: wx,
+              homeZ: wz,
+              rotY: horizontal ? 0 : Math.PI / 2,
+              hp: segHp,
+              maxHp: segHp,
+              shield: 0,
+              maxShield: 0,
+              radius: 1.75,
+              speed: 0,
+              damage: 0,
+              xpReward: 0,
+              alive: true,
+              animState: 'idle',
+              stunnedUntil: 0,
+              slowedUntil: 0,
+              weakenedUntil: 0,
+              tauntedBy: null,
+              tauntedUntil: 0,
+              aggro: false,
+              nextAttackAt: 0,
+              abilityCooldowns: {},
+              armor: 10,
+              armorPenPct: 0,
+              requiredPower: 0,
+              skillMaxHpPct: 0,
+              boneWallExpiresAt: now + 10000,
+            });
+            pushVfx(room, { kind: 'bone_wall_rise', x: wx, z: wz, radius: 2.2, color: '#e2e8f0' });
+          }
+          io.to(room.code).emit('game:banner', {
+            type: 'warning',
+            title: '🦴 MALAKOR WZNOSI KOŚCIANY MUR (10s)!',
+            subtitle: 'Arena podzielona na pół — rozbij fragment muru, aby połączyć drużynę!',
+          });
+        } else if (e.bossId === 'azirath') {
+          // Act 2 Azirath: Quicksand (40% slow!) + periodic floor spike traps!
+          for (let q = 0; q < 2; q++) {
+            const ang = Math.random() * Math.PI * 2;
+            const qx = e.homeX + Math.cos(ang) * (4 + Math.random() * 6);
+            const qz = e.homeZ + Math.sin(ang) * (4 + Math.random() * 6);
+            const qid = nextId('tel');
+            room.telegraphs.set(qid, {
+              id: qid,
+              shape: 'circle',
+              isQuicksand: true,
+              x: qx,
+              z: qz,
+              radius: 4.8,
+              color: '#ca8a04',
+              label: '🏜️ Ruchome Piaski (-40% Ruch)',
+              createdAt: now,
+              triggerAt: now + 400,
+              duration: 9500,
+              expiresAt: now + 9900,
+              ownerId: e.id,
+              abilityId: 'azirath_quicksand',
+              resolved: false,
+              damage: Math.round(e.damage * 0.12),
+              damageType: 'physical',
+              appliesSlow: true,
+            });
+            pushVfx(room, { kind: 'quicksand', x: qx, z: qz, radius: 4.8, color: '#eab308' });
+          }
+          for (const pl of eligiblePlayers) {
+            const sid = nextId('tel');
+            room.telegraphs.set(sid, {
+              id: sid,
+              shape: 'circle',
+              x: pl.x,
+              z: pl.z,
+              radius: 2.6,
+              color: '#f59e0b',
+              label: '🔺 Pułapka z Kolcami!',
+              createdAt: now,
+              triggerAt: now + 1150,
+              ownerId: e.id,
+              abilityId: 'azirath_spikes',
+              resolved: false,
+              damage: Math.round(e.damage * 1.15),
+              damageType: 'physical',
+            });
+          }
+        } else if (e.bossId === 'sylvara') {
+          // Act 3 Sylvara: Sprouts 2 healing + spore-spewing Flower Totems!
+          const flowerHp = Math.max(450, Math.round(e.maxHp * 0.032));
+          for (let f = 0; f < 2; f++) {
+            const ang = Math.random() * Math.PI * 2;
+            const fx = e.homeX + Math.cos(ang) * (7 + Math.random() * 4);
+            const fz = e.homeZ + Math.sin(ang) * (7 + Math.random() * 4);
+            const fid = nextId('flower');
+            room.enemies.set(fid, {
+              id: fid,
+              archetype: 'flower_totem',
+              name: '🌺 Totem-Kwiat Sylvar',
+              tier: 'flower_totem',
+              act: 3,
+              x: fx,
+              z: fz,
+              homeX: fx,
+              homeZ: fz,
+              rotY: 0,
+              hp: flowerHp,
+              maxHp: flowerHp,
+              shield: 0,
+              maxShield: 0,
+              radius: 1.25,
+              speed: 0,
+              damage: e.damage,
+              xpReward: 0,
+              alive: true,
+              animState: 'idle',
+              stunnedUntil: 0,
+              slowedUntil: 0,
+              weakenedUntil: 0,
+              tauntedBy: null,
+              tauntedUntil: 0,
+              aggro: false,
+              nextAttackAt: 0,
+              abilityCooldowns: {},
+              armor: 40,
+              armorPenPct: 0,
+              requiredPower: 0,
+              skillMaxHpPct: 0,
+              nextTotemPulseAt: now + 2200,
+            });
+          }
+          io.to(room.code).emit('game:banner', {
+            type: 'warning',
+            title: '🌺 WYROSŁY TOTEMY-KWIATY SYLVARY!',
+            subtitle: 'Zniszcz je natychmiast — leczą bossa i wypuszczają trujące zarodniki!',
+          });
+        }
+      }
+    }
+
     if ((e.tier === 'boss' || e.tier === 'miniboss') && !e.castingAbility && (!e.burrowUntil || now >= e.burrowUntil)) {
-      if (Math.random() < 0.12) {
+      const castChance = 0.12 * (1 + (e.enrageStacks || 0) * 0.05);
+      if (Math.random() < castChance) {
         const ab = pickBossAbility(room, e, target, now);
         if (ab) {
           startBossAbility(room, e, ab, target, now);
@@ -4667,22 +5251,24 @@ function tickRoom(room: GameRoom) {
 
     if (now < tel.triggerAt) continue;
 
-    // MMO Raid Soak Circle: splits heavy damage across all teammates inside + grants +25 Fury if soaked!
+    // Co-op Soak Orbs (each orb needs >=1 player inside; unmanned orbs detonate on the ENTIRE party!)
     if (tel.shape === 'soak') {
       const inside = alivePlayers.filter((pl) => Math.hypot(pl.x - tel.x, pl.z - tel.z) <= tel.radius);
       const trapMult = room.activePactCurses.includes('deadly_traps') ? 1.35 : 1.0;
       pushVfx(room, { kind: 'soak_resolve', x: tel.x, z: tel.z, radius: tel.radius, color: '#fde047' });
-      if (inside.length >= Math.min(2, alivePlayers.length)) {
-        const splitDmg = Math.round((tel.damage * 0.28 * trapMult) / Math.max(1, inside.length));
+      const requiredCount = tel.isSoakOrb ? 1 : Math.min(2, alivePlayers.length);
+      if (inside.length >= requiredCount) {
+        const splitDmg = Math.round((tel.damage * 0.25 * trapMult) / Math.max(1, inside.length));
         for (const pl of inside) {
-          damagePlayer(room, pl, splitDmg, tel.damageType, now, { sourceLabel: '☀️ TARCZA UDANA!' });
-          addFury(pl, 25);
-          pushCombatText(room, pl.x, 3.0, pl.z, '☀️ KRĄG +25 FURII!', 'shield', true, true);
+          damagePlayer(room, pl, splitDmg, tel.damageType, now, { sourceLabel: '☀️ SFERA PRZEJĘTA!' });
+          addFury(pl, 20);
+          pushCombatText(room, pl.x, 3.0, pl.z, '☀️ PRZEJĘTO +20 FURII!', 'shield', true, true);
         }
       } else {
         for (const pl of alivePlayers) {
-          damagePlayer(room, pl, Math.round(tel.damage * trapMult), tel.damageType, now, { sourceLabel: '☀️ ROZBITY KRĄG!' });
+          damagePlayer(room, pl, Math.round(tel.damage * trapMult), tel.damageType, now, { sourceLabel: '💥 NIEOBSADZONA SFERA!' });
         }
+        pushCombatText(room, tel.x, 3.4, tel.z, '💥 DETONACJA SFERY!', 'magical', true, true);
       }
       room.telegraphs.delete(tid);
       continue;
@@ -4732,12 +5318,24 @@ function tickRoom(room: GameRoom) {
 
     if (!tel.resolved) {
       tel.resolved = true;
+      const usedPillarIds = new Set<string>();
       for (const p of alivePlayers) {
         let hit = false;
         if (tel.isChaosBurst) {
           const sheltered = isPlayerShelteredByPillar(p.x, p.z, tel.x, tel.z, room.pillars);
           if (sheltered) {
             pushCombatText(room, p.x, 3.0, p.z, 'OSŁONA FILARU!', 'shield', false, true);
+            // Find which single-use pillar shielded this player so it shatters permanently!
+            let closestPil: ObsidianPillarState | null = null;
+            let closestD = Infinity;
+            for (const pil of room.pillars) {
+              const d = Math.hypot(p.x - pil.x, p.z - pil.z);
+              if (d < closestD) {
+                closestD = d;
+                closestPil = pil;
+              }
+            }
+            if (closestPil) usedPillarIds.add(closestPil.id);
           } else {
             hit = Math.hypot(p.x - tel.x, p.z - tel.z) <= tel.radius;
           }
@@ -4752,7 +5350,8 @@ function tickRoom(room: GameRoom) {
           hit = proj >= 0 && proj <= (tel.length ?? 16) && perp <= (tel.width ?? 3.4) / 2 + 0.6;
         } else if (tel.shape === 'ring') {
           const d = Math.hypot(p.x - tel.x, p.z - tel.z);
-          hit = d <= tel.radius && d >= 2.2;
+          const safeInner = tel.isInvertedSafeCenter ? 3.5 : 2.2;
+          hit = d <= tel.radius && d >= safeInner;
         } else {
           hit = Math.hypot(p.x - tel.x, p.z - tel.z) <= tel.radius;
         }
@@ -4763,6 +5362,23 @@ function tickRoom(room: GameRoom) {
             extraMaxHpPct: tel.extraMaxHpPct,
             bossRequiredPower: tel.bossRequiredPower,
           });
+          if (tel.knockbackForce && room.mapData) {
+            const kdx = p.x - tel.x;
+            const kdz = p.z - tel.z;
+            const klen = Math.hypot(kdx, kdz) || 1;
+            const pushed = moveWithWallSweep(
+              p.x,
+              p.z,
+              p.x + (kdx / klen) * tel.knockbackForce,
+              p.z + (kdz / klen) * tel.knockbackForce,
+              0.85,
+              room.mapData.walls,
+              solvedGates,
+              revealedSecrets
+            );
+            p.x = pushed.x;
+            p.z = pushed.z;
+          }
           if (tel.appliesSlow) p.slowedUntil = now + 2200;
           if (tel.appliesPoison) {
             p.poisonUntil = now + 4500;
@@ -4833,6 +5449,28 @@ function tickRoom(room: GameRoom) {
 
       if (tel.isChaosBurst) {
         pushVfx(room, { kind: 'boss_chaos_burst', x: tel.x, z: tel.z, radius: tel.radius, color: '#be123c' });
+        // Act 4 Single-Use Obsidian Pillars: shatter every pillar that blocked the Chaos Burst!
+        if (usedPillarIds.size > 0) {
+          for (const pil of room.pillars) {
+            if (usedPillarIds.has(pil.id)) {
+              pushVfx(room, { kind: 'pillar_shatter', x: pil.x, z: pil.z, radius: 4.0, color: '#f43f5e' });
+              pushCombatText(room, pil.x, 3.2, pil.z, '💥 FILAR ZNISZCZONY!', 'magical', true, true);
+            }
+          }
+          room.pillars = room.pillars.filter((pil) => !usedPillarIds.has(pil.id));
+          io.to(room.code).emit('game:banner', {
+            type: 'warning',
+            title: `💥 OBSYDIANOWY FILAR PĘKŁ! (Pozostało: ${room.pillars.length})`,
+            subtitle: 'Każdy filar jest jednorazowy — rotujcie po arenie i dobijcie Vaelgora!',
+          });
+        }
+      } else if (tel.abilityId === 'interrupt_cataclysm') {
+        const ownerBoss = room.enemies.get(tel.ownerId);
+        if (ownerBoss) {
+          ownerBoss.interruptShield = 0;
+          ownerBoss.interruptEndsAt = 0;
+        }
+        pushVfx(room, { kind: 'boss_chaos_burst', x: tel.x, z: tel.z, radius: tel.radius, color: '#e11d48' });
       } else if (tel.abilityId === 'deszcz_obsydianu' || tel.abilityId === 'mutator_meteor') {
         pushVfx(room, { kind: 'boss_obsidian_rain', x: tel.x, z: tel.z, radius: tel.radius, color: '#f97316' });
       } else if (tel.abilityId === 'volatile_blast' || tel.abilityId === 'elite_mortar') {
@@ -4869,6 +5507,8 @@ function tickRoom(room: GameRoom) {
       e.tier !== 'totem' &&
       e.tier !== 'goblin' &&
       e.tier !== 'dummy' &&
+      e.tier !== 'bone_wall' &&
+      e.tier !== 'flower_totem' &&
       !e.isWaveMob
     ) {
       enemiesRemaining++;
@@ -4899,7 +5539,7 @@ function tickRoom(room: GameRoom) {
     }
   }
 
-  // Tick MMO Raid Breakable Boss Tethers!
+  // Tick Co-op Boss Energy Tethers (Red = run apart >=9.5m; Blue = stack together <=2.7m to stop ticking DMG!)
   if (room.activeTethers.length > 0) {
     const remainingTethers: BossTetherState[] = [];
     for (const teth of room.activeTethers) {
@@ -4907,9 +5547,29 @@ function tickRoom(room: GameRoom) {
       const pB = room.players.get(teth.playerBId);
       if (!pA || !pB || !pA.alive || !pB.alive) continue;
       const distAB = Math.hypot(pA.x - pB.x, pA.z - pB.z);
+      if (teth.kind === 'blue') {
+        if (distAB <= 2.7) {
+          pushVfx(room, { kind: 'tether_break', x: (pA.x + pB.x) / 2, z: (pA.z + pB.z) / 2, radius: 4.0, color: '#38bdf8' });
+          pushCombatText(room, pA.x, 3.2, pA.z, '🔵 WIĘŹ ZNEUTRALIZOWANA!', 'shield', true, true);
+          addFury(pA, 20);
+          addFury(pB, 20);
+          continue;
+        }
+        if (now >= teth.explodesAt) continue;
+        if (!teth.nextTickAt || now >= teth.nextTickAt) {
+          teth.nextTickAt = now + 800;
+          const tickDmg = Math.round(Math.max(pA.maxHp, pB.maxHp) * 0.08);
+          damagePlayer(room, pA, tickDmg, 'magical', now, { sourceLabel: '🔵 ZBIEGNIJCIE SIĘ!' });
+          damagePlayer(room, pB, tickDmg, 'magical', now, { sourceLabel: '🔵 ZBIEGNIJCIE SIĘ!' });
+        }
+        remainingTethers.push(teth);
+        continue;
+      }
+
+      // Red Tether: run apart >= breakDist before explosion!
       if (distAB >= teth.breakDist) {
         pushVfx(room, { kind: 'tether_break', x: (pA.x + pB.x) / 2, z: (pA.z + pB.z) / 2, radius: 4.5, color: '#38bdf8' });
-        pushCombatText(room, pA.x, 3.2, pA.z, '⛓️ ŁAŃCUCH ZERWANY!', 'shield', true, true);
+        pushCombatText(room, pA.x, 3.2, pA.z, '🔴 WIĘŹ ZERWANA!', 'shield', true, true);
         addFury(pA, 20);
         addFury(pB, 20);
         continue;
@@ -4917,8 +5577,8 @@ function tickRoom(room: GameRoom) {
       if (now >= teth.explodesAt) {
         const trapMult = room.activePactCurses.includes('deadly_traps') ? 1.35 : 1.0;
         const burst = Math.round(Math.max(pA.maxHp, pB.maxHp) * 0.28 * trapMult);
-        damagePlayer(room, pA, burst, 'magical', now, { sourceLabel: '⛓️ WYBUCH ŁAŃCUCHA!' });
-        damagePlayer(room, pB, burst, 'magical', now, { sourceLabel: '⛓️ WYBUCH ŁAŃCUCHA!' });
+        damagePlayer(room, pA, burst, 'magical', now, { sourceLabel: '🔴 WYBUCH WIĘZI!' });
+        damagePlayer(room, pB, burst, 'magical', now, { sourceLabel: '🔴 WYBUCH WIĘZI!' });
         continue;
       }
       remainingTethers.push(teth);
@@ -5027,6 +5687,13 @@ function tickRoom(room: GameRoom) {
         maxEliteArmor: e.maxEliteArmor,
         bossPhase: e.bossPhase,
         phaseInvulnUntil: e.phaseInvulnUntil,
+        fixateTargetId: e.fixateTargetId,
+        fixateUntil: e.fixateUntil,
+        enrageStacks: e.enrageStacks,
+        interruptShield: e.interruptShield,
+        maxInterruptShield: e.maxInterruptShield,
+        interruptEndsAt: e.interruptEndsAt,
+        delayedSlamUntil: e.delayedSlamUntil,
         cursedUntil: e.cursedUntil,
         dummyDps: e.dummyDps,
         dummyMaxCrit: e.dummyMaxCrit,
@@ -6101,7 +6768,14 @@ io.on('connection', (socket: Socket) => {
       const comboBon = getComboBonuses(room.comboCount);
       if (comboBon.moveSpeedPct > 0) speed *= 1 + comboBon.moveSpeedPct / 100;
       if (p.altarBuffUntil && now < p.altarBuffUntil && p.altarMoveMult > 1) speed *= p.altarMoveMult;
-      if (now < p.slowedUntil) speed *= 0.55;
+      if (now < p.slowedUntil) speed *= 0.6;
+      // Azirath Quicksand: slows movement by 40%!
+      for (const tel of room.telegraphs.values()) {
+        if (tel.isQuicksand && now >= tel.triggerAt && Math.hypot(p.x - tel.x, p.z - tel.z) <= tel.radius) {
+          speed *= 0.6;
+          break;
+        }
+      }
       if (now < p.hasteUntil) speed *= 1.3;
       if (room.mutatorId === 'blood_frenzy') speed *= 1.24;
       if (p.activeBoons.includes('swift_step')) speed *= 1.3;
@@ -6129,8 +6803,23 @@ io.on('connection', (socket: Socket) => {
         getSolvedGateIds(room.mapData),
         getRevealedSecretIds(room.mapData)
       );
-      p.x = resolved.x;
-      p.z = resolved.z;
+      let fx = resolved.x;
+      let fz = resolved.z;
+      // Physical collision against Malakor's intact destructible Bone Walls!
+      for (const bw of room.enemies.values()) {
+        if (!bw.alive || bw.tier !== 'bone_wall') continue;
+        const bdx = fx - bw.x;
+        const bdz = fz - bw.z;
+        const bd = Math.hypot(bdx, bdz);
+        const minD = bw.radius + 0.85;
+        if (bd < minD) {
+          const pushAng = bd > 0.001 ? Math.atan2(bdz, bdx) : 0;
+          fx = bw.x + Math.cos(pushAng) * minD;
+          fz = bw.z + Math.sin(pushAng) * minD;
+        }
+      }
+      p.x = fx;
+      p.z = fz;
       if (payload.rotY !== undefined) p.rotY = payload.rotY;
       else p.rotY = Math.atan2(ndx, ndz);
       if (now >= p.whirlwindUntil && now - p.animTime > 240) {

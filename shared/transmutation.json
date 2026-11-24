@@ -1,0 +1,40 @@
+{
+  "transmutationRatio": 30,
+  "rarityHierarchy": [
+    "zwykly",
+    "normalny",
+    "mityczny",
+    "legendarny",
+    "boski"
+  ],
+  "steps": [
+    {
+      "from": "zwykly",
+      "to": "normalny",
+      "ratio": 30,
+      "sparkColor": "#22c55e",
+      "anvilTier": 4
+    },
+    {
+      "from": "normalny",
+      "to": "mityczny",
+      "ratio": 30,
+      "sparkColor": "#a855f7",
+      "anvilTier": 8
+    },
+    {
+      "from": "mityczny",
+      "to": "legendarny",
+      "ratio": 30,
+      "sparkColor": "#f59e0b",
+      "anvilTier": 11
+    },
+    {
+      "from": "legendarny",
+      "to": "boski",
+      "ratio": 30,
+      "sparkColor": "#f43f5e",
+      "anvilTier": 13
+    }
+  ]
+}

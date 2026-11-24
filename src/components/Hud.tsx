@@ -911,6 +911,21 @@ export const Hud: React.FC<HudProps> = ({
                     FAZA {activeBoss.bossPhase === 3 ? 'III' : 'II'}
                   </span>
                 )}
+                {(activeBoss.enrageStacks || 0) > 0 && (
+                  <span
+                    style={{
+                      marginLeft: 6,
+                      fontSize: 11,
+                      background: '#dc2626',
+                      color: '#fef08a',
+                      padding: '1px 7px',
+                      borderRadius: 7,
+                      verticalAlign: 'middle',
+                    }}
+                  >
+                    🔥 SZAŁ ×{activeBoss.enrageStacks} (+{(activeBoss.enrageStacks || 0) * 10}% DMG)
+                  </span>
+                )}
               </span>
               <span style={{ fontSize: 12, fontWeight: 900, color: '#fecdd3' }}>
                 {activeBoss.hp.toLocaleString()} / {activeBoss.maxHp.toLocaleString()} HP
@@ -1018,6 +1033,66 @@ export const Hud: React.FC<HudProps> = ({
                 }}
               >
                 🟣 KLĄTWA CZARNOKSIĘŻNIKA — Traf Wojownikiem, aby zdetonować WYBUCH CIENIA!
+              </div>
+            )}
+
+            {/* Interrupt Check 5s Destructive Spell Shield Bar */}
+            {(activeBoss.interruptShield || 0) > 0 && (activeBoss.interruptEndsAt || 0) > now && (
+              <div style={{ marginTop: 5 }}>
+                <div
+                  style={{
+                    position: 'relative',
+                    height: 15,
+                    background: '#1e1b4b',
+                    border: '2px solid #38bdf8',
+                    borderRadius: 6,
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    style={{
+                      width: `${Math.max(0, Math.min(100, ((activeBoss.interruptShield || 0) / Math.max(1, activeBoss.maxInterruptShield || 1)) * 100))}%`,
+                      height: '100%',
+                      background: 'linear-gradient(90deg, #0284c7, #38bdf8, #e0f2fe)',
+                      transition: 'width 0.1s',
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      fontSize: 9.5,
+                      fontWeight: 900,
+                      color: '#fff',
+                      textShadow: '1px 1px 0 #000',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    🛡️ PRZERWIJ CZAR! ZBIJ TARCZĘ (3× STAGGER) • {(((activeBoss.interruptEndsAt || 0) - now) / 1000).toFixed(1)}s
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Boss Fixate Hunter Alert */}
+            {activeBoss.fixateTargetId && (activeBoss.fixateUntil || 0) > now && (
+              <div
+                style={{
+                  marginTop: 4,
+                  textAlign: 'center',
+                  fontSize: 11,
+                  fontWeight: 900,
+                  color: '#fecdd3',
+                  background: 'rgba(185, 28, 28, 0.55)',
+                  borderRadius: 6,
+                  padding: '2px 8px',
+                }}
+              >
+                🎯 POLOWANIE (ODPORNY NA TAUNT):{' '}
+                {snapshot?.players.find((pl) => pl.id === activeBoss.fixateTargetId)?.name || 'Cel'} •{' '}
+                {(((activeBoss.fixateUntil || 0) - now) / 1000).toFixed(1)}s
               </div>
             )}
 
