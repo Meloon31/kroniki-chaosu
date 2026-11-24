@@ -134,11 +134,20 @@ export const MAX_UPGRADE_LEVEL = 13;
 export const MAX_OVERCAP_UPGRADE_LEVEL = 15;
 export const MAX_UPGRADE_LEVEL_HARDCORE = 20;
 export const CHAOS_STONE_DROP_RATE = 0.05;
-export const CHAOS_STONE_ELIGIBLE_BOSSES = ['malakor', 'azirath', 'sylvara', 'vaelgor'] as const;
+export const CHAOS_STONE_ELIGIBLE_BOSSES = [
+  'malakor',
+  'azirath',
+  'sylvara',
+  'vaelgor',
+  'kaelis',
+  'ignarok',
+  'aeternus',
+] as const;
 
-export function getMaxUpgradeLevel(_hardcoreUnlocked = false): number {
-  // Standard shard upgrading strictly stops at +13; +14 and +15 require Kamień Chaosu!
-  return MAX_UPGRADE_LEVEL;
+export function getMaxUpgradeLevel(hardcoreUnlocked = false): number {
+  // Standard mode shard upgrading strictly stops at +13 (+14/+15 require Kamień Chaosu);
+  // Unlocking Hardcore Mode raises the forge cap to +20!
+  return hardcoreUnlocked ? MAX_UPGRADE_LEVEL_HARDCORE : MAX_UPGRADE_LEVEL;
 }
 
 export interface HardcoreUnlockProgress {
@@ -761,7 +770,8 @@ export function shouldWarnChaosStoneRisk(item: EquipmentItem): boolean {
 
 export function applyChaosStone(
   item: EquipmentItem,
-  rng: () => number = Math.random
+  rng: () => number = Math.random,
+  maxCap: number = MAX_OVERCAP_UPGRADE_LEVEL
 ): ChaosStoneResult {
   const roll = rng() * 100;
   const previousLevel = item.upgradeLevel;
@@ -854,10 +864,10 @@ export function applyChaosStone(
     };
   }
 
-  // 20% — Przełamanie (+2 Poziomy, cap +15!) (30 <= roll < 50)
+  // 20% — Przełamanie (+2 Poziomy, cap +15 standard / +20 Hardcore!) (30 <= roll < 50)
   if (roll < 50) {
-    const targetLevel = Math.min(MAX_OVERCAP_UPGRADE_LEVEL, previousLevel + 2);
-    const cappedAtMax = previousLevel >= MAX_OVERCAP_UPGRADE_LEVEL;
+    const targetLevel = Math.min(maxCap, previousLevel + 2);
+    const cappedAtMax = previousLevel >= maxCap;
     const updatedItem: EquipmentItem = {
       ...item,
       upgradeLevel: Math.max(previousLevel, targetLevel),
@@ -869,7 +879,7 @@ export function applyChaosStone(
       newLevel: updatedItem.upgradeLevel,
       cappedAtMax,
       message: cappedAtMax
-        ? `🔥 PRZEŁAMANIE CHAOSU! Przedmiot osiągnął już elitarne maksimum +${MAX_OVERCAP_UPGRADE_LEVEL}!`
+        ? `🔥 PRZEŁAMANIE CHAOSU! Przedmiot osiągnął już elitarne maksimum +${maxCap}!`
         : updatedItem.upgradeLevel >= 14
           ? `🔥 PRZEŁAMANIE PROGU +13! ${item.name} awansuje na ELITARNE +${updatedItem.upgradeLevel}!`
           : `⚡ PRZEŁAMANIE (+2)! ${item.name} awansuje z +${previousLevel} na +${updatedItem.upgradeLevel}!`,

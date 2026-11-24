@@ -5,12 +5,14 @@ import {
   ChaosStoneResult,
   EQUIP_SLOTS,
   getEffectiveItemBaseStats,
+  getHardcoreUnlockProgress,
   getMaxUpgradeLevel,
   getPlus13ClassBonus,
   getUpgradeShardCost,
   getUpgradeSuccessChance,
   MAX_OVERCAP_UPGRADE_LEVEL,
   MAX_UPGRADE_LEVEL,
+  MAX_UPGRADE_LEVEL_HARDCORE,
   RARITY_META,
   shouldWarnChaosStoneRisk,
   SLOT_LABELS,
@@ -94,7 +96,11 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
 
   const selectedEntry = allItems.find((e) => e.item.id === selectedId) ?? allItems[0] ?? null;
   const item = selectedEntry?.item ?? null;
-  const maxAllowedUpgrade = getMaxUpgradeLevel(false); // Strictly +13 for standard shard forging!
+  const hcProgress = getHardcoreUnlockProgress(profile);
+  const maxAllowedUpgrade = getMaxUpgradeLevel(hcProgress.unlocked);
+  const maxChaosOvercap = hcProgress.unlocked
+    ? MAX_UPGRADE_LEVEL_HARDCORE
+    : MAX_OVERCAP_UPGRADE_LEVEL;
   const ownedChaosStones = profile.chaosStones || 0;
   const isBusy = forging || chaosSpinning;
 
@@ -263,14 +269,15 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div>
             <h2 className="comic-title" style={{ margin: 0, fontSize: 32, color: '#fbbf24' }}>
-              🔨 KUŹNIA KOWALA (+0 → +13 • 🌀 CHAOS +14/+15)
+              🔨 KUŹNIA KOWALA (+0 → {hcProgress.unlocked ? '+20 HARDCORE' : '+13 • 🌀 CHAOS +14/+15'})
             </h2>
             <div style={{ fontSize: 12, color: '#cbd5e1' }}>
               Odłamki: <strong style={{ color: '#4ade80' }}>+0→+6: 60%</strong> •{' '}
               <strong style={{ color: '#fde047' }}>+6→+9: 35%</strong> •{' '}
               <strong style={{ color: '#fb923c' }}>+9→+12: 20%</strong> •{' '}
               <strong style={{ color: '#fb7185' }}>+13: 10%</strong> •{' '}
-              <strong style={{ color: '#e879f9' }}>🌀 Przełamanie +14/+15: wyłącznie Kamień Chaosu!</strong>
+              <strong style={{ color: '#00f5d4' }}>🔥 HC +13→+20: 12%/8%/5%</strong> •{' '}
+              <strong style={{ color: '#e879f9' }}>🌀 Kamień Chaosu (+2 do +{maxChaosOvercap})!</strong>
             </div>
           </div>
           <button
@@ -569,9 +576,9 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
                           }}
                         >
                           Poziom: +{item.upgradeLevel}{' '}
-                          {item.upgradeLevel < MAX_OVERCAP_UPGRADE_LEVEL
-                            ? `(Przełamanie → +${Math.min(MAX_OVERCAP_UPGRADE_LEVEL, item.upgradeLevel + 2)})`
-                            : '(MAX +15)'}
+                          {item.upgradeLevel < maxChaosOvercap
+                            ? `(Przełamanie → +${Math.min(maxChaosOvercap, item.upgradeLevel + 2)})`
+                            : `(MAX +${maxChaosOvercap})`}
                         </div>
                       </>
                     ) : (
@@ -639,7 +646,7 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
                       {ownedChaosStones}×
                     </div>
                     <div style={{ fontSize: 9.5, color: '#e2e8f0', fontWeight: 700, marginTop: 2 }}>
-                      5% drop z Głównych Bossów Aktów 1–4
+                      5% drop z Głównych Bossów Aktów 1–7
                     </div>
                   </div>
                 </div>
@@ -801,7 +808,7 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
                 {chaosSpinning
                   ? '🌀 WIROWANIE ENERGII CHAOSU...'
                   : ownedChaosStones < 1
-                    ? '❌ BRAK KAMIENI CHAOSU (5% drop z Głównych Bossów Aktów 1–4)'
+                    ? '❌ BRAK KAMIENI CHAOSU (5% drop z Głównych Bossów Aktów 1–7)'
                     : !item
                       ? 'Wybierz przedmiot po lewej'
                       : `🌀 UŻYJ KAMIENIA CHAOSU NA ${item.name.toUpperCase()} (+${item.upgradeLevel})`}
@@ -1310,11 +1317,11 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
                           opacity: 0.9,
                         }}
                       >
-                        {item.upgradeLevel >= MAX_OVERCAP_UPGRADE_LEVEL
-                          ? `👑 OSIĄGNIĘTO ELITARNE MAKSIMUM (+${MAX_OVERCAP_UPGRADE_LEVEL})!`
+                        {item.upgradeLevel >= maxChaosOvercap
+                          ? `👑 OSIĄGNIĘTO ELITARNE MAKSIMUM (+${maxChaosOvercap})!`
                           : '🔒 Osiągnięto limit odłamków (użyj Kamienia Chaosu)'}
                       </button>
-                      {item.upgradeLevel < MAX_OVERCAP_UPGRADE_LEVEL && (
+                      {item.upgradeLevel < maxChaosOvercap && (
                         <button
                           className="comic-btn comic-btn-purple"
                           onClick={() => setActiveTab('chaos')}
@@ -1326,7 +1333,7 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
                             borderColor: '#fde047',
                           }}
                         >
-                          🌀 Przejdź do Kuźni Chaosu (Przełamanie +14 / +15 • Masz: {ownedChaosStones}×)
+                          🌀 Przejdź do Kuźni Chaosu (Przełamanie +14 / +{maxChaosOvercap} • Masz: {ownedChaosStones}×)
                         </button>
                       )}
                     </div>

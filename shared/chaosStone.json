@@ -6,10 +6,14 @@
     "malakor",
     "azirath",
     "sylvara",
-    "vaelgor"
+    "vaelgor",
+    "kaelis",
+    "ignarok",
+    "aeternus"
   ],
   "standardMaxUpgradeLevel": 13,
   "maxOvercapUpgradeLevel": 15,
+  "hardcoreMaxOvercapUpgradeLevel": 20,
   "confirmWarningRarities": [
     "legendarny",
     "boski",

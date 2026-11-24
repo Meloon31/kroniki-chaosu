@@ -1680,7 +1680,10 @@ export function App() {
     }
     if (!target) return null;
 
-    const result = applyChaosStone(target);
+    const maxChaosCap = isHardcoreUnlocked(cur)
+      ? MAX_UPGRADE_LEVEL_HARDCORE
+      : MAX_OVERCAP_UPGRADE_LEVEL;
+    const result = applyChaosStone(target, Math.random, maxChaosCap);
 
     setProfile((prev) => {
       const nextStones = Math.max(0, (prev.chaosStones || 0) - 1);
