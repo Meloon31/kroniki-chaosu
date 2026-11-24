@@ -242,6 +242,66 @@ class SoundEngine {
   public playMerchantBuy() {
     [659, 987, 1318].forEach((f, i) => this.playTone(f, f, 0.18, 'sine', 0.2, i * 0.06));
   }
+
+  // =========================================================
+  // KAMIEŃ CHAOSU (HIGH-RISK CRAFTING) AUDIO SUITE
+  // =========================================================
+  public playChaosStoneDrop() {
+    // Deep crimson-violet cosmic drop chime!
+    this.playTone(110, 55, 0.72, 'sawtooth', 0.28, 0);
+    [311.13, 466.16, 622.25, 932.33, 1244.5].forEach((f, idx) =>
+      this.playTone(f, f * 1.025, 0.92, idx % 2 === 0 ? 'triangle' : 'sine', 0.26, idx * 0.06)
+    );
+    this.playNoise(0.28, 0.22, 1400, 0.04);
+  }
+
+  public playChaosVortexTension() {
+    // 1.2s accelerating swirling vortex buildup!
+    for (let i = 0; i < 6; i++) {
+      const fStart = 180 + i * 75;
+      this.playTone(fStart, fStart * 1.24, 0.2, i % 2 === 0 ? 'sawtooth' : 'triangle', 0.14 + i * 0.02, i * 0.18);
+    }
+    this.playNoise(1.15, 0.16, 700, 0.02);
+  }
+
+  public playChaosBreakthrough() {
+    // Triumphant thunderous anvil strike + soaring chaos fanfare (+2 upgrade!)
+    this.playNoise(0.24, 0.38, 1600, 0);
+    this.playTone(1320, 880, 0.42, 'square', 0.24, 0);
+    this.playTone(130, 55, 0.45, 'sawtooth', 0.34, 0);
+    [523.25, 659.25, 783.99, 1046.5, 1318.5, 1567.98].forEach((f, idx) =>
+      this.playTone(f, f * 1.03, 0.65, 'triangle', 0.24, 0.08 + idx * 0.065)
+    );
+  }
+
+  public playChaosBonusAdd() {
+    // Shimmering gold-violet arcane chime (+1 modifier!)
+    [440, 554.37, 659.25, 880, 1108.73].forEach((f, idx) =>
+      this.playTone(f, f * 1.02, 0.44, 'sine', 0.23, idx * 0.055)
+    );
+  }
+
+  public playChaosBonusRemove() {
+    // Cracking rune fracture + dark descending tone (-1 modifier!)
+    this.playNoise(0.18, 0.28, 2200, 0);
+    this.playTone(540, 220, 0.28, 'sawtooth', 0.24, 0.02);
+    this.playTone(340, 140, 0.34, 'triangle', 0.22, 0.1);
+  }
+
+  public playChaosDestroy() {
+    // Hollow shattering break + ash explosion crunch (10% item destroyed!)
+    this.playTone(155, 36, 0.62, 'sawtooth', 0.38, 0);
+    this.playTone(92, 28, 0.7, 'square', 0.26, 0.04);
+    this.playNoise(0.45, 0.36, 380, 0);
+    this.playNoise(0.25, 0.3, 2400, 0.05);
+  }
+
+  public playChaosFizzle() {
+    // Metallic sparks + muted clink (50% no effect)
+    this.playNoise(0.16, 0.22, 2600, 0);
+    this.playTone(620, 390, 0.18, 'triangle', 0.16, 0.02);
+    this.playTone(480, 310, 0.2, 'sine', 0.14, 0.09);
+  }
 }
 
 export const soundEngine = new SoundEngine();

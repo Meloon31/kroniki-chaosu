@@ -15,6 +15,7 @@ interface ItemTooltipProps {
   item: EquipmentItem;
   viewerClassId?: ClassId;
   compact?: boolean;
+  highlightBonusKey?: string | null;
 }
 
 const BONUS_LABELS: Record<string, string> = {
@@ -41,7 +42,12 @@ const PCT_KEYS = new Set([
   'dodge',
 ]);
 
-export const ItemTooltip: React.FC<ItemTooltipProps> = ({ item, viewerClassId, compact }) => {
+export const ItemTooltip: React.FC<ItemTooltipProps> = ({
+  item,
+  viewerClassId,
+  compact,
+  highlightBonusKey,
+}) => {
   const meta = RARITY_META[item.rarity];
   const slotInfo = SLOT_LABELS[item.slot];
   const base = getEffectiveItemBaseStats(item);
@@ -58,11 +64,19 @@ export const ItemTooltip: React.FC<ItemTooltipProps> = ({ item, viewerClassId, c
       ? getPlus13ClassBonus(viewerClassId)
       : null;
 
+  const isChaosOvercap = item.upgradeLevel >= 14;
+
   return (
     <div
-      className={`comic-panel-sm p-3 text-left ${item.rarity === 'boski' || item.rarity === 'niesmiertelny' ? 'boski-shimmer' : ''}`}
+      className={`comic-panel-sm p-3 text-left ${
+        isChaosOvercap
+          ? 'chaos-overcap-frame'
+          : item.rarity === 'boski' || item.rarity === 'niesmiertelny'
+            ? 'boski-shimmer'
+            : ''
+      }`}
       style={{
-        borderColor: meta.color,
+        borderColor: isChaosOvercap ? '#e11d48' : meta.color,
         minWidth: compact ? 200 : 250,
         maxWidth: 310,
       }}
@@ -72,7 +86,15 @@ export const ItemTooltip: React.FC<ItemTooltipProps> = ({ item, viewerClassId, c
           <div style={{ fontWeight: 900, fontSize: 15, color: meta.color, lineHeight: 1.2 }}>
             {slotInfo.icon} {item.name}
             {item.upgradeLevel > 0 && (
-              <span style={{ color: '#fde047', marginLeft: 5 }}>+{item.upgradeLevel}</span>
+              <span
+                style={{
+                  color: isChaosOvercap ? '#f472b6' : '#fde047',
+                  marginLeft: 5,
+                  textShadow: isChaosOvercap ? '0 0 10px #e11d48' : undefined,
+                }}
+              >
+                +{item.upgradeLevel}
+              </span>
             )}
           </div>
           <div style={{ fontSize: 11, color: '#cbd5e1', marginTop: 3, display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
@@ -134,20 +156,49 @@ export const ItemTooltip: React.FC<ItemTooltipProps> = ({ item, viewerClassId, c
             fontSize: 12,
           }}
         >
-          {bonusEntries.map(([key, val]) => (
-            <div key={key} style={{ color: '#fde047', fontWeight: 700 }}>
-              ✦ +{val}
-              {PCT_KEYS.has(key) ? '%' : ''} {BONUS_LABELS[key] || key}
-            </div>
-          ))}
+          {bonusEntries.map(([key, val]) => {
+            const isHighlighted = highlightBonusKey === key;
+            return (
+              <div
+                key={key}
+                style={{
+                  color: isHighlighted ? '#f0abfc' : '#fde047',
+                  fontWeight: isHighlighted ? 900 : 700,
+                  background: isHighlighted ? 'rgba(192, 38, 211, 0.28)' : undefined,
+                  border: isHighlighted ? '1px solid #e879f9' : undefined,
+                  borderRadius: isHighlighted ? 6 : undefined,
+                  padding: isHighlighted ? '2px 6px' : undefined,
+                  marginBottom: isHighlighted ? 2 : undefined,
+                }}
+              >
+                {isHighlighted ? '🌟 NOWY! ' : '✦ '}+{val}
+                {PCT_KEYS.has(key) ? '%' : ''} {BONUS_LABELS[key] || key}
+              </div>
+            );
+          })}
         </div>
       )}
 
-      {item.upgradeLevel >= 7 && (
+      {item.upgradeLevel >= 14 ? (
+        <div
+          style={{
+            marginTop: 6,
+            padding: '4px 8px',
+            borderRadius: 7,
+            background: 'linear-gradient(90deg, rgba(225,29,72,0.32), rgba(147,51,234,0.34))',
+            border: '1.5px solid #e11d48',
+            fontSize: 11,
+            color: '#fbcfe8',
+            fontWeight: 900,
+          }}
+        >
+          🌀 PRZEŁAMANIE CHAOSU (+{item.upgradeLevel}) — Poświata Energii Chaosu (HDR)
+        </div>
+      ) : item.upgradeLevel >= 7 ? (
         <div style={{ marginTop: 6, fontSize: 11, color: '#38bdf8', fontWeight: 800 }}>
           ✨ Aktywna Poświata Kowalska (+{item.upgradeLevel})
         </div>
-      )}
+      ) : null}
 
       {p13Bonus && item.upgradeLevel >= MAX_UPGRADE_LEVEL && (
         <div

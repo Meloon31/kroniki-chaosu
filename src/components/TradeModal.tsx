@@ -7,7 +7,7 @@ interface TradeModalProps {
   profile: PlayerProfile;
   localPlayerId: string;
   trade: TradeSessionState;
-  onUpdateOffer: (items: EquipmentItem[]) => void;
+  onUpdateOffer: (items: EquipmentItem[], chaosStones: number) => void;
   onLockOffer: () => void;
   onAcceptTrade: () => void;
   onCancelTrade: () => void;
@@ -30,6 +30,9 @@ export const TradeModal: React.FC<TradeModalProps> = ({
   const partnerName = isPlayerA ? trade.playerBName : trade.playerAName;
   const myOffer = isPlayerA ? trade.offerA : trade.offerB;
   const partnerOffer = isPlayerA ? trade.offerB : trade.offerA;
+  const myChaosOffer = isPlayerA ? trade.chaosStonesA || 0 : trade.chaosStonesB || 0;
+  const partnerChaosOffer = isPlayerA ? trade.chaosStonesB || 0 : trade.chaosStonesA || 0;
+  const ownedChaosStones = profile.chaosStones || 0;
   const myLocked = isPlayerA ? trade.lockedA : trade.lockedB;
   const partnerLocked = isPlayerA ? trade.lockedB : trade.lockedA;
   const myAccepted = isPlayerA ? trade.acceptedA : trade.acceptedB;
@@ -40,11 +43,16 @@ export const TradeModal: React.FC<TradeModalProps> = ({
 
   const addItemToOffer = (item: EquipmentItem) => {
     if (offeredIds.has(item.id) || myOffer.length >= 6) return;
-    onUpdateOffer([...myOffer, item]);
+    onUpdateOffer([...myOffer, item], myChaosOffer);
   };
 
   const removeItemFromOffer = (itemId: string) => {
-    onUpdateOffer(myOffer.filter((i) => i.id !== itemId));
+    onUpdateOffer(myOffer.filter((i) => i.id !== itemId), myChaosOffer);
+  };
+
+  const setChaosOffer = (nextQty: number) => {
+    const clamped = Math.max(0, Math.min(ownedChaosStones, Math.floor(nextQty)));
+    onUpdateOffer(myOffer, clamped);
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -157,6 +165,44 @@ export const TradeModal: React.FC<TradeModalProps> = ({
                     );
                   })}
                 </div>
+                {/* Tradeable Kamienie Chaosu Control */}
+                <div
+                  style={{
+                    marginTop: 8,
+                    padding: '6px 10px',
+                    borderRadius: 8,
+                    background: 'linear-gradient(90deg, rgba(159,18,57,0.34), rgba(88,28,135,0.38))',
+                    border: '1.5px solid #e11d48',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ fontSize: 11.5, fontWeight: 900, color: '#fbcfe8' }}>
+                    🌀 Kamienie Chaosu:{' '}
+                    <span style={{ color: '#fde047' }}>{myChaosOffer}</span>{' '}
+                    <span style={{ color: '#94a3b8', fontSize: 10 }}>(Masz: {ownedChaosStones})</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <button
+                      className="comic-btn comic-btn-dark"
+                      disabled={myChaosOffer <= 0}
+                      onClick={() => setChaosOffer(myChaosOffer - 1)}
+                      style={{ padding: '2px 8px', fontSize: 12 }}
+                    >
+                      −
+                    </button>
+                    <button
+                      className="comic-btn comic-btn-purple"
+                      disabled={myChaosOffer >= ownedChaosStones}
+                      onClick={() => setChaosOffer(myChaosOffer + 1)}
+                      style={{ padding: '2px 8px', fontSize: 12 }}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* Partner Offer */}
@@ -225,6 +271,29 @@ export const TradeModal: React.FC<TradeModalProps> = ({
                       </div>
                     );
                   })}
+                </div>
+                {/* Partner Offered Kamienie Chaosu */}
+                <div
+                  style={{
+                    marginTop: 8,
+                    padding: '6px 10px',
+                    borderRadius: 8,
+                    background:
+                      partnerChaosOffer > 0
+                        ? 'linear-gradient(90deg, rgba(159,18,57,0.42), rgba(88,28,135,0.45))'
+                        : 'rgba(19,22,39,0.72)',
+                    border: `1.5px solid ${partnerChaosOffer > 0 ? '#e11d48' : '#2a304d'}`,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <span style={{ fontSize: 11.5, fontWeight: 900, color: partnerChaosOffer > 0 ? '#fbcfe8' : '#64748b' }}>
+                    🌀 Kamienie Chaosu w ofercie partnera:
+                  </span>
+                  <span style={{ fontSize: 13, fontWeight: 900, color: partnerChaosOffer > 0 ? '#fde047' : '#64748b' }}>
+                    {partnerChaosOffer}×
+                  </span>
                 </div>
               </div>
             </div>

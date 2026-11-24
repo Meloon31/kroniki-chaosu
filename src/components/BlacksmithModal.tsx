@@ -2,21 +2,24 @@ import React, { useState } from 'react';
 import { getDailyBlessing } from '../../shared/bounties';
 import { CLASSES } from '../../shared/classes';
 import {
+  ChaosStoneResult,
   EQUIP_SLOTS,
   getEffectiveItemBaseStats,
-  getHardcoreUnlockProgress,
   getMaxUpgradeLevel,
   getPlus13ClassBonus,
   getUpgradeShardCost,
   getUpgradeSuccessChance,
+  MAX_OVERCAP_UPGRADE_LEVEL,
   MAX_UPGRADE_LEVEL,
-  MAX_UPGRADE_LEVEL_HARDCORE,
   RARITY_META,
+  shouldWarnChaosStoneRisk,
   SLOT_LABELS,
 } from '../../shared/items';
 import type { EquipmentItem, PlayerProfile, Rarity } from '../../shared/types';
 import transmutationConfig from '../../shared/transmutation.json';
+import chaosStoneConfig from '../../shared/chaosStone.json';
 import { soundEngine } from '../audio/soundEngine';
+import { ItemTooltip } from './ItemTooltip';
 
 const TRANSMUTE_RATIO: number = transmutationConfig.transmutationRatio;
 const TRANSMUTE_HIERARCHY = transmutationConfig.rarityHierarchy as Rarity[];
@@ -43,6 +46,7 @@ const MENTOR_EXCHANGE_OFFERS: Array<{
 interface BlacksmithModalProps {
   profile: PlayerProfile;
   onUpgradeItem: (itemId: string) => { success: boolean; newLevel: number; chancePct: number } | null;
+  onUseChaosStone?: (itemId: string) => ChaosStoneResult | null;
   onExchangeMentorShards?: (targetRarity: Rarity, mentorCost: number, grantAmount: number) => void;
   onTransmuteShards?: (fromRarity: Rarity, toRarity: Rarity, count: number) => void;
   onClose: () => void;
@@ -51,11 +55,12 @@ interface BlacksmithModalProps {
 export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
   profile,
   onUpgradeItem,
+  onUseChaosStone,
   onExchangeMentorShards,
   onTransmuteShards,
   onClose,
 }) => {
-  const [activeTab, setActiveTab] = useState<'forge' | 'transmute'>('forge');
+  const [activeTab, setActiveTab] = useState<'forge' | 'chaos' | 'transmute'>('forge');
   const [transmuteFx, setTransmuteFx] = useState<{
     key: number;
     toRarity: Rarity;
@@ -76,13 +81,82 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
   const [tensionPct, setTensionPct] = useState(0);
   const [forgeResult, setForgeResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  // Kuźnia Chaosu state (1.2s vortex tension, risk confirmation, outcome FX!)
+  const [chaosSpinning, setChaosSpinning] = useState(false);
+  const [chaosTensionPct, setChaosTensionPct] = useState(0);
+  const [chaosConfirmItem, setChaosConfirmItem] = useState<EquipmentItem | null>(null);
+  const [chaosResult, setChaosResult] = useState<{
+    key: number;
+    result: ChaosStoneResult;
+    destroyedItemSnapshot?: EquipmentItem;
+  } | null>(null);
+  const [highlightBonusKey, setHighlightBonusKey] = useState<string | null>(null);
+
   const selectedEntry = allItems.find((e) => e.item.id === selectedId) ?? allItems[0] ?? null;
   const item = selectedEntry?.item ?? null;
-  const hcProgress = getHardcoreUnlockProgress(profile);
-  const maxAllowedUpgrade = getMaxUpgradeLevel(hcProgress.unlocked);
+  const maxAllowedUpgrade = getMaxUpgradeLevel(false); // Strictly +13 for standard shard forging!
+  const ownedChaosStones = profile.chaosStones || 0;
+  const isBusy = forging || chaosSpinning;
+
+  const executeChaosStone = (targetItem: EquipmentItem) => {
+    if (!onUseChaosStone || isBusy || ownedChaosStones < 1) return;
+    setChaosConfirmItem(null);
+    setChaosSpinning(true);
+    setChaosResult(null);
+    setHighlightBonusKey(null);
+    setChaosTensionPct(0);
+    soundEngine.playChaosVortexTension();
+
+    const totalMs = chaosStoneConfig.tensionAnimationMs || 1200;
+    const start = performance.now();
+
+    const step = (now: number) => {
+      const p = Math.min(1, (now - start) / totalMs);
+      setChaosTensionPct(Math.round(p * 100));
+      if (p < 1) {
+        requestAnimationFrame(step);
+      } else {
+        const res = onUseChaosStone(targetItem.id);
+        setChaosSpinning(false);
+        if (res) {
+          if (res.outcome === 'upgrade_plus2') {
+            soundEngine.playChaosBreakthrough();
+          } else if (res.outcome === 'add_bonus') {
+            soundEngine.playChaosBonusAdd();
+            if (res.addedBonusKey) {
+              setHighlightBonusKey(res.addedBonusKey);
+              window.setTimeout(() => setHighlightBonusKey(null), 5000);
+            }
+          } else if (res.outcome === 'remove_bonus') {
+            soundEngine.playChaosBonusRemove();
+          } else if (res.outcome === 'destroy') {
+            soundEngine.playChaosDestroy();
+          } else {
+            soundEngine.playChaosFizzle();
+          }
+          const fxKey = Date.now() + Math.random();
+          setChaosResult({
+            key: fxKey,
+            result: res,
+            destroyedItemSnapshot: res.outcome === 'destroy' ? targetItem : undefined,
+          });
+        }
+      }
+    };
+    requestAnimationFrame(step);
+  };
+
+  const handleRequestChaosStone = () => {
+    if (!item || isBusy || ownedChaosStones < 1) return;
+    if (shouldWarnChaosStoneRisk(item)) {
+      setChaosConfirmItem(item);
+      return;
+    }
+    executeChaosStone(item);
+  };
 
   const handleForge = () => {
-    if (!item || forging || item.upgradeLevel >= maxAllowedUpgrade) return;
+    if (!item || isBusy || item.upgradeLevel >= maxAllowedUpgrade) return;
     const cost = getUpgradeShardCost(item.upgradeLevel);
     if ((profile.shards[item.rarity] || 0) < cost) return;
 
@@ -92,7 +166,7 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
     setTensionPct(0);
     soundEngine.playAnvilTension(targetLvl);
 
-    const totalMs = targetLvl >= 14 ? 1300 : targetLvl >= 10 ? 1150 : targetLvl >= 7 ? 850 : 520;
+    const totalMs = targetLvl >= 10 ? 1150 : targetLvl >= 7 ? 850 : 520;
     const start = performance.now();
 
     const step = (now: number) => {
@@ -109,11 +183,9 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
             setForgeResult({
               ok: true,
               msg:
-                res.newLevel >= MAX_UPGRADE_LEVEL_HARDCORE
-                  ? `💎 NIEŚMIERTELNA PERFEKCJA! ${item.name} +20 (1.5× BONUS KLASOWY!)`
-                  : res.newLevel === MAX_UPGRADE_LEVEL
-                    ? `👑 MISTRZOWSKI SUKCES! ${item.name} +13 (ODBLOKOWANO BONUS KLASOWY!)`
-                    : `SUKCES! ${item.name} +${res.newLevel}!`,
+                res.newLevel === MAX_UPGRADE_LEVEL
+                  ? `👑 MISTRZOWSKI SUKCES! ${item.name} +13 (ODBLOKOWANO BONUS KLASOWY!)`
+                  : `SUKCES! ${item.name} +${res.newLevel}!`,
             });
           } else {
             soundEngine.playPuzzleFail();
@@ -182,28 +254,28 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
   };
 
   return (
-    <div className="modal-backdrop" onClick={() => !forging && onClose()}>
+    <div className="modal-backdrop" onClick={() => !isBusy && !chaosConfirmItem && onClose()}>
       <div
         className="comic-panel"
         onClick={(e) => e.stopPropagation()}
-        style={{ width: 'min(960px, 95vw)', maxHeight: '90vh', overflowY: 'auto', padding: 20 }}
+        style={{ width: 'min(980px, 95vw)', maxHeight: '90vh', overflowY: 'auto', padding: 20, position: 'relative' }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div>
             <h2 className="comic-title" style={{ margin: 0, fontSize: 32, color: '#fbbf24' }}>
-              🔨 KUŹNIA KOWALA (+0 → {hcProgress.unlocked ? '+20 HARDCORE' : '+13'})
+              🔨 KUŹNIA KOWALA (+0 → +13 • 🌀 CHAOS +14/+15)
             </h2>
             <div style={{ fontSize: 12, color: '#cbd5e1' }}>
-              Szanse: <strong style={{ color: '#4ade80' }}>+0→+6: 60%</strong> •{' '}
+              Odłamki: <strong style={{ color: '#4ade80' }}>+0→+6: 60%</strong> •{' '}
               <strong style={{ color: '#fde047' }}>+6→+9: 35%</strong> •{' '}
               <strong style={{ color: '#fb923c' }}>+9→+12: 20%</strong> •{' '}
               <strong style={{ color: '#fb7185' }}>+13: 10%</strong> •{' '}
-              <strong style={{ color: '#00f5d4' }}>🔥 HC +13→+20: 12%/8%/5%!</strong>
+              <strong style={{ color: '#e879f9' }}>🌀 Przełamanie +14/+15: wyłącznie Kamień Chaosu!</strong>
             </div>
           </div>
           <button
             className="comic-btn comic-btn-red"
-            disabled={forging}
+            disabled={isBusy}
             onClick={onClose}
             style={{ padding: '6px 14px' }}
           >
@@ -211,19 +283,49 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
           </button>
         </div>
 
-        {/* 2-Tab Switcher: Forge vs Shard Transmutation (30:1) */}
+        {/* 3-Tab Switcher: Forge (+0->+13) | Kuźnia Chaosu (+14/+15) | Shard Transmutation (30:1) */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
           <button
             className={`mmo-tab-btn ${activeTab === 'forge' ? 'active' : ''}`}
-            disabled={forging}
+            disabled={isBusy}
             onClick={() => setActiveTab('forge')}
             style={{ flex: 1, padding: '9px 12px', fontSize: 13 }}
           >
-            🔨 Kucie Ekwipunku
+            🔨 Kucie Odłamkami (+13)
+          </button>
+          <button
+            className={`mmo-tab-btn ${activeTab === 'chaos' ? 'active' : ''}`}
+            disabled={isBusy}
+            onClick={() => setActiveTab('chaos')}
+            style={{
+              flex: 1,
+              padding: '9px 12px',
+              fontSize: 13,
+              borderColor: activeTab === 'chaos' ? '#e11d48' : undefined,
+              background:
+                activeTab === 'chaos'
+                  ? 'linear-gradient(135deg, rgba(225, 29, 72, 0.34), rgba(147, 51, 234, 0.28))'
+                  : undefined,
+            }}
+          >
+            🌀 Kuźnia Chaosu (+14/+15)
+            <span
+              style={{
+                marginLeft: 6,
+                background: ownedChaosStones > 0 ? '#e11d48' : '#334155',
+                color: '#fff',
+                borderRadius: 99,
+                padding: '1px 7px',
+                fontSize: 11,
+                fontWeight: 900,
+              }}
+            >
+              {ownedChaosStones}
+            </span>
           </button>
           <button
             className={`mmo-tab-btn ${activeTab === 'transmute' ? 'active' : ''}`}
-            disabled={forging}
+            disabled={isBusy}
             onClick={() => setActiveTab('transmute')}
             style={{ flex: 1, padding: '9px 12px', fontSize: 13 }}
           >
@@ -246,7 +348,467 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
           </button>
         </div>
 
-        {activeTab === 'transmute' ? (
+        {/* High-Risk Confirmation Dialog for Legendary / Boski / +10+ Items */}
+        {chaosConfirmItem && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(6, 7, 15, 0.82)',
+              zIndex: 90,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 16,
+            }}
+            onClick={() => setChaosConfirmItem(null)}
+          >
+            <div
+              className="comic-panel chaos-overcap-frame"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: 'min(480px, 94vw)',
+                padding: 22,
+                textAlign: 'center',
+                background: 'linear-gradient(165deg, rgba(45, 12, 32, 0.98), rgba(15, 13, 28, 0.99))',
+              }}
+            >
+              <div className="comic-title" style={{ fontSize: 28, color: '#fb7185', marginBottom: 8 }}>
+                ⚠️ OSTRZEŻENIE WYSOKIEGO RYZYKA!
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: '#fef08a', marginBottom: 8 }}>
+                {SLOT_LABELS[chaosConfirmItem.slot].icon} {chaosConfirmItem.name} (+{chaosConfirmItem.upgradeLevel})
+              </div>
+              <div
+                style={{
+                  fontSize: 13.5,
+                  color: '#f8fafc',
+                  lineHeight: 1.5,
+                  background: 'rgba(225, 29, 72, 0.18)',
+                  border: '1.5px solid #e11d48',
+                  borderRadius: 10,
+                  padding: '10px 14px',
+                  marginBottom: 16,
+                  fontWeight: 700,
+                }}
+              >
+                Uwaga! Istnieje <strong>10% szansy</strong> na bezpowrotne zniszczenie tego przedmiotu. Kontynuować?
+              </div>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+                <button
+                  className="comic-btn comic-btn-dark"
+                  onClick={() => setChaosConfirmItem(null)}
+                  style={{ padding: '10px 18px', fontSize: 13 }}
+                >
+                  ✕ Anuluj
+                </button>
+                <button
+                  className="comic-btn comic-btn-red"
+                  onClick={() => executeChaosStone(chaosConfirmItem)}
+                  style={{
+                    padding: '10px 18px',
+                    fontSize: 13,
+                    background: 'linear-gradient(135deg, #e11d48, #9333ea)',
+                    borderColor: '#f472b6',
+                  }}
+                >
+                  🌀 Tak, użyj Kamienia Chaosu
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'chaos' ? (
+          <div style={{ display: 'grid', gridTemplateColumns: '290px 1fr', gap: 16 }}>
+            {/* Left: Item Selector for Kuźnia Chaosu */}
+            <div className="comic-panel-sm" style={{ padding: 10, maxHeight: 540, overflowY: 'auto' }}>
+              <div style={{ fontSize: 11, fontWeight: 900, color: '#f472b6', marginBottom: 8 }}>
+                WYBIERZ PRZEDMIOT DO KUŹNI CHAOSU ({allItems.length})
+              </div>
+              {allItems.map(({ item: it, equipped }) => {
+                const m = RARITY_META[it.rarity];
+                const sel = item?.id === it.id;
+                const bonusCount = Object.values(it.bonusStats).filter((v) => typeof v === 'number' && v > 0).length;
+                const isOvercap = it.upgradeLevel >= 14;
+                return (
+                  <div
+                    key={it.id}
+                    onClick={() => !isBusy && setSelectedId(it.id)}
+                    className={isOvercap ? 'chaos-overcap-frame' : ''}
+                    style={{
+                      background: sel ? '#36193f' : '#131627',
+                      border: `2px solid ${sel ? '#fde047' : isOvercap ? '#e11d48' : m.color}`,
+                      borderRadius: 9,
+                      padding: '7px 9px',
+                      marginBottom: 6,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <div style={{ overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 900,
+                          color: m.color,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {SLOT_LABELS[it.slot].icon} {it.name}
+                      </div>
+                      <div style={{ fontSize: 10, color: '#cbd5e1' }}>
+                        {equipped ? '★ Założony' : 'Plecak'} • Bonusy: <strong style={{ color: '#fde047' }}>{bonusCount}</strong>
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 14,
+                        fontWeight: 900,
+                        color: isOvercap ? '#f472b6' : it.upgradeLevel >= 13 ? '#fb7185' : '#fde047',
+                        marginLeft: 8,
+                      }}
+                    >
+                      +{it.upgradeLevel}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Right: Kuźnia Chaosu High-Risk Altar Stage */}
+            <div
+              className={`comic-panel-sm ${
+                chaosResult?.result.outcome === 'upgrade_plus2' ? 'chaos-breakthrough-burst' : ''
+              }`}
+              style={{
+                padding: 16,
+                borderColor: '#e11d48',
+                background: 'linear-gradient(165deg, rgba(48, 12, 42, 0.92), rgba(14, 15, 30, 0.97))',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 12,
+              }}
+            >
+              {/* Dual Slots + Animated Vortex Camera-Zoom Stage */}
+              <div
+                style={{
+                  transform: chaosSpinning ? 'scale(1.045)' : 'scale(1)',
+                  transition: 'transform 0.55s cubic-bezier(0.22, 1, 0.36, 1)',
+                  background:
+                    chaosResult?.result.outcome === 'destroy'
+                      ? 'radial-gradient(circle, rgba(239,68,68,0.35), rgba(15,15,24,0.95) 75%)'
+                      : chaosResult?.result.outcome === 'upgrade_plus2'
+                        ? 'radial-gradient(circle, rgba(253,224,71,0.35), rgba(147,51,234,0.28) 50%, rgba(15,15,28,0.96) 80%)'
+                        : chaosResult?.result.outcome === 'add_bonus'
+                          ? 'radial-gradient(circle, rgba(192,38,211,0.36), rgba(15,15,28,0.95) 75%)'
+                          : chaosResult?.result.outcome === 'remove_bonus'
+                            ? 'radial-gradient(circle, rgba(71,85,105,0.45), rgba(10,12,22,0.96) 75%)'
+                            : 'radial-gradient(circle, rgba(225,29,72,0.22), rgba(14,16,32,0.94) 75%)',
+                  border: '2px solid rgba(225, 29, 72, 0.65)',
+                  borderRadius: 14,
+                  padding: 14,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr auto 1fr',
+                    alignItems: 'center',
+                    gap: 12,
+                  }}
+                >
+                  {/* Dedicated Item Slot */}
+                  <div
+                    className={
+                      chaosResult?.result.outcome === 'destroy'
+                        ? 'chaos-shatter-anim'
+                        : item && item.upgradeLevel >= 14
+                          ? 'chaos-overcap-frame'
+                          : ''
+                    }
+                    style={{
+                      background: '#131627',
+                      border: `2.5px solid ${item ? RARITY_META[item.rarity].color : '#334155'}`,
+                      borderRadius: 12,
+                      padding: 10,
+                      textAlign: 'center',
+                      minHeight: 96,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <div style={{ fontSize: 10, fontWeight: 900, color: '#94a3b8' }}>SLOT PRZEDMIOTU</div>
+                    {item ? (
+                      <>
+                        <div style={{ fontSize: 28, lineHeight: 1.1, margin: '3px 0' }}>
+                          {SLOT_LABELS[item.slot].icon}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 11.5,
+                            fontWeight: 900,
+                            color: RARITY_META[item.rarity].color,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                        >
+                          {item.name}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 900,
+                            color: item.upgradeLevel >= 14 ? '#f472b6' : '#fde047',
+                          }}
+                        >
+                          Poziom: +{item.upgradeLevel}{' '}
+                          {item.upgradeLevel < MAX_OVERCAP_UPGRADE_LEVEL
+                            ? `(Przełamanie → +${Math.min(MAX_OVERCAP_UPGRADE_LEVEL, item.upgradeLevel + 2)})`
+                            : '(MAX +15)'}
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 8 }}>Brak przedmiotu</div>
+                    )}
+                  </div>
+
+                  {/* Central Swirling Chaos Energy Vortex */}
+                  <div style={{ textAlign: 'center', minWidth: 84 }}>
+                    <div
+                      className={chaosSpinning ? 'chaos-vortex-spin' : ''}
+                      style={{
+                        width: 68,
+                        height: 68,
+                        margin: '0 auto',
+                        borderRadius: '50%',
+                        background:
+                          'conic-gradient(from 0deg, #e11d48, #9333ea, #fde047, #e11d48)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        boxShadow: chaosSpinning
+                          ? '0 0 32px rgba(225, 29, 72, 0.9), 0 0 48px rgba(147, 51, 234, 0.75)'
+                          : '0 0 16px rgba(225, 29, 72, 0.45)',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: 52,
+                          height: 52,
+                          borderRadius: '50%',
+                          background: '#130b1e',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: 28,
+                        }}
+                      >
+                        {chaosSpinning ? '🌀' : '🔨'}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 10, fontWeight: 900, color: '#f472b6', marginTop: 4 }}>
+                      {chaosSpinning ? `WIR ${chaosTensionPct}%` : 'KOWADŁO CHAOSU'}
+                    </div>
+                  </div>
+
+                  {/* Dedicated Kamień Chaosu Slot */}
+                  <div
+                    className={ownedChaosStones > 0 ? 'chaos-overcap-frame' : ''}
+                    style={{
+                      background: 'linear-gradient(135deg, rgba(159,18,57,0.36), rgba(88,28,135,0.42))',
+                      border: `2.5px solid ${ownedChaosStones > 0 ? '#e11d48' : '#475569'}`,
+                      borderRadius: 12,
+                      padding: 10,
+                      textAlign: 'center',
+                      minHeight: 96,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <div style={{ fontSize: 10, fontWeight: 900, color: '#fbcfe8' }}>KAMIEŃ CHAOSU</div>
+                    <div style={{ fontSize: 28, lineHeight: 1.1, margin: '3px 0' }}>🌀</div>
+                    <div className="comic-title" style={{ fontSize: 22, color: '#fde047', lineHeight: 1 }}>
+                      {ownedChaosStones}×
+                    </div>
+                    <div style={{ fontSize: 9.5, color: '#e2e8f0', fontWeight: 700, marginTop: 2 }}>
+                      5% drop z Głównych Bossów Aktów 1–4
+                    </div>
+                  </div>
+                </div>
+
+                {/* 1.2s Tension Vortex Bar */}
+                {chaosSpinning && (
+                  <div style={{ marginTop: 10 }}>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 900,
+                        color: '#f472b6',
+                        textAlign: 'center',
+                        marginBottom: 4,
+                      }}
+                    >
+                      🌀 ENERGIA CHAOSU NARASTA NA KOWADLE... {chaosTensionPct}%
+                    </div>
+                    <div
+                      style={{
+                        height: 12,
+                        background: '#0f1221',
+                        borderRadius: 99,
+                        overflow: 'hidden',
+                        border: '1.5px solid #e11d48',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${chaosTensionPct}%`,
+                          height: '100%',
+                          background: 'linear-gradient(90deg, #9333ea, #e11d48, #fde047)',
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Outcome Dopamine Banner */}
+                {chaosResult && !chaosSpinning && (
+                  <div
+                    key={chaosResult.key}
+                    style={{
+                      marginTop: 10,
+                      padding: '10px 14px',
+                      borderRadius: 10,
+                      textAlign: 'center',
+                      border: `2px solid ${
+                        chaosResult.result.outcome === 'upgrade_plus2'
+                          ? '#fde047'
+                          : chaosResult.result.outcome === 'add_bonus'
+                            ? '#c084fc'
+                            : chaosResult.result.outcome === 'destroy'
+                              ? '#ef4444'
+                              : chaosResult.result.outcome === 'remove_bonus'
+                                ? '#f97316'
+                                : '#64748b'
+                      }`,
+                      background:
+                        chaosResult.result.outcome === 'upgrade_plus2'
+                          ? 'linear-gradient(90deg, rgba(225,29,72,0.52), rgba(147,51,234,0.52), rgba(234,179,8,0.45))'
+                          : chaosResult.result.outcome === 'add_bonus'
+                            ? 'linear-gradient(90deg, rgba(147,51,234,0.45), rgba(234,179,8,0.35))'
+                            : chaosResult.result.outcome === 'destroy'
+                              ? 'rgba(127, 29, 29, 0.72)'
+                              : chaosResult.result.outcome === 'remove_bonus'
+                                ? 'rgba(51, 65, 85, 0.78)'
+                                : 'rgba(30, 41, 59, 0.75)',
+                    }}
+                  >
+                    <div
+                      className="comic-title"
+                      style={{
+                        fontSize: 20,
+                        color:
+                          chaosResult.result.outcome === 'upgrade_plus2'
+                            ? '#fde047'
+                            : chaosResult.result.outcome === 'add_bonus'
+                              ? '#f0abfc'
+                              : chaosResult.result.outcome === 'destroy'
+                                ? '#fca5a5'
+                                : chaosResult.result.outcome === 'remove_bonus'
+                                  ? '#fdba74'
+                                  : '#cbd5e1',
+                      }}
+                    >
+                      {chaosResult.result.message}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Probability Table (100% Pool from shared/chaosStone.json) + Live Item Preview */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems: 'start' }}>
+                <div
+                  style={{
+                    background: '#131627',
+                    border: '1.5px solid #2b3052',
+                    borderRadius: 10,
+                    padding: 10,
+                  }}
+                >
+                  <div style={{ fontSize: 11, fontWeight: 900, color: '#f472b6', marginBottom: 6 }}>
+                    🎲 TABELA REZULTATÓW KAMIENIA CHAOSU (100% PULI)
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    {chaosStoneConfig.outcomes.map((o) => (
+                      <div
+                        key={o.id}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '46px 1fr',
+                          gap: 8,
+                          alignItems: 'center',
+                          fontSize: 11,
+                          padding: '4px 7px',
+                          borderRadius: 7,
+                          background: 'rgba(255,255,255,0.03)',
+                          borderLeft: `3px solid ${o.color}`,
+                        }}
+                      >
+                        <strong style={{ color: o.color, fontSize: 12.5 }}>{o.chancePct}%</strong>
+                        <div>
+                          <div style={{ fontWeight: 900, color: '#f8fafc' }}>{o.label}</div>
+                          <div style={{ fontSize: 10, color: '#94a3b8' }}>{o.description}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {item && (
+                  <ItemTooltip
+                    item={item}
+                    viewerClassId={profile.classId}
+                    compact
+                    highlightBonusKey={highlightBonusKey}
+                  />
+                )}
+              </div>
+
+              {/* Action CTA */}
+              <button
+                className="comic-btn comic-btn-purple"
+                disabled={!item || isBusy || ownedChaosStones < 1}
+                onClick={handleRequestChaosStone}
+                style={{
+                  width: '100%',
+                  padding: '14px 18px',
+                  fontSize: 17,
+                  background:
+                    ownedChaosStones >= 1 && item
+                      ? 'linear-gradient(135deg, #e11d48 0%, #9333ea 55%, #db2777 100%)'
+                      : undefined,
+                  borderColor: ownedChaosStones >= 1 ? '#fde047' : undefined,
+                  color: '#fff',
+                }}
+              >
+                {chaosSpinning
+                  ? '🌀 WIROWANIE ENERGII CHAOSU...'
+                  : ownedChaosStones < 1
+                    ? '❌ BRAK KAMIENI CHAOSU (5% drop z Głównych Bossów Aktów 1–4)'
+                    : !item
+                      ? 'Wybierz przedmiot po lewej'
+                      : `🌀 UŻYJ KAMIENIA CHAOSU NA ${item.name.toUpperCase()} (+${item.upgradeLevel})`}
+              </button>
+            </div>
+          </div>
+        ) : activeTab === 'transmute' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {/* All 5 Shard Counts Overview */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8 }}>
@@ -735,22 +1297,37 @@ export const BlacksmithModal: React.FC<BlacksmithModalProps> = ({
                       </button>
                     </>
                   ) : (
-                    <div style={{ textAlign: 'center' }}>
-                      <div
-                        className="comic-title"
+                    <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <button
+                        className="comic-btn comic-btn-dark"
+                        disabled
                         style={{
-                          fontSize: 22,
-                          color: item.upgradeLevel >= MAX_UPGRADE_LEVEL_HARDCORE ? '#00f5d4' : '#fb7185',
+                          width: '100%',
+                          padding: '12px 14px',
+                          fontSize: 14,
+                          borderColor: item.upgradeLevel >= MAX_OVERCAP_UPGRADE_LEVEL ? '#e11d48' : '#fb7185',
+                          color: item.upgradeLevel >= MAX_OVERCAP_UPGRADE_LEVEL ? '#f472b6' : '#fde047',
+                          opacity: 0.9,
                         }}
                       >
-                        {item.upgradeLevel >= MAX_UPGRADE_LEVEL_HARDCORE
-                          ? '💎 NIEŚMIERTELNA PERFEKCJA (+20 MAX)!'
-                          : '👑 MAKSIMUM TRYBU STANDARDOWEGO (+13)!'}
-                      </div>
-                      {item.upgradeLevel < MAX_UPGRADE_LEVEL_HARDCORE && !hcProgress.unlocked && (
-                        <div style={{ fontSize: 12, color: '#00f5d4', fontWeight: 800, marginTop: 4 }}>
-                          🔥 Odblokuj TRYB HARDCORE (Akt 1–4 + Boski +13: {hcProgress.boskiPlus13Slots}/6), aby kuć aż do +20!
-                        </div>
+                        {item.upgradeLevel >= MAX_OVERCAP_UPGRADE_LEVEL
+                          ? `👑 OSIĄGNIĘTO ELITARNE MAKSIMUM (+${MAX_OVERCAP_UPGRADE_LEVEL})!`
+                          : '🔒 Osiągnięto limit odłamków (użyj Kamienia Chaosu)'}
+                      </button>
+                      {item.upgradeLevel < MAX_OVERCAP_UPGRADE_LEVEL && (
+                        <button
+                          className="comic-btn comic-btn-purple"
+                          onClick={() => setActiveTab('chaos')}
+                          style={{
+                            width: '100%',
+                            padding: '11px 14px',
+                            fontSize: 14,
+                            background: 'linear-gradient(135deg, #e11d48, #9333ea)',
+                            borderColor: '#fde047',
+                          }}
+                        >
+                          🌀 Przejdź do Kuźni Chaosu (Przełamanie +14 / +15 • Masz: {ownedChaosStones}×)
+                        </button>
                       )}
                     </div>
                   )}

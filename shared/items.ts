@@ -131,10 +131,14 @@ export const RARITY_META: Record<Rarity, RarityMeta> = {
 };
 
 export const MAX_UPGRADE_LEVEL = 13;
+export const MAX_OVERCAP_UPGRADE_LEVEL = 15;
 export const MAX_UPGRADE_LEVEL_HARDCORE = 20;
+export const CHAOS_STONE_DROP_RATE = 0.05;
+export const CHAOS_STONE_ELIGIBLE_BOSSES = ['malakor', 'azirath', 'sylvara', 'vaelgor'] as const;
 
-export function getMaxUpgradeLevel(hardcoreUnlocked: boolean): number {
-  return hardcoreUnlocked ? MAX_UPGRADE_LEVEL_HARDCORE : MAX_UPGRADE_LEVEL;
+export function getMaxUpgradeLevel(_hardcoreUnlocked = false): number {
+  // Standard shard upgrading strictly stops at +13; +14 and +15 require Kamień Chaosu!
+  return MAX_UPGRADE_LEVEL;
 }
 
 export interface HardcoreUnlockProgress {
@@ -297,8 +301,10 @@ export function getUpgradeStatMultiplier(upgradeLevel: number): number {
   if (lvl <= 13) {
     return 1 + 6 * 0.08 + (lvl - 6) * 0.12;
   }
-  // Hardcore +14..+20: +15% per level (+20 = 3.37x!)
-  return 1 + 6 * 0.08 + 7 * 0.12 + (lvl - 13) * 0.15;
+  // Elite Chaos Overcap +14 (2.62x) & +15 (3.00x) — huge base stat leap!
+  if (lvl === 14) return 2.62;
+  if (lvl === 15) return 3.0;
+  return 3.0 + (lvl - 15) * 0.16;
 }
 
 export function getUpgradeShardCost(currentLevel: number): number {
@@ -647,5 +653,235 @@ export function createStarterEquipment(classId: ClassId) {
     rekawice: null,
     buty: null,
     amulet: null,
+  };
+}
+
+// =========================================================
+// KAMIEŃ CHAOSU (HIGH-RISK CRAFTING + OVERCAP +14 / +15)
+// Exact distribution matching shared/chaosStone.json:
+// 10% destroy | 10% add_bonus | 10% remove_bonus | 20% upgrade_plus2 | 50% no_effect
+// =========================================================
+export type ChaosStoneOutcomeKind =
+  | 'destroy'
+  | 'add_bonus'
+  | 'remove_bonus'
+  | 'upgrade_plus2'
+  | 'no_effect';
+
+export interface ChaosStoneResult {
+  outcome: ChaosStoneOutcomeKind;
+  updatedItem: EquipmentItem | null; // null when destroyed
+  previousLevel: number;
+  newLevel: number;
+  addedBonusKey?: keyof ItemBonusStats;
+  addedBonusValue?: number;
+  addedBonusLabel?: string;
+  removedBonusKey?: keyof ItemBonusStats;
+  removedBonusValue?: number;
+  removedBonusLabel?: string;
+  noBonusToRemove?: boolean;
+  cappedAtMax?: boolean;
+  message: string;
+}
+
+export const CHAOS_BONUS_STAT_META: Record<
+  keyof ItemBonusStats,
+  { label: string; isPct: boolean }
+> = {
+  hp: { label: 'HP', isPct: false },
+  ad: { label: 'Atak Fiz. (AD)', isPct: false },
+  ap: { label: 'Atak Mag. (AP)', isPct: false },
+  def: { label: 'Obrona (DEF)', isPct: false },
+  critChance: { label: 'Szansa na Kryt', isPct: true },
+  critDamage: { label: 'Obr. Krytyczne', isPct: true },
+  attackSpeed: { label: 'Szyb. Ataku', isPct: true },
+  moveSpeed: { label: 'Szyb. Ruchu', isPct: true },
+  cdr: { label: 'Skrócenie CD', isPct: true },
+  healPower: { label: 'Moc Leczenia/Tarcz', isPct: true },
+  dodge: { label: 'Szansa na Unik', isPct: true },
+};
+
+const ALL_BONUS_STAT_KEYS: Array<keyof ItemBonusStats> = [
+  'hp',
+  'ad',
+  'ap',
+  'def',
+  'critChance',
+  'critDamage',
+  'attackSpeed',
+  'moveSpeed',
+  'cdr',
+  'healPower',
+  'dodge',
+];
+
+function rollBonusValueForItem(
+  stat: keyof ItemBonusStats,
+  item: EquipmentItem,
+  rng: () => number
+): number {
+  const lvl = Math.max(1, Math.min(60, item.itemLevel));
+  // Ensure even Zwykly/Normalny items gain a meaningful Chaos bonus roll!
+  const s = Math.max(0.68, RARITY_META[item.rarity].bonusScale);
+  const jitter = 0.94 + rng() * 0.16;
+  switch (stat) {
+    case 'hp':
+      return Math.max(10, Math.round((12 + lvl * 2.6) * s * jitter));
+    case 'ad':
+      return Math.max(3, Math.round((2.5 + lvl * 0.65) * s * jitter));
+    case 'ap':
+      return Math.max(3, Math.round((2.5 + lvl * 0.65) * s * jitter));
+    case 'def':
+      return Math.max(2, Math.round((1.8 + lvl * 0.4) * s * jitter));
+    case 'critChance':
+      return Number(Math.max(0.8, (0.9 + lvl * 0.025) * s * jitter).toFixed(1));
+    case 'critDamage':
+      return Math.max(3, Math.round((3.5 + lvl * 0.12) * s * jitter));
+    case 'attackSpeed':
+      return Number(Math.max(1.0, (1.2 + lvl * 0.03) * s * jitter).toFixed(1));
+    case 'moveSpeed':
+      return Number(Math.max(0.8, (0.9 + lvl * 0.02) * s * jitter).toFixed(1));
+    case 'cdr':
+      return Number(Math.max(0.8, (0.9 + lvl * 0.025) * s * jitter).toFixed(1));
+    case 'healPower':
+      return Math.max(2, Math.round((2.2 + lvl * 0.08) * s * jitter));
+    case 'dodge':
+      return Number(Math.max(0.6, (0.7 + lvl * 0.02) * s * jitter).toFixed(1));
+  }
+}
+
+export function shouldWarnChaosStoneRisk(item: EquipmentItem): boolean {
+  return (
+    item.rarity === 'legendarny' ||
+    item.rarity === 'boski' ||
+    item.rarity === 'niesmiertelny' ||
+    item.upgradeLevel >= 10
+  );
+}
+
+export function applyChaosStone(
+  item: EquipmentItem,
+  rng: () => number = Math.random
+): ChaosStoneResult {
+  const roll = rng() * 100;
+  const previousLevel = item.upgradeLevel;
+
+  // 10% — Zniszczenie przedmiotu (0 <= roll < 10)
+  if (roll < 10) {
+    return {
+      outcome: 'destroy',
+      updatedItem: null,
+      previousLevel,
+      newLevel: 0,
+      message: `💥 ZNISZCZENIE! ${item.name} (+${previousLevel}) spłonął w energii Chaosu!`,
+    };
+  }
+
+  // 10% — Dodanie modyfikatora (+1 losowy bonus statystyk) (10 <= roll < 20)
+  if (roll < 20) {
+    const existingKeys = new Set(
+      (Object.keys(item.bonusStats) as Array<keyof ItemBonusStats>).filter(
+        (k) => typeof item.bonusStats[k] === 'number' && (item.bonusStats[k] || 0) > 0
+      )
+    );
+    const available = ALL_BONUS_STAT_KEYS.filter((k) => !existingKeys.has(k));
+    const chosenKey =
+      available.length > 0
+        ? available[Math.floor(rng() * available.length)]
+        : ALL_BONUS_STAT_KEYS[Math.floor(rng() * ALL_BONUS_STAT_KEYS.length)];
+    const rolledVal = rollBonusValueForItem(chosenKey, item, rng);
+    const nextBonusStats: ItemBonusStats = { ...item.bonusStats };
+    const prevVal = Number(nextBonusStats[chosenKey] || 0);
+    const meta = CHAOS_BONUS_STAT_META[chosenKey];
+    const combinedVal = meta.isPct
+      ? Number((prevVal + rolledVal).toFixed(1))
+      : Math.round(prevVal + rolledVal);
+    nextBonusStats[chosenKey] = combinedVal;
+
+    const updatedItem: EquipmentItem = {
+      ...item,
+      bonusStats: nextBonusStats,
+    };
+    const formattedVal = `+${rolledVal}${meta.isPct ? '%' : ''} ${meta.label}`;
+    return {
+      outcome: 'add_bonus',
+      updatedItem,
+      previousLevel,
+      newLevel: previousLevel,
+      addedBonusKey: chosenKey,
+      addedBonusValue: rolledVal,
+      addedBonusLabel: formattedVal,
+      message: `✨ NOWY MODYFIKATOR! Dodano ${formattedVal}!`,
+    };
+  }
+
+  // 10% — Usunięcie modyfikatora (-1 losowy bonus statystyk) (20 <= roll < 30)
+  if (roll < 30) {
+    const existingKeys = (Object.keys(item.bonusStats) as Array<keyof ItemBonusStats>).filter(
+      (k) => typeof item.bonusStats[k] === 'number' && (item.bonusStats[k] || 0) > 0
+    );
+    if (existingKeys.length === 0) {
+      // Technical rule: if item has no bonus modifiers, treat as no effect!
+      return {
+        outcome: 'no_effect',
+        updatedItem: item,
+        previousLevel,
+        newLevel: previousLevel,
+        noBonusToRemove: true,
+        message: '💨 Kamień Chaosu rozpadł się bez skutku (brak bonusów do usunięcia).',
+      };
+    }
+    const removedKey = existingKeys[Math.floor(rng() * existingKeys.length)];
+    const removedVal = Number(item.bonusStats[removedKey] || 0);
+    const meta = CHAOS_BONUS_STAT_META[removedKey];
+    const nextBonusStats: ItemBonusStats = { ...item.bonusStats };
+    delete nextBonusStats[removedKey];
+
+    const updatedItem: EquipmentItem = {
+      ...item,
+      bonusStats: nextBonusStats,
+    };
+    const formattedVal = `+${removedVal}${meta.isPct ? '%' : ''} ${meta.label}`;
+    return {
+      outcome: 'remove_bonus',
+      updatedItem,
+      previousLevel,
+      newLevel: previousLevel,
+      removedBonusKey: removedKey,
+      removedBonusValue: removedVal,
+      removedBonusLabel: formattedVal,
+      message: `🌫️ USUNIĘTO MODYFIKATOR! Stracono ${formattedVal}.`,
+    };
+  }
+
+  // 20% — Przełamanie (+2 Poziomy, cap +15!) (30 <= roll < 50)
+  if (roll < 50) {
+    const targetLevel = Math.min(MAX_OVERCAP_UPGRADE_LEVEL, previousLevel + 2);
+    const cappedAtMax = previousLevel >= MAX_OVERCAP_UPGRADE_LEVEL;
+    const updatedItem: EquipmentItem = {
+      ...item,
+      upgradeLevel: Math.max(previousLevel, targetLevel),
+    };
+    return {
+      outcome: 'upgrade_plus2',
+      updatedItem,
+      previousLevel,
+      newLevel: updatedItem.upgradeLevel,
+      cappedAtMax,
+      message: cappedAtMax
+        ? `🔥 PRZEŁAMANIE CHAOSU! Przedmiot osiągnął już elitarne maksimum +${MAX_OVERCAP_UPGRADE_LEVEL}!`
+        : updatedItem.upgradeLevel >= 14
+          ? `🔥 PRZEŁAMANIE PROGU +13! ${item.name} awansuje na ELITARNE +${updatedItem.upgradeLevel}!`
+          : `⚡ PRZEŁAMANIE (+2)! ${item.name} awansuje z +${previousLevel} na +${updatedItem.upgradeLevel}!`,
+    };
+  }
+
+  // 50% — Brak efektu (50 <= roll < 100)
+  return {
+    outcome: 'no_effect',
+    updatedItem: item,
+    previousLevel,
+    newLevel: previousLevel,
+    message: '💨 Kamień Chaosu rozpadł się bez skutku.',
   };
 }

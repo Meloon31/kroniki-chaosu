@@ -1,0 +1,68 @@
+{
+  "itemId": "chaos_stone",
+  "displayName": "Kamień Chaosu",
+  "chaosStoneDropRate": 0.05,
+  "eligibleBossIds": [
+    "malakor",
+    "azirath",
+    "sylvara",
+    "vaelgor"
+  ],
+  "standardMaxUpgradeLevel": 13,
+  "maxOvercapUpgradeLevel": 15,
+  "confirmWarningRarities": [
+    "legendarny",
+    "boski",
+    "niesmiertelny"
+  ],
+  "confirmWarningMinUpgrade": 10,
+  "tensionAnimationMs": 1200,
+  "lootBeam": {
+    "primaryColor": "#e11d48",
+    "secondaryColor": "#9333ea",
+    "height": 24.0,
+    "radius": 0.64
+  },
+  "outcomes": [
+    {
+      "id": "destroy",
+      "label": "Zniszczenie przedmiotu",
+      "chancePct": 10,
+      "weight": 10,
+      "color": "#ef4444",
+      "description": "Przedmiot ulega całkowitemu spaleniu/zniszczeniu (znika bez zwrotu odłamków)."
+    },
+    {
+      "id": "add_bonus",
+      "label": "Dodanie modyfikatora (+1 Bonus)",
+      "chancePct": 10,
+      "weight": 10,
+      "color": "#c084fc",
+      "description": "Przedmiot otrzymuje +1 dodatkowy losowy bonus statystyk ponad dotychczasową pulę."
+    },
+    {
+      "id": "remove_bonus",
+      "label": "Usunięcie modyfikatora (-1 Bonus)",
+      "chancePct": 10,
+      "weight": 10,
+      "color": "#f97316",
+      "description": "Losowo usuwa 1 istniejący bonus statystyk (brak bonusów = brak efektu)."
+    },
+    {
+      "id": "upgrade_plus2",
+      "label": "Przełamanie (+2 Poziomy)",
+      "chancePct": 20,
+      "weight": 20,
+      "color": "#fde047",
+      "description": "Natychmiast ulepsza przedmiot o +2 poziomy bez odłamków (jedyny sposób na +14 i +15!)."
+    },
+    {
+      "id": "no_effect",
+      "label": "Brak efektu",
+      "chancePct": 50,
+      "weight": 50,
+      "color": "#94a3b8",
+      "description": "Kamień Chaosu pęka i zostaje zużyty, a przedmiot pozostaje bez zmian."
+    }
+  ]
+}

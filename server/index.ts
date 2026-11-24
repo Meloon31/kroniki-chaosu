@@ -23,7 +23,13 @@ import {
   getMiniBoss,
   MAIN_BOSSES,
 } from '../shared/bosses.js';
-import { ALL_CLASS_IDS, generateEquipmentItem, rollDropRarity } from '../shared/items.js';
+import {
+  ALL_CLASS_IDS,
+  CHAOS_STONE_DROP_RATE,
+  CHAOS_STONE_ELIGIBLE_BOSSES,
+  generateEquipmentItem,
+  rollDropRarity,
+} from '../shared/items.js';
 import {
   ALL_BOON_IDS,
   BoonId,
@@ -2739,6 +2745,25 @@ function handleEnemyDeath(
         room.loot.set(runeLoot.id, runeLoot);
       }
 
+      // Kamień Chaosu: 5% exclusive drop from Main Act Bosses (Malakor, Azirath, Sylvara, Vaelgor)!
+      const isChaosStoneBoss =
+        !!loc.bossId &&
+        (CHAOS_STONE_ELIGIBLE_BOSSES as readonly string[]).includes(loc.bossId);
+      const rolledChaosStone = isChaosStoneBoss && Math.random() < CHAOS_STONE_DROP_RATE;
+      if (rolledChaosStone) {
+        const angle = Math.random() * Math.PI * 2;
+        const chaosLoot: GroundLoot = {
+          id: nextId('chaosstone'),
+          x: enemy.x + Math.cos(angle) * 2.2,
+          z: enemy.z + Math.sin(angle) * 2.2,
+          chaosStone: true,
+          droppedAt: now,
+          pickedUp: false,
+        };
+        room.loot.set(chaosLoot.id, chaosLoot);
+        io.to(room.code).emit('juice:chaos_stone_drop', { bossName: enemy.name });
+      }
+
       io.to(room.code).emit('boss:defeated', {
         act: loc.act,
         globalLocation: room.globalLocation,
@@ -2746,11 +2771,13 @@ function handleEnemyDeath(
       });
 
       io.to(room.code).emit('game:banner', {
-        type: 'boss_kill',
+        type: rolledChaosStone ? 'boski' : 'boss_kill',
         title: `POKONANO BOSSA: ${enemy.name}!`,
-        subtitle: rolledRune
-          ? `WYPADŁ ${rune.shardName.toUpperCase()} (30% szansy)! Podnieś go z areny!`
-          : 'Portal do kolejnego Aktu otwarty! Zbierz łupy z areny.',
+        subtitle: rolledChaosStone
+          ? `🌀 WYPADŁ KAMIEŃ CHAOSU (5% SZANSY)! Podnieś karmazynowo-fioletowy słup światła!${rolledRune ? ` (+ ${rune.shardName})` : ''}`
+          : rolledRune
+            ? `WYPADŁ ${rune.shardName.toUpperCase()} (30% szansy)! Podnieś go z areny!`
+            : 'Portal do kolejnego Aktu otwarty! Zbierz łupy z areny.',
         runeDropped: rolledRune ? rune.id : undefined,
       });
     }
@@ -7209,6 +7236,7 @@ io.on('connection', (socket: Socket) => {
       item: drop.item,
       runeShard: drop.runeShard,
       shardDrop: drop.shardDrop,
+      chaosStone: drop.chaosStone,
     });
   });
 
@@ -7585,6 +7613,8 @@ io.on('connection', (socket: Socket) => {
       playerBName: playerB.name,
       offerA: [],
       offerB: [],
+      chaosStonesA: 0,
+      chaosStonesB: 0,
       lockedA: false,
       lockedB: false,
       acceptedA: false,
@@ -7616,7 +7646,7 @@ io.on('connection', (socket: Socket) => {
     io.to(session.playerBId).emit('trade:state', session);
   });
 
-  socket.on('trade:update_offer', (payload: { tradeId: string; items: EquipmentItem[] }) => {
+  socket.on('trade:update_offer', (payload: { tradeId: string; items: EquipmentItem[]; chaosStones?: number }) => {
     const code = socketToRoom.get(socket.id);
     if (!code) return;
     const room = rooms.get(code);
@@ -7624,9 +7654,14 @@ io.on('connection', (socket: Socket) => {
     if (!room || !session || session.status !== 'active') return;
 
     const safeItems = (payload.items || []).slice(0, 6);
-    if (socket.id === session.playerAId) session.offerA = safeItems;
-    else if (socket.id === session.playerBId) session.offerB = safeItems;
-    else return;
+    const safeStones = Math.max(0, Math.min(999, Math.floor(Number(payload.chaosStones) || 0)));
+    if (socket.id === session.playerAId) {
+      session.offerA = safeItems;
+      session.chaosStonesA = safeStones;
+    } else if (socket.id === session.playerBId) {
+      session.offerB = safeItems;
+      session.chaosStonesB = safeStones;
+    } else return;
 
     session.lockedA = false;
     session.lockedB = false;
@@ -7670,11 +7705,15 @@ io.on('connection', (socket: Socket) => {
         tradeId: session.tradeId,
         givenIds: session.offerA.map((i) => i.id),
         receivedItems: session.offerB,
+        givenChaosStones: session.chaosStonesA || 0,
+        receivedChaosStones: session.chaosStonesB || 0,
       });
       io.to(session.playerBId).emit('trade:completed', {
         tradeId: session.tradeId,
         givenIds: session.offerB.map((i) => i.id),
         receivedItems: session.offerA,
+        givenChaosStones: session.chaosStonesB || 0,
+        receivedChaosStones: session.chaosStonesA || 0,
       });
       room.trades.delete(session.tradeId);
     } else {

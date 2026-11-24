@@ -3,7 +3,9 @@ import { io, Socket } from 'socket.io-client';
 import { CLASSES, MAX_LEVEL, MAX_SKILL_RANK, xpToNextLevel } from '../shared/classes';
 import { getMainBossByAct } from '../shared/bosses';
 import {
+  applyChaosStone,
   canClassEquipItem,
+  ChaosStoneResult,
   createStarterEquipment,
   createStarterShards,
   EQUIP_SLOTS,
@@ -14,6 +16,7 @@ import {
   getUpgradeShardCost,
   getUpgradeSuccessChance,
   isHardcoreUnlocked,
+  MAX_OVERCAP_UPGRADE_LEVEL,
   MAX_UPGRADE_LEVEL,
   MAX_UPGRADE_LEVEL_HARDCORE,
   RARITY_META,
@@ -144,6 +147,7 @@ function createDefaultProfile(classId: ClassId = 'wojownik'): PlayerProfile {
     guildId: null,
     guildSnapshot: null,
     mentorShards: 0,
+    chaosStones: 0,
     bestRiftFloor: 0,
     perfectDodgesTotal: 0,
     totalRevives: 0,
@@ -706,6 +710,16 @@ export function App() {
       );
     });
 
+    sock.on('juice:chaos_stone_drop', (payload: { bossName?: string }) => {
+      soundEngine.playChaosStoneDrop();
+      engineRef.current?.addScreenShake(0.65);
+      setBoskiFlashKey((k) => k + 1);
+      pushToast(
+        `🌀 KAMIEŃ CHAOSU (5%) wypadł z ${payload?.bossName || 'Głównego Bossa'}! Szukaj karmazynowo-fioletowego słupa!`,
+        '#e879f9'
+      );
+    });
+
     sock.on('player:revive_credit', (payload: { allyName: string }) => {
       soundEngine.playHeal();
       setProfile((prev) => ({
@@ -763,7 +777,20 @@ export function App() {
 
     sock.on(
       'loot:granted',
-      (payload: { item?: EquipmentItem; runeShard?: RuneId; shardDrop?: { rarity: Rarity; amount: number } }) => {
+      (payload: {
+        item?: EquipmentItem;
+        runeShard?: RuneId;
+        shardDrop?: { rarity: Rarity; amount: number };
+        chaosStone?: boolean;
+      }) => {
+        if (payload.chaosStone) {
+          soundEngine.playChaosStoneDrop();
+          pushToast('🌀 +1 × Kamień Chaosu! (Użyj w Kuźni Chaosu u Kowala)', '#e879f9');
+          setProfile((prev) => ({
+            ...prev,
+            chaosStones: (prev.chaosStones || 0) + 1,
+          }));
+        }
         if (payload.item) {
           const it = payload.item;
           soundEngine.playLootDrop(it.rarity);
@@ -1037,16 +1064,28 @@ export function App() {
 
     sock.on(
       'trade:completed',
-      (payload: { givenIds: string[]; receivedItems: EquipmentItem[] }) => {
+      (payload: {
+        givenIds: string[];
+        receivedItems: EquipmentItem[];
+        givenChaosStones?: number;
+        receivedChaosStones?: number;
+      }) => {
         setActiveTrade(null);
         soundEngine.playPuzzleSolve();
-        pushToast('🤝 Wymiana zakończona pomyślnie!', '#4ade80');
+        const deltaStones = (payload.receivedChaosStones || 0) - (payload.givenChaosStones || 0);
+        pushToast(
+          deltaStones !== 0
+            ? `🤝 Wymiana zakończona! (${deltaStones > 0 ? `+${deltaStones}` : deltaStones}× 🌀 Kamień Chaosu)`
+            : '🤝 Wymiana zakończona pomyślnie!',
+          '#4ade80'
+        );
         setProfile((prev) => {
           const givenSet = new Set(payload.givenIds);
           const kept = prev.inventory.filter((i) => !givenSet.has(i.id));
           return {
             ...prev,
             inventory: [...payload.receivedItems, ...kept].slice(0, 60),
+            chaosStones: Math.max(0, (prev.chaosStones || 0) + deltaStones),
           };
         });
       }
@@ -1623,8 +1662,96 @@ export function App() {
     });
   };
 
+  const handleUseChaosStone = (itemId: string): ChaosStoneResult | null => {
+    const cur = profileRef.current;
+    if ((cur.chaosStones || 0) < 1) return null;
+
+    let target: EquipmentItem | null = null;
+    let eqSlot: EquipSlot | null = null;
+    for (const s of EQUIP_SLOTS) {
+      if (cur.equipped[s]?.id === itemId) {
+        target = cur.equipped[s];
+        eqSlot = s;
+        break;
+      }
+    }
+    if (!target) {
+      target = cur.inventory.find((i) => i.id === itemId) ?? null;
+    }
+    if (!target) return null;
+
+    const result = applyChaosStone(target);
+
+    setProfile((prev) => {
+      const nextStones = Math.max(0, (prev.chaosStones || 0) - 1);
+      if (result.outcome === 'destroy') {
+        if (eqSlot) {
+          return {
+            ...prev,
+            chaosStones: nextStones,
+            equipped: { ...prev.equipped, [eqSlot]: null },
+          };
+        }
+        return {
+          ...prev,
+          chaosStones: nextStones,
+          inventory: prev.inventory.filter((i) => i.id !== itemId),
+        };
+      }
+      const nextItem = result.updatedItem || target!;
+      if (eqSlot) {
+        return {
+          ...prev,
+          chaosStones: nextStones,
+          equipped: { ...prev.equipped, [eqSlot]: nextItem },
+        };
+      }
+      return {
+        ...prev,
+        chaosStones: nextStones,
+        inventory: prev.inventory.map((i) => (i.id === itemId ? nextItem : i)),
+      };
+    });
+
+    if (result.outcome === 'upgrade_plus2') {
+      engineRef.current?.addScreenShake(0.62);
+      setBoskiFlashKey((k) => k + 1);
+      advanceBounty('upgrade', 1, 'add');
+      if (result.newLevel >= 14) {
+        showBanner(
+          'boski',
+          result.newLevel >= MAX_OVERCAP_UPGRADE_LEVEL
+            ? `🌀 ELITARNE PRZEŁAMANIE +15 OSIĄGNIĘTE!`
+            : `🌀 PRZEŁAMANIE CHAOSU +14!`,
+          `${target.name} (+${result.newLevel}) zyskał potężny skok statystyk oraz Poświatę Energii Chaosu (HDR)!`,
+          5200
+        );
+      } else {
+        pushToast(result.message, '#fde047');
+      }
+    } else if (result.outcome === 'destroy') {
+      engineRef.current?.addScreenShake(0.75);
+      pushToast(result.message, '#ef4444');
+    } else if (result.outcome === 'add_bonus') {
+      pushToast(result.message, '#e879f9');
+    } else if (result.outcome === 'remove_bonus') {
+      pushToast(result.message, '#fb923c');
+    } else {
+      pushToast(result.message, '#94a3b8');
+    }
+
+    return result;
+  };
+
   const handleToggleSandbox = () => {
-    setProfile((prev) => ({ ...prev, sandboxUnlockAll: !prev.sandboxUnlockAll }));
+    setProfile((prev) => {
+      const nextVal = !prev.sandboxUnlockAll;
+      return {
+        ...prev,
+        sandboxUnlockAll: nextVal,
+        chaosStones: nextVal ? Math.max(prev.chaosStones || 0, 10) : prev.chaosStones || 0,
+      };
+    });
   };
 
   const handleClaimDaily = () => {
@@ -2491,6 +2618,7 @@ export function App() {
             <BlacksmithModal
               profile={profile}
               onUpgradeItem={handleUpgradeItem}
+              onUseChaosStone={handleUseChaosStone}
               onExchangeMentorShards={handleExchangeMentorShards}
               onTransmuteShards={handleTransmuteShards}
               onClose={() => setActivePanel(null)}
@@ -2532,10 +2660,11 @@ export function App() {
               profile={profile}
               localPlayerId={localPlayerId}
               trade={activeTrade}
-              onUpdateOffer={(items) =>
+              onUpdateOffer={(items, chaosStones) =>
                 socketRef.current?.emit('trade:update_offer', {
                   tradeId: activeTrade.tradeId,
                   items,
+                  chaosStones,
                 })
               }
               onLockOffer={() =>

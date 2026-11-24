@@ -165,10 +165,18 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                       key={slot}
                       onClick={() => item && setSelectedItem(item)}
                       onDoubleClick={() => item && onUnequip(slot)}
-                      className={item?.rarity === 'boski' || item?.rarity === 'niesmiertelny' ? 'boski-shimmer' : ''}
+                      className={
+                        item && item.upgradeLevel >= 14
+                          ? 'chaos-overcap-frame'
+                          : item?.rarity === 'boski' || item?.rarity === 'niesmiertelny'
+                            ? 'boski-shimmer'
+                            : ''
+                      }
                       style={{
-                        background: '#131627',
-                        border: `2.5px solid ${meta ? meta.color : '#2e3454'}`,
+                        background: item && item.upgradeLevel >= 14
+                          ? 'linear-gradient(135deg, rgba(136,19,55,0.45), rgba(59,7,100,0.48))'
+                          : '#131627',
+                        border: `2.5px solid ${item && item.upgradeLevel >= 14 ? '#e11d48' : meta ? meta.color : '#2e3454'}`,
                         borderRadius: 9,
                         padding: '8px 7px',
                         cursor: item ? 'pointer' : 'default',
@@ -321,12 +329,12 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
 
           {/* RIGHT: Shards + Class Tabs + Grouped Backpack + Salvage */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {/* Shard Bag Bar */}
+            {/* Shard Bag & Materials Bar (Odłamki + Kamień Chaosu!) */}
             <div className="comic-panel-sm" style={{ padding: 10 }}>
               <div style={{ fontSize: 11, fontWeight: 900, color: '#94a3b8', marginBottom: 6 }}>
-                POSIADANE ODŁAMKI (DO ULEPSZANIA U KOWALA +0 → +13)
+                MATERIAŁY RZEMIEŚLNICZE (ODŁAMKI +0→+13 ORAZ KAMIEŃ CHAOSU +14/+15)
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(92px, 1fr))', gap: 6 }}>
                 {RARITY_ORDER.map((r) => {
                   const m = RARITY_META[r];
                   return (
@@ -347,6 +355,22 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                     </div>
                   );
                 })}
+                <div
+                  className={(profile.chaosStones || 0) > 0 ? 'chaos-overcap-frame' : ''}
+                  title="Kamień Chaosu — 5% drop z Głównych Bossów Aktów 1–4. Użyj w Kuźni Chaosu u Kowala lub wymień przez Handel!"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(159, 18, 57, 0.45), rgba(88, 28, 135, 0.52))',
+                    border: '2px solid #e11d48',
+                    borderRadius: 8,
+                    padding: '5px 7px',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ fontSize: 9.5, color: '#f472b6', fontWeight: 900 }}>Kamień Chaosu</div>
+                  <div style={{ fontSize: 16, fontWeight: 900, color: '#fde047' }}>
+                    🌀 {profile.chaosStones || 0}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -505,10 +529,22 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                                 onEquip(item);
                                 setSelectedItem(null);
                               }}
-                              className={item.rarity === 'boski' || item.rarity === 'niesmiertelny' ? 'boski-shimmer' : ''}
+                              className={
+                                item.upgradeLevel >= 14
+                                  ? 'chaos-overcap-frame'
+                                  : item.rarity === 'boski' || item.rarity === 'niesmiertelny'
+                                    ? 'boski-shimmer'
+                                    : ''
+                              }
                               style={{
-                                background: isSel ? '#2b3155' : usable ? '#131627' : '#0f101c',
-                                border: `2.5px solid ${usable ? m.color : '#3b415e'}`,
+                                background: isSel
+                                  ? '#2b3155'
+                                  : item.upgradeLevel >= 14
+                                    ? 'linear-gradient(135deg, rgba(136,19,55,0.42), rgba(59,7,100,0.45))'
+                                    : usable
+                                      ? '#131627'
+                                      : '#0f101c',
+                                border: `2.5px solid ${item.upgradeLevel >= 14 ? '#e11d48' : usable ? m.color : '#3b415e'}`,
                                 borderRadius: 9,
                                 padding: 7,
                                 cursor: 'pointer',

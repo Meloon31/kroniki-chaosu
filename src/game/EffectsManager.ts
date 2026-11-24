@@ -43,6 +43,7 @@ interface LootVisual {
   gem: THREE.Mesh;
   ring: THREE.Mesh;
   rarity?: Rarity;
+  isChaosStone?: boolean;
 }
 
 const SHARED_SMOKE_GEO = new THREE.SphereGeometry(0.32, 14, 12);
@@ -1815,8 +1816,15 @@ export class EffectsManager {
         let beamRadius = 0.2;
         let maxOpacity = 0.22;
         let rarity: Rarity | undefined;
+        const isChaosStone = !!drop.chaosStone;
 
-        if (drop.runeShard) {
+        if (isChaosStone) {
+          // Unique towering crimson-violet Chaos Stone Loot Beam!
+          beamColor = '#e11d48';
+          beamHeight = 24.0;
+          beamRadius = 0.64;
+          maxOpacity = 0.56;
+        } else if (drop.runeShard) {
           const runeDef = RUNES[drop.runeShard];
           beamColor = runeDef.color;
           beamHeight = 14.5;
@@ -1871,22 +1879,24 @@ export class EffectsManager {
         beam.position.y = beamHeight / 2;
 
         const gem = createComicMesh(
-          drop.runeShard
-            ? createSoftStarGeometry(0.46, 0.24, 5, 0.18)
-            : createRoundedBoxGeometry(0.56, 0.46, 0.46, 0.16, 4),
-          beamColor,
+          isChaosStone
+            ? new THREE.OctahedronGeometry(0.56, 0)
+            : drop.runeShard
+              ? createSoftStarGeometry(0.46, 0.24, 5, 0.18)
+              : createRoundedBoxGeometry(0.56, 0.46, 0.46, 0.16, 4),
+          isChaosStone ? '#c026d3' : beamColor,
           0.028,
-          { emissive: beamColor, emissiveIntensity: 0.3 }
+          { emissive: isChaosStone ? '#e11d48' : beamColor, emissiveIntensity: isChaosStone ? 0.85 : 0.3 }
         );
-        gem.position.y = 0.68;
+        gem.position.y = isChaosStone ? 0.92 : 0.68;
 
         const ring = new THREE.Mesh(
-          new THREE.RingGeometry(0.68, 0.94, 20),
+          new THREE.RingGeometry(isChaosStone ? 0.85 : 0.68, isChaosStone ? 1.28 : 0.94, 24),
           new THREE.MeshBasicMaterial({
-            color: beamColor,
+            color: isChaosStone ? '#a855f7' : beamColor,
             side: THREE.DoubleSide,
             transparent: true,
-            opacity: 0.42,
+            opacity: isChaosStone ? 0.72 : 0.42,
             depthWrite: false,
           })
         );
@@ -1894,16 +1904,32 @@ export class EffectsManager {
         ring.position.y = 0.06;
 
         group.add(beam, gem, ring);
+        if (isChaosStone) {
+          // Outer violet halo beam layered around crimson core for unmistakable Chaos Stone pillar!
+          const outerBeamMat = createSoftBeamMaterial('#9333ea', 0.34);
+          const outerBeam = new THREE.Mesh(
+            new THREE.CylinderGeometry(beamRadius * 0.48, beamRadius * 1.48, beamHeight * 0.88, 14, 1, true),
+            outerBeamMat
+          );
+          outerBeam.position.y = (beamHeight * 0.88) / 2;
+          group.add(outerBeam);
+        }
         this.scene.add(group);
-        vis = { group, beamMat, gem, ring, rarity };
+        vis = { group, beamMat, gem, ring, rarity, isChaosStone };
         this.lootVisuals.set(drop.id, vis);
       }
 
-      vis.gem.rotation.y = elapsedSec * 2.2;
-      vis.gem.position.y = 0.65 + Math.sin(elapsedSec * 4.0) * 0.14;
-      vis.ring.rotation.z = -elapsedSec * 1.5;
+      vis.gem.rotation.y = elapsedSec * (vis.isChaosStone ? 3.2 : 2.2);
+      vis.gem.position.y = (vis.isChaosStone ? 0.92 : 0.65) + Math.sin(elapsedSec * 4.0) * 0.16;
+      vis.ring.rotation.z = -elapsedSec * (vis.isChaosStone ? 2.6 : 1.5);
 
-      if (vis.rarity === 'boski' || vis.rarity === 'niesmiertelny') {
+      if (vis.isChaosStone) {
+        // Oscillate vividly between crimson (hue 0.95) and royal violet (hue 0.78)!
+        const mix = 0.5 + 0.5 * Math.sin(elapsedSec * 3.8);
+        const hue = 0.78 + mix * 0.18;
+        (vis.beamMat.uniforms.uColor.value as THREE.Color).setHSL(hue, 0.96, 0.54);
+        (vis.ring.material as THREE.MeshBasicMaterial).color.setHSL(0.95 - mix * 0.17, 0.95, 0.58);
+      } else if (vis.rarity === 'boski' || vis.rarity === 'niesmiertelny') {
         const hue = vis.rarity === 'niesmiertelny' ? 0.46 + Math.sin(elapsedSec * 2.6) * 0.08 : (elapsedSec * 0.42) % 1;
         (vis.beamMat.uniforms.uColor.value as THREE.Color).setHSL(hue, 0.85, 0.58);
         (vis.ring.material as THREE.MeshBasicMaterial).color.setHSL((hue + 0.18) % 1, 0.85, 0.62);

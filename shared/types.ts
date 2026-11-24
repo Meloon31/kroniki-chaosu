@@ -134,8 +134,9 @@ export interface PlayerProfile {
   playerUid?: string;
   guildId?: string | null;
   guildSnapshot?: GuildState | null;
-  // Mentor System, Chaos Rift Endgame & Prestige Cosmetics
+  // Mentor System, Chaos Stone Crafting, Chaos Rift Endgame & Prestige Cosmetics
   mentorShards?: number;
+  chaosStones?: number;
   unlockedCosmetics?: string[];
   equippedTitle?: string | null;
   equippedAura?: string | null;
@@ -306,6 +307,7 @@ export interface GroundLoot {
   item?: EquipmentItem;
   runeShard?: RuneId;
   shardDrop?: { rarity: Rarity; amount: number };
+  chaosStone?: boolean;
   ownerId?: string; // undefined = shared/first pickup or instanced
   droppedAt: number;
   pickedUp: boolean;
@@ -604,6 +606,8 @@ export interface TradeSessionState {
   playerBName: string;
   offerA: EquipmentItem[];
   offerB: EquipmentItem[];
+  chaosStonesA?: number;
+  chaosStonesB?: number;
   lockedA: boolean;
   lockedB: boolean;
   acceptedA: boolean;

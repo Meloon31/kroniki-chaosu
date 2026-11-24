@@ -1250,10 +1250,19 @@ export function updateCharacterRig(
   if (wGlow >= 7) {
     const glowCol = getUpgradeGlowColor(wGlow);
     if (glowCol) {
-      if (wGlow >= 14) wMat.color.setHSL(0.46 + Math.sin(elapsedSec * 3.0) * 0.08, 0.92, 0.62);
-      else if (wGlow === 13) wMat.color.setHSL((elapsedSec * 0.4) % 1, 0.85, 0.58);
-      else wMat.color.copy(glowCol);
-      wMat.opacity = Math.min(0.48, 0.2 + ((Math.min(20, wGlow) - 6) / 14) * 0.22 + Math.sin(elapsedSec * 7) * 0.05);
+      if (wGlow >= 14) {
+        // +14 / +15 Overcap Chaos Energy HDR Crimson-Violet Bloom Glow!
+        const chaosMix = 0.5 + 0.5 * Math.sin(elapsedSec * 5.2);
+        wMat.color.setHSL(0.79 + chaosMix * 0.17, 0.98, 0.62);
+        wMat.color.multiplyScalar(wGlow >= 15 ? 1.85 : 1.5);
+        wMat.opacity = (wGlow >= 15 ? 0.72 : 0.58) + Math.sin(elapsedSec * 8.5) * 0.1;
+      } else if (wGlow === 13) {
+        wMat.color.setHSL((elapsedSec * 0.4) % 1, 0.85, 0.58);
+        wMat.opacity = 0.42 + Math.sin(elapsedSec * 7) * 0.05;
+      } else {
+        wMat.color.copy(glowCol);
+        wMat.opacity = Math.min(0.45, 0.2 + ((wGlow - 6) / 8) * 0.2 + Math.sin(elapsedSec * 7) * 0.05);
+      }
     }
   } else {
     wMat.opacity = 0;
@@ -1262,18 +1271,28 @@ export function updateCharacterRig(
   const aGlow = state.armorGlow || 0;
   const aMat = rig.armorGlowRing.material as THREE.MeshBasicMaterial;
   const auraCosmetic = getCosmeticById(state.equippedAura);
-  if (auraCosmetic) {
+  if (aGlow >= 14) {
+    // Intense +14 / +15 Chaos Energy HDR Aura Ring (radiates through UnrealBloomPass!)
+    const chaosMix = 0.5 + 0.5 * Math.sin(elapsedSec * 4.4);
+    aMat.color.setHSL(0.95 - chaosMix * 0.17, 0.98, 0.62);
+    aMat.color.multiplyScalar(aGlow >= 15 ? 1.8 : 1.45);
+    aMat.opacity = (aGlow >= 15 ? 0.78 : 0.64) + Math.sin(elapsedSec * 6.5) * 0.12;
+    rig.armorGlowRing.rotation.z = elapsedSec * (aGlow >= 15 ? 1.85 : 1.35);
+    const pulse = aGlow >= 15 ? 1.16 + Math.sin(elapsedSec * 5.5) * 0.07 : 1.08 + Math.sin(elapsedSec * 4.5) * 0.05;
+    rig.armorGlowRing.scale.set(pulse, pulse, 1);
+  } else if (auraCosmetic) {
     aMat.color.set(auraCosmetic.color);
     aMat.opacity = 0.56 + Math.sin(elapsedSec * 4.8) * 0.12;
     rig.armorGlowRing.rotation.z = elapsedSec * 1.1;
+    rig.armorGlowRing.scale.set(1, 1, 1);
   } else if (aGlow >= 7) {
     const glowCol = getUpgradeGlowColor(aGlow);
     if (glowCol) {
-      if (aGlow >= 14) aMat.color.setHSL(0.46 + Math.sin(elapsedSec * 2.5) * 0.09, 0.92, 0.64);
-      else if (aGlow === 13) aMat.color.setHSL((elapsedSec * 0.4 + 0.5) % 1, 0.85, 0.6);
+      if (aGlow === 13) aMat.color.setHSL((elapsedSec * 0.4 + 0.5) % 1, 0.85, 0.6);
       else aMat.color.copy(glowCol);
-      aMat.opacity = (aGlow >= 14 ? 0.52 : 0.36) + Math.sin(elapsedSec * 4.5) * 0.1;
-      rig.armorGlowRing.rotation.z = elapsedSec * (aGlow >= 14 ? 1.15 : 0.65);
+      aMat.opacity = 0.36 + Math.sin(elapsedSec * 4.5) * 0.1;
+      rig.armorGlowRing.rotation.z = elapsedSec * 0.65;
+      rig.armorGlowRing.scale.set(1, 1, 1);
     }
   } else {
     aMat.opacity = 0;
