@@ -1163,6 +1163,23 @@ export function updateCharacterRig(
 
   rig.bodyGroup.rotation.x = 0;
 
+  // 50-Skill Tree 3D Hero Transformations:
+  // - Dwarf Awatar Kamienia: grows +30% larger!
+  // - Fairy Skrzydła Archanioła: levitates higher in radiant golden halo!
+  // - Elf Krok Cienia: ghostly shadow shimmer!
+  const isStoneAvatar = Boolean(state.stoneAvatarUntil && nowMs < state.stoneAvatarUntil);
+  const isAngelWings = Boolean(state.angelWingsUntil && nowMs < state.angelWingsUntil);
+  const isBerserker = Boolean(state.berserkerUntil && nowMs < state.berserkerUntil);
+  const isShadowStep = Boolean(state.shadowStepUntil && nowMs < state.shadowStepUntil);
+  const heroScaleMult = isStoneAvatar ? 1.3 : isBerserker ? 1.12 : 1.0;
+  rig.root.scale.setScalar(heroScaleMult);
+  if (isAngelWings) {
+    rig.bodyGroup.position.y = 1.05 + Math.sin(elapsedSec * 5.2) * 0.16;
+  }
+  if (isShadowStep) {
+    rig.bodyGroup.scale.set(0.88, 1.06, 0.88);
+  }
+
   if (rig.wingLeftGroup && rig.wingRightGroup) {
     const flap = Math.sin(elapsedSec * 14) * 0.42;
     rig.wingLeftGroup.rotation.y = 0.35 + flap;
@@ -1271,7 +1288,20 @@ export function updateCharacterRig(
   const aGlow = state.armorGlow || 0;
   const aMat = rig.armorGlowRing.material as THREE.MeshBasicMaterial;
   const auraCosmetic = getCosmeticById(state.equippedAura);
-  if (aGlow >= 14) {
+  if (isBerserker || isAngelWings || isStoneAvatar || isShadowStep) {
+    // Active Ultimate / Transformation HDR Bloom Aura!
+    const auraHex = isBerserker
+      ? '#ef4444'
+      : isAngelWings
+        ? '#fde047'
+        : isStoneAvatar
+          ? '#f59e0b'
+          : '#6366f1';
+    aMat.color.set(auraHex).multiplyScalar(1.85);
+    aMat.opacity = 0.82 + Math.sin(elapsedSec * 8) * 0.14;
+    rig.armorGlowRing.rotation.z = elapsedSec * 2.2;
+    rig.armorGlowRing.scale.set(1.22, 1.22, 1);
+  } else if (aGlow >= 14) {
     // Intense +14 / +15 Chaos Energy HDR Aura Ring (radiates through UnrealBloomPass!)
     const chaosMix = 0.5 + 0.5 * Math.sin(elapsedSec * 4.4);
     aMat.color.setHSL(0.95 - chaosMix * 0.17, 0.98, 0.62);

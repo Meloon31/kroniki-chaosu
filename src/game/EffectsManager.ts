@@ -1604,6 +1604,212 @@ export class EffectsManager {
         break;
       }
 
+      // =========================================================
+      // 50-SKILL TREE DEDICATED 3D HDR BLOOM VFX
+      // =========================================================
+      case 'shockwave_fire':
+      case 'lava_fissure':
+      case 'solar_beam':
+      case 'void_lightning':
+      case 'chain_pull':
+      case 'blade_dance':
+      case 'wind_falcons':
+      case 'wraith_swarm':
+      case 'runic_axe':
+      case 'life_bond':
+      case 'elemental_fury': {
+        const tx = ev.tx ?? ev.x;
+        const tz = ev.tz ?? ev.z;
+        const col = ev.color || '#fde047';
+        const segLen = Math.max(0.6, Math.hypot(tx - ev.x, tz - ev.z));
+        const isBeam = ev.kind === 'solar_beam' || ev.kind === 'void_lightning' || ev.kind === 'life_bond' || ev.kind === 'chain_pull';
+        const beamRadius = ev.kind === 'solar_beam' ? 0.42 : ev.kind === 'shockwave_fire' || ev.kind === 'lava_fissure' ? 0.55 : 0.18;
+        const beamMat = new THREE.MeshBasicMaterial({
+          color: new THREE.Color(col).multiplyScalar(1.65),
+          transparent: true,
+          opacity: 0.92,
+        });
+        const beam = new THREE.Mesh(
+          new THREE.CylinderGeometry(beamRadius, beamRadius, segLen, 10),
+          beamMat
+        );
+        beam.position.set((ev.x + tx) * 0.5, isBeam ? 1.35 : 0.32, (ev.z + tz) * 0.5);
+        beam.rotation.z = Math.PI / 2;
+        beam.rotation.y = -Math.atan2(tz - ev.z, tx - ev.x);
+        this.scene.add(beam);
+        this.transientEffects.push({
+          mesh: beam,
+          createdAt: now,
+          durationMs: ev.kind === 'runic_axe' ? 540 : 420,
+          onUpdate: (t) => {
+            beamMat.opacity = (1 - t) * 0.92;
+            const s = 1 + t * 0.4;
+            beam.scale.set(s, 1, s);
+          },
+        });
+        this.addExpandingRing(tx, tz, Math.max(2.2, radius * 0.75), col, 440, 0.78, 0.22);
+        this.spawnParticles({
+          kind: ev.kind === 'lava_fissure' || ev.kind === 'shockwave_fire' ? 'spark' : 'star',
+          x: tx,
+          y: 1.0,
+          z: tz,
+          count: ev.kind === 'elemental_fury' ? 20 : 14,
+          color: col,
+          speedMin: 2.4,
+          speedMax: 6.8,
+          upMin: 2.0,
+          upMax: 5.5,
+          durationMs: 480,
+          opacity: 0.92,
+        });
+        if (ev.kind === 'elemental_fury') {
+          this.spawnParticles({ kind: 'spark', x: tx, y: 1.1, z: tz, count: 10, color: '#f97316', speedMin: 2, speedMax: 6, upMin: 2, upMax: 5, durationMs: 420, opacity: 0.9 });
+          this.spawnParticles({ kind: 'shard', x: tx, y: 1.1, z: tz, count: 10, color: '#38bdf8', speedMin: 2, speedMax: 6, upMin: 2, upMax: 5, durationMs: 420, opacity: 0.9 });
+        }
+        break;
+      }
+
+      case 'chaos_cataclysm': {
+        const dur = ev.duration || 2000;
+        const r = Math.max(5.5, radius);
+        const holeGroup = new THREE.Group();
+        holeGroup.position.set(ev.x, 0.25, ev.z);
+        const coreMat = new THREE.MeshBasicMaterial({ color: '#090214', transparent: true, opacity: 0.94 });
+        const core = new THREE.Mesh(new THREE.SphereGeometry(1.45, 20, 16), coreMat);
+        core.position.y = 1.25;
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: new THREE.Color('#9333ea').multiplyScalar(1.75),
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.85,
+        });
+        const accRing = new THREE.Mesh(new THREE.RingGeometry(1.6, r * 0.85, 36), ringMat);
+        accRing.rotation.x = -Math.PI / 2;
+        holeGroup.add(core, accRing);
+        this.scene.add(holeGroup);
+        this.transientEffects.push({
+          mesh: holeGroup,
+          createdAt: now,
+          durationMs: dur,
+          onUpdate: (t) => {
+            accRing.rotation.z = t * 14;
+            const pulse = t < 0.85 ? 0.85 + Math.sin(t * 24) * 0.12 : 1 + (t - 0.85) * 3.5;
+            core.scale.setScalar(pulse);
+            ringMat.opacity = (1 - t * 0.65) * 0.85;
+          },
+        });
+        this.addRunicBurst(ev.x, ev.z, r, '#a855f7', dur, 0.85, 3.2);
+        this.spawnParticles({ kind: 'star', x: ev.x, y: 1.4, z: ev.z, count: 24, color: '#c084fc', speedMin: 3, speedMax: 9, upMin: 2.5, upMax: 7.5, durationMs: 680, opacity: 0.95 });
+        break;
+      }
+
+      case 'fire_wall':
+      case 'dwarf_totem':
+      case 'life_garden':
+      case 'root_trap_skill':
+      case 'curse_sigil':
+      case 'poison_cloud':
+      case 'butterfly_dust': {
+        const dur = Math.min(8000, ev.duration || 4500);
+        const col = ev.color || '#22c55e';
+        const r = Math.max(3.0, radius);
+        const zoneGroup = new THREE.Group();
+        zoneGroup.position.set(ev.x, 0.1, ev.z);
+        const rimMat = new THREE.MeshBasicMaterial({
+          color: new THREE.Color(col).multiplyScalar(1.35),
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.58,
+          depthWrite: false,
+        });
+        const ring = new THREE.Mesh(new THREE.RingGeometry(r * 0.82, r, 32), rimMat);
+        ring.rotation.x = -Math.PI / 2;
+        zoneGroup.add(ring);
+
+        if (ev.kind === 'dwarf_totem') {
+          const totem = createComicMesh(new THREE.CylinderGeometry(0.45, 0.68, 2.8, 8), '#94a3b8', 0.03, {
+            emissive: '#fbbf24',
+            emissiveIntensity: 0.65,
+          });
+          totem.position.y = 1.4;
+          zoneGroup.add(totem);
+        } else if (ev.kind === 'fire_wall') {
+          const wall = new THREE.Mesh(
+            new THREE.BoxGeometry(r * 1.9, 2.2, 0.8),
+            new THREE.MeshBasicMaterial({ color: new THREE.Color('#f97316').multiplyScalar(1.5), transparent: true, opacity: 0.52 })
+          );
+          wall.position.y = 1.1;
+          zoneGroup.add(wall);
+        }
+        this.scene.add(zoneGroup);
+        this.transientEffects.push({
+          mesh: zoneGroup,
+          createdAt: now,
+          durationMs: dur,
+          onUpdate: (t) => {
+            ring.rotation.z = t * 4.2;
+            rimMat.opacity = (t > 0.85 ? (1 - t) / 0.15 : 1) * 0.58;
+          },
+        });
+        this.addRunicBurst(ev.x, ev.z, r, col, Math.min(dur, 1400), 0.68, 2.2);
+        this.spawnParticles({
+          kind: ev.kind === 'poison_cloud' || ev.kind === 'butterfly_dust' ? 'smoke' : 'spark',
+          x: ev.x,
+          y: 0.8,
+          z: ev.z,
+          count: 18,
+          color: col,
+          speedMin: 1.5,
+          speedMax: 4.8,
+          upMin: 1.4,
+          upMax: 4.2,
+          durationMs: 720,
+          opacity: 0.85,
+        });
+        break;
+      }
+
+      case 'armor_shatter':
+      case 'war_cry':
+      case 'blood_harvest':
+      case 'leap_crater':
+      case 'steel_bastion':
+      case 'berserker_aura':
+      case 'hellfire_nova':
+      case 'dark_portal':
+      case 'arrow_rain':
+      case 'shadow_step':
+      case 'shield_charge':
+      case 'burning_forge':
+      case 'stone_avatar':
+      case 'purify_wave':
+      case 'thorn_wrath':
+      case 'angel_wings': {
+        const col = ev.color || '#fde047';
+        const r = Math.max(3.5, radius);
+        this.addRunicBurst(ev.x, ev.z, r, col, 680, 0.82, 2.6);
+        this.addExpandingRing(ev.x, ev.z, r, col, 560, 0.82, 0.25);
+        if (ev.tx !== undefined && ev.tz !== undefined && (ev.kind === 'dark_portal' || ev.kind === 'shield_charge')) {
+          this.addExpandingRing(ev.tx, ev.tz, r, col, 560, 0.85, 0.25);
+        }
+        this.addFlashLight(ev.x, 2.2, ev.z, col, 4.2, r * 2.2, 340);
+        this.spawnParticles({
+          kind: ev.kind === 'armor_shatter' || ev.kind === 'leap_crater' || ev.kind === 'stone_avatar' ? 'shard' : ev.kind === 'angel_wings' || ev.kind === 'war_cry' || ev.kind === 'purify_wave' ? 'star' : 'spark',
+          x: ev.x,
+          y: 1.1,
+          z: ev.z,
+          count: ev.kind === 'angel_wings' || ev.kind === 'berserker_aura' || ev.kind === 'stone_avatar' ? 26 : 18,
+          color: col,
+          speedMin: 2.6,
+          speedMax: 7.8,
+          upMin: 2.2,
+          upMax: 6.5,
+          durationMs: 620,
+          opacity: 0.94,
+        });
+        break;
+      }
+
       default: {
         // Chest open, secret break, puzzle solve, stone skin, summon, level up
         const col = ev.color || '#fbbf24';

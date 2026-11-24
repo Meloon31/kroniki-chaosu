@@ -6,6 +6,12 @@ import { RARITY_META } from '../../shared/items';
 import { CHAOS_BOONS, LOCATION_MUTATORS } from '../../shared/mutators';
 import { CLASS_ULTIMATES, DUO_BOONS, ELEMENTAL_BOONS, SKILL_EVOLUTIONS } from '../../shared/hades';
 import { formatRiftTime } from '../../shared/rift';
+import {
+  ensureSkillTreeForClass,
+  getSkillRankEffectiveStats,
+  getTreeSkillById,
+  SKILL_CHAOS_MODIFIERS,
+} from '../../shared/skillTree';
 import { getLocationDef } from '../../shared/world';
 import type {
   GeneratedMapData,
@@ -1857,65 +1863,96 @@ export const Hud: React.FC<HudProps> = ({
 
           {/* Skills + Passives + Panel Shortcuts */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-            {/* 3 Active Skills */}
+            {/* 3 Active Equipped Skills from Multi-Branch Skill Tree */}
             <div style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
-              {cls.actives.map((sk) => {
-                const cdUntil = skillCooldowns[sk.slot] || 0;
-                const remSec = Math.max(0, (cdUntil - now) / 1000);
-                const rank = profile.skillRanks[sk.slot] || 1;
-                return (
-                  <button
-                    key={sk.id}
-                    onClick={() => onCastSkill(sk.slot)}
-                    title={`${sk.name} (Poz. ${rank}) — ${sk.description} | Koszt: ${sk.manaCost} Many | CD: ${sk.cooldown}s`}
-                    className="comic-btn"
-                    style={{
-                      position: 'relative',
-                      width: 66,
-                      height: 58,
-                      flexDirection: 'column',
-                      background: remSec > 0 ? '#1e2238' : sk.color,
-                      color: '#fff',
-                      padding: 2,
-                      overflow: 'hidden',
-                    }}
-                  >
-                    <span style={{ fontSize: 22, lineHeight: 1 }}>{sk.icon}</span>
-                    <span style={{ fontSize: 10, fontWeight: 900, textShadow: '1px 1px 0 #111' }}>
-                      {sk.keyLabel}
-                    </span>
-                    <span
+              {(() => {
+                const ensuredTree = ensureSkillTreeForClass(
+                  profile.classId,
+                  profile.skillTree,
+                  profile.equippedSkills
+                );
+                const slotKeys: Array<{ slot: 'active1' | 'active2' | 'active3'; keyLabel: string }> = [
+                  { slot: 'active1', keyLabel: '1 / Q' },
+                  { slot: 'active2', keyLabel: '2 / E' },
+                  { slot: 'active3', keyLabel: '3' },
+                ];
+                return slotKeys.map(({ slot, keyLabel }, idx) => {
+                  const sid = ensuredTree.equippedSkills[idx];
+                  const sk = getTreeSkillById(sid);
+                  if (!sk) return null;
+                  const node = ensuredTree.skillTree[sid] || { rank: 1, corrupted: false, chaosModId: null };
+                  const rank = node.rank || 0;
+                  const eff = getSkillRankEffectiveStats(sk, Math.max(1, rank));
+                  const modDef = node.chaosModId ? SKILL_CHAOS_MODIFIERS[node.chaosModId] : null;
+                  const cdUntil = skillCooldowns[slot] || 0;
+                  const remSec = Math.max(0, (cdUntil - now) / 1000);
+                  return (
+                    <button
+                      key={`${slot}_${sk.id}`}
+                      onClick={() => onCastSkill(slot)}
+                      title={`${sk.name} (Poz. ${rank}/10)${modDef ? ` [${modDef.icon} ${modDef.name}]` : ''} — ${sk.description} | Koszt: ${sk.manaCost} Many | CD: ${eff.effectiveCooldown}s`}
+                      className={`comic-btn ${node.corrupted ? 'chaos-overcap-frame' : ''}`}
                       style={{
-                        position: 'absolute',
-                        top: 2,
-                        right: 4,
-                        fontSize: 9,
-                        fontWeight: 900,
-                        color: '#fef08a',
+                        position: 'relative',
+                        width: 66,
+                        height: 58,
+                        flexDirection: 'column',
+                        background: remSec > 0 ? '#1e2238' : sk.color,
+                        borderColor: node.corrupted ? '#e11d48' : undefined,
+                        color: '#fff',
+                        padding: 2,
+                        overflow: 'hidden',
                       }}
                     >
-                      P.{rank}
-                    </span>
-                    {remSec > 0 && (
-                      <div
+                      <span style={{ fontSize: 22, lineHeight: 1 }}>{sk.icon}</span>
+                      <span style={{ fontSize: 10, fontWeight: 900, textShadow: '1px 1px 0 #111' }}>
+                        {keyLabel}
+                      </span>
+                      <span
                         style={{
                           position: 'absolute',
-                          inset: 0,
-                          background: 'rgba(10,12,24,0.75)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: 17,
+                          top: 2,
+                          right: 4,
+                          fontSize: 9,
                           fontWeight: 900,
-                          color: '#fde047',
+                          color: rank > 10 ? '#f472b6' : '#fef08a',
                         }}
                       >
-                        {remSec.toFixed(1)}
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
+                        P.{rank}
+                      </span>
+                      {modDef && (
+                        <span
+                          style={{
+                            position: 'absolute',
+                            top: 2,
+                            left: 3,
+                            fontSize: 10,
+                          }}
+                        >
+                          {modDef.icon}
+                        </span>
+                      )}
+                      {remSec > 0 && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            inset: 0,
+                            background: 'rgba(10,12,24,0.75)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: 17,
+                            fontWeight: 900,
+                            color: '#fde047',
+                          }}
+                        >
+                          {remSec.toFixed(1)}
+                        </div>
+                      )}
+                    </button>
+                  );
+                });
+              })()}
 
               {/* Tactical Health Potion [4 / V] */}
               {(() => {

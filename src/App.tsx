@@ -45,6 +45,15 @@ import {
   WHEEL_SLICES,
 } from '../shared/bounties';
 import { CAMP_LOCATION_INDEX, TOTAL_LOCATIONS } from '../shared/world';
+import {
+  applyChaosStoneToSkill,
+  canUpgradeTreeSkill,
+  createDefaultSkillTree,
+  ensureSkillTreeForClass,
+  getSkillRankEffectiveStats,
+  getTreeSkillById,
+  SkillChaosCorruptionResult,
+} from '../shared/skillTree';
 import { CosmeticSlot } from '../shared/prestige';
 import { RiftLeaderboardMap } from '../shared/rift';
 import {
@@ -119,6 +128,7 @@ function loadSavedServerUrl(): string {
 }
 
 function createDefaultProfile(classId: ClassId = 'wojownik'): PlayerProfile {
+  const defaultTree = createDefaultSkillTree(classId);
   return {
     name: 'Bohater',
     classId,
@@ -132,6 +142,8 @@ function createDefaultProfile(classId: ClassId = 'wojownik'): PlayerProfile {
       passive1: 0,
       passive2: 0,
     },
+    skillTree: defaultTree.skillTree,
+    equippedSkills: defaultTree.equippedSkills,
     equipped: createStarterEquipment(classId),
     inventory: [],
     shards: createStarterShards(),
@@ -163,12 +175,16 @@ function loadProfile(): PlayerProfile {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return createDefaultProfile();
     const parsed = JSON.parse(raw) as Partial<PlayerProfile>;
-    const def = createDefaultProfile(parsed.classId || 'wojownik');
+    const cid: ClassId = parsed.classId || 'wojownik';
+    const def = createDefaultProfile(cid);
+    const ensuredTree = ensureSkillTreeForClass(cid, parsed.skillTree, parsed.equippedSkills);
     return {
       ...def,
       ...parsed,
       playerUid: parsed.playerUid || def.playerUid,
       skillRanks: { ...def.skillRanks, ...(parsed.skillRanks || {}) },
+      skillTree: ensuredTree.skillTree,
+      equippedSkills: ensuredTree.equippedSkills,
       equipped: { ...def.equipped, ...(parsed.equipped || {}) },
       shards: { ...def.shards, ...(parsed.shards || {}) },
       runes: { ...def.runes, ...(parsed.runes || {}) },
@@ -362,6 +378,8 @@ export function App() {
         classId: profile.classId,
         level: profile.level,
         skillRanks: profile.skillRanks,
+        skillTree: profile.skillTree,
+        equippedSkills: profile.equippedSkills,
         equippedTitle: profile.equippedTitle ?? null,
         equippedAura: profile.equippedAura ?? null,
         equippedTrail: profile.equippedTrail ?? null,
@@ -1110,9 +1128,13 @@ export function App() {
       onSkill: (slot, aimX, aimZ) => {
         const now = Date.now();
         const cur = profileRef.current;
-        const cls = CLASSES[cur.classId];
-        const sk = cls.actives.find((a) => a.slot === slot);
-        if (sk) {
+        const ensuredTree = ensureSkillTreeForClass(cur.classId, cur.skillTree, cur.equippedSkills);
+        const slotIdx = slot === 'active1' ? 0 : slot === 'active2' ? 1 : 2;
+        const sid = ensuredTree.equippedSkills[slotIdx];
+        const sk = getTreeSkillById(sid);
+        const rank = ensuredTree.skillTree[sid]?.rank || 0;
+        if (sk && rank >= 1) {
+          const eff = getSkillRankEffectiveStats(sk, rank);
           const stats = computePlayerStats(
             cur.classId,
             cur.level,
@@ -1122,7 +1144,7 @@ export function App() {
             0,
             guildRef.current?.upgrades
           );
-          const cdMs = Math.round(sk.cooldown * 1000 * (1 - stats.cdr / 100));
+          const cdMs = Math.round(eff.effectiveCooldown * 1000 * (1 - stats.cdr / 100));
           setSkillCooldowns((prev) => (now < prev[slot] ? prev : { ...prev, [slot]: now + cdMs }));
         }
         socketRef.current?.emit('player:skill', { slot, aimX, aimZ });
@@ -1214,25 +1236,30 @@ export function App() {
   // ==========================================
   // PLAYER PROFILE & LOBBY HANDLERS
   // ==========================================
-  const buildNetPayload = (p: PlayerProfile, globalLocation?: number) => ({
-    name: guildRef.current ? `[${guildRef.current.tag}] ${p.name}` : p.name,
-    classId: p.classId,
-    level: p.level,
-    skillRanks: p.skillRanks,
-    equippedTitle: p.equippedTitle ?? null,
-    equippedAura: p.equippedAura ?? null,
-    equippedTrail: p.equippedTrail ?? null,
-    stats: computePlayerStats(
-      p.classId,
-      p.level,
-      p.equipped,
-      p.skillRanks,
-      p.runes,
-      0,
-      guildRef.current?.upgrades
-    ),
-    globalLocation,
-  });
+  const buildNetPayload = (p: PlayerProfile, globalLocation?: number) => {
+    const ensuredTree = ensureSkillTreeForClass(p.classId, p.skillTree, p.equippedSkills);
+    return {
+      name: guildRef.current ? `[${guildRef.current.tag}] ${p.name}` : p.name,
+      classId: p.classId,
+      level: p.level,
+      skillRanks: p.skillRanks,
+      skillTree: ensuredTree.skillTree,
+      equippedSkills: ensuredTree.equippedSkills,
+      equippedTitle: p.equippedTitle ?? null,
+      equippedAura: p.equippedAura ?? null,
+      equippedTrail: p.equippedTrail ?? null,
+      stats: computePlayerStats(
+        p.classId,
+        p.level,
+        p.equipped,
+        p.skillRanks,
+        p.runes,
+        0,
+        guildRef.current?.upgrades
+      ),
+      globalLocation,
+    };
+  };
 
   const handleEnterCamp = () => {
     setErrorMsg(null);
@@ -1449,7 +1476,16 @@ export function App() {
           if (nextInventory.length < 60) nextInventory.unshift(it);
         }
       }
-      return { ...prev, name, classId, equipped: nextEquipped, inventory: nextInventory };
+      const ensuredTree = ensureSkillTreeForClass(classId, prev.skillTree, prev.equippedSkills);
+      return {
+        ...prev,
+        name,
+        classId,
+        equipped: nextEquipped,
+        inventory: nextInventory,
+        skillTree: { ...(prev.skillTree || {}), ...ensuredTree.skillTree },
+        equippedSkills: ensuredTree.equippedSkills,
+      };
     });
   };
 
@@ -1563,18 +1599,87 @@ export function App() {
     advanceBounty('salvage', matching.length, 'add');
   };
 
-  const handleUpgradeSkill = (slot: keyof SkillRanks) => {
-    soundEngine.playPuzzleTick();
+  const handleUpgradeTreeSkill = (skillId: string) => {
     setProfile((prev) => {
-      if (prev.skillPoints <= 0) return prev;
-      const cur = prev.skillRanks[slot] || 0;
-      if (cur >= MAX_SKILL_RANK) return prev;
+      const ensured = ensureSkillTreeForClass(prev.classId, prev.skillTree, prev.equippedSkills);
+      const check = canUpgradeTreeSkill({ ...prev, skillTree: ensured.skillTree }, skillId);
+      if (!check.ok) return prev;
+      const curNode = ensured.skillTree[skillId] || { rank: 0, corrupted: false, chaosModId: null };
+      const nextTree = {
+        ...ensured.skillTree,
+        [skillId]: { ...curNode, rank: curNode.rank + 1 },
+      };
       return {
         ...prev,
-        skillPoints: prev.skillPoints - 1,
-        skillRanks: { ...prev.skillRanks, [slot]: cur + 1 },
+        skillPoints: Math.max(0, prev.skillPoints - 1),
+        skillTree: nextTree,
+        equippedSkills: ensured.equippedSkills,
       };
     });
+  };
+
+  const handleEquipTreeSkill = (slotIndex: 0 | 1 | 2, skillId: string) => {
+    setProfile((prev) => {
+      const ensured = ensureSkillTreeForClass(prev.classId, prev.skillTree, prev.equippedSkills);
+      const node = ensured.skillTree[skillId];
+      if (!node || node.rank < 1) return prev;
+      const nextEq: [string, string, string] = [...ensured.equippedSkills];
+      const existingIdx = nextEq.indexOf(skillId);
+      if (existingIdx >= 0 && existingIdx !== slotIndex) {
+        // Swap slots cleanly if already equipped in another slot!
+        nextEq[existingIdx] = nextEq[slotIndex];
+      }
+      nextEq[slotIndex] = skillId;
+      return {
+        ...prev,
+        skillTree: ensured.skillTree,
+        equippedSkills: nextEq,
+      };
+    });
+  };
+
+  const handleCorruptTreeSkill = (skillId: string): SkillChaosCorruptionResult | null => {
+    const cur = profileRef.current;
+    if ((cur.chaosStones || 0) < 1) return null;
+    const sk = getTreeSkillById(skillId);
+    if (!sk || sk.classId !== cur.classId) return null;
+    const ensured = ensureSkillTreeForClass(cur.classId, cur.skillTree, cur.equippedSkills);
+    const curNode = ensured.skillTree[skillId];
+    if (!curNode || curNode.rank < 1 || curNode.corrupted) return null;
+
+    const result = applyChaosStoneToSkill(curNode, sk);
+    if (!result) return null;
+
+    setProfile((prev) => {
+      const prevEnsured = ensureSkillTreeForClass(prev.classId, prev.skillTree, prev.equippedSkills);
+      const nextTree = {
+        ...prevEnsured.skillTree,
+        [skillId]: result.updatedProgress,
+      };
+      const fixed = ensureSkillTreeForClass(prev.classId, nextTree, prevEnsured.equippedSkills);
+      return {
+        ...prev,
+        chaosStones: Math.max(0, (prev.chaosStones || 0) - 1),
+        skillTree: fixed.skillTree,
+        equippedSkills: fixed.equippedSkills,
+      };
+    });
+
+    if (result.outcome === 'overcap_plus2') {
+      engineRef.current?.addScreenShake(0.6);
+      setBoskiFlashKey((k) => k + 1);
+      pushToast(result.message, '#fde047');
+    } else if (result.outcome === 'new_modifier') {
+      engineRef.current?.addScreenShake(0.45);
+      pushToast(result.message, '#e879f9');
+    } else if (result.outcome === 'reset_zero') {
+      engineRef.current?.addScreenShake(0.7);
+      pushToast(result.message, '#ef4444');
+    } else {
+      pushToast(result.message, '#94a3b8');
+    }
+
+    return result;
   };
 
   const handleUpgradeItem = (
@@ -2609,13 +2714,22 @@ export function App() {
             />
           )}
 
-          {activePanel === 'skills' && (
-            <SkillsModal
-              profile={profile}
-              onUpgradeSkill={handleUpgradeSkill}
-              onClose={() => setActivePanel(null)}
-            />
-          )}
+          {activePanel === 'skills' && (() => {
+            const localNet = snapshot?.players.find((p) => p.id === localPlayerId);
+            const canSwap = Boolean(
+              snapshot?.isCamp || !localNet?.inCombatUntil || Date.now() >= localNet.inCombatUntil
+            );
+            return (
+              <SkillsModal
+                profile={profile}
+                canChangeLoadout={canSwap}
+                onUpgradeTreeSkill={handleUpgradeTreeSkill}
+                onEquipTreeSkill={handleEquipTreeSkill}
+                onCorruptTreeSkill={handleCorruptTreeSkill}
+                onClose={() => setActivePanel(null)}
+              />
+            );
+          })()}
 
           {activePanel === 'blacksmith' && (
             <BlacksmithModal

@@ -99,6 +99,19 @@ export interface ComputedStats {
   combatPower: number;
 }
 
+export type SkillChaosModId =
+  | 'lightning_discharge'
+  | 'ignite_burn'
+  | 'split_aoe'
+  | 'spell_vamp'
+  | 'stagger_breaker';
+
+export interface SkillTreeNodeProgress {
+  rank: number; // 0..10 standard, up to 12 via Chaos Stone (+2 overcap)
+  corrupted?: boolean; // Permanent 1-time Chaos Stone corruption lock
+  chaosModId?: SkillChaosModId | null;
+}
+
 export interface PlayerProfile {
   name: string;
   classId: ClassId;
@@ -106,6 +119,8 @@ export interface PlayerProfile {
   xp: number;
   skillPoints: number;
   skillRanks: SkillRanks;
+  skillTree?: Record<string, SkillTreeNodeProgress>;
+  equippedSkills?: [string, string, string];
   equipped: EquippedGear;
   inventory: EquipmentItem[];
   shards: ShardBag;
@@ -194,6 +209,14 @@ export interface NetPlayerState {
   elementalBoons?: Array<{ id: string; rarity: BoonRarity }>;
   duoBoons?: string[];
   skillEvolutions?: string[];
+  // Active Skill Tree 3D Transformation & Combat Timers
+  berserkerUntil?: number;
+  shadowStepUntil?: number;
+  stoneAvatarUntil?: number;
+  angelWingsUntil?: number;
+  burningForgeUntil?: number;
+  elementalFuryUntil?: number;
+  inCombatUntil?: number;
   stats: ComputedStats;
 }
 
@@ -587,7 +610,43 @@ export interface SkillVfxEvent {
     | 'pillar_shatter'
     | 'interrupt_success'
     | 'enrage_pulse'
-    | 'quicksand';
+    | 'quicksand'
+    // 50-Skill Multi-Branch Tree Dedicated 3D HDR VFX
+    | 'shockwave_fire'
+    | 'armor_shatter'
+    | 'war_cry'
+    | 'blood_harvest'
+    | 'leap_crater'
+    | 'steel_bastion'
+    | 'berserker_aura'
+    | 'curse_sigil'
+    | 'hellfire_nova'
+    | 'void_lightning'
+    | 'fire_wall'
+    | 'dark_portal'
+    | 'wraith_swarm'
+    | 'chaos_cataclysm'
+    | 'arrow_rain'
+    | 'poison_cloud'
+    | 'shadow_step'
+    | 'root_trap_skill'
+    | 'blade_dance'
+    | 'wind_falcons'
+    | 'elemental_fury'
+    | 'runic_axe'
+    | 'lava_fissure'
+    | 'dwarf_totem'
+    | 'chain_pull'
+    | 'shield_charge'
+    | 'burning_forge'
+    | 'stone_avatar'
+    | 'life_garden'
+    | 'solar_beam'
+    | 'purify_wave'
+    | 'butterfly_dust'
+    | 'life_bond'
+    | 'thorn_wrath'
+    | 'angel_wings';
   x: number;
   z: number;
   tx?: number;

@@ -96,6 +96,11 @@ import {
   PortalRewardKind,
   SKILL_EVOLUTIONS,
 } from '../shared/hades.js';
+import {
+  ensureSkillTreeForClass,
+  getSkillRankEffectiveStats,
+  getTreeSkillById,
+} from '../shared/skillTree.js';
 import type {
   BossTetherState,
   BranchPortalOption,
@@ -114,7 +119,9 @@ import type {
   ObsidianPillarState,
   Rarity,
   RoomSummary,
+  SkillChaosModId,
   SkillRanks,
+  SkillTreeNodeProgress,
   SkillVfxEvent,
   TelegraphZone,
   TradeSessionState,
@@ -199,7 +206,32 @@ interface ServerPlayer extends NetPlayerState {
   socketId: string;
   ready: boolean;
   skillRanks: SkillRanks;
+  skillTree: Record<string, SkillTreeNodeProgress>;
+  equippedSkills: [string, string, string];
   rawStats: ComputedStats;
+  // 50-Skill Tree Active Buff / Transformation Timers
+  whirlwindSkillId?: string;
+  berserkerUntil: number;
+  bastionUntil: number;
+  bastionCounterDmg: number;
+  warCryUntil: number;
+  shadowStepUntil: number;
+  shadowStepCritReady: boolean;
+  windFalconsUntil: number;
+  windFalconsNextTick: number;
+  windFalconsDmg: number;
+  elementalFuryUntil: number;
+  burningForgeUntil: number;
+  burningForgeDmg: number;
+  stoneAvatarUntil: number;
+  angelWingsUntil: number;
+  undyingUntil: number;
+  lifeBondTargetId?: string;
+  lifeBondUntil: number;
+  lifeBondNextTick: number;
+  lifeBondHealAmt: number;
+  totemBuffUntil: number;
+  inCombatUntil: number;
   cooldowns: {
     basic: number;
     active1: number;
@@ -284,6 +316,32 @@ interface ServerEnemy extends EnemyState {
   nextTotemPulseAt?: number;
   interruptTriggeredPhases?: number[];
   vaelgorPillarsInitialized?: boolean;
+  // 50-Skill Tree Status Effects & Chaos Ignite
+  armorShredUntil?: number;
+  curseVulnUntil?: number;
+  asleepUntil?: number;
+  burnUntil?: number;
+  burnNextTick?: number;
+  burnDps?: number;
+  burnOwnerId?: string;
+  poisonCloudUntil?: number;
+  poisonCloudNextTick?: number;
+  poisonCloudDps?: number;
+  poisonCloudOwnerId?: string;
+}
+
+interface ActiveSkillZone {
+  id: string;
+  kind: 'fire_wall' | 'cataclysm' | 'root_trap' | 'dwarf_totem' | 'life_garden';
+  ownerId: string;
+  x: number;
+  z: number;
+  radius: number;
+  power: number;
+  expiresAt: number;
+  nextTickAt: number;
+  detonated?: boolean;
+  chaosModId?: SkillChaosModId | null;
 }
 
 interface ActiveTelegraph extends TelegraphZone {
@@ -336,6 +394,7 @@ interface GameRoom {
   pactEnraged: boolean;
   eliteVaultBonus: boolean;
   activeTethers: BossTetherState[];
+  activeSkillZones: ActiveSkillZone[];
   merchant: { id: string; x: number; z: number } | null;
   branchPortals: BranchPortalOption[];
   trades: Map<string, TradeSessionState>;
@@ -1122,6 +1181,7 @@ function initializeLocation(room: GameRoom, globalLocation: number, riftFloor = 
   room.nextMeteorAt = Date.now() + 4500;
   room.nextEnvTrapAt = Date.now() + 5200;
   room.activeTethers = [];
+  room.activeSkillZones = [];
   room.branchPortals = [];
   room.merchant = null;
   room.pactEnraged = false;
@@ -1814,6 +1874,23 @@ function damagePlayer(
   }
 ) {
   if (!player.alive) return;
+  player.inCombatUntil = Math.max(player.inCombatUntil || 0, now + 5000);
+
+  // Warrior Bastion Stali: blocks incoming hit & releases devastating counterattack wave!
+  if (player.bastionUntil && now < player.bastionUntil && damageType !== 'poison') {
+    player.bastionUntil = 0;
+    const counterDmg = Math.max(player.stats.ad * 2.2, player.bastionCounterDmg || 0);
+    pushVfx(room, { kind: 'steel_bastion', x: player.x, z: player.z, radius: 5.8, color: '#fde047', casterId: player.id });
+    pushCombatText(room, player.x, 3.1, player.z, '🏰 KONTRATAK!', 'physical', true, true);
+    for (const e of room.enemies.values()) {
+      if (!e.alive || e.tier === 'root_trap') continue;
+      if (Math.hypot(e.x - player.x, e.z - player.z) <= 5.8 + e.radius) {
+        damageEnemy(room, player, e, counterDmg, 'physical', now, true, false, undefined, { staggerDmg: 28 });
+      }
+    }
+    return;
+  }
+
   if (now < player.invulnUntil) {
     // Perfect Dodge Window (~0.25s right after dashing into/past an incoming attack!)
     if (!player.perfectDodgeConsumed && now - player.dashStartedAt <= 260) {
@@ -1830,15 +1907,16 @@ function damagePlayer(
   }
 
   const armorPen = options?.armorPenPct ?? 0;
-  const effDef = player.stats.def * (1 - armorPen / 100);
-  const defMitigation = Math.min(0.54, effDef / (effDef + 160 + Math.max(1, room.globalLocation) * 18));
+  const totemDefMult = player.totemBuffUntil && now < player.totemBuffUntil ? 1.35 : 1.0;
+  const effDef = player.stats.def * totemDefMult * (1 - armorPen / 100);
+  const defMitigation = Math.min(0.58, effDef / (effDef + 160 + Math.max(1, room.globalLocation) * 18));
 
-  // Total non-armor DR strictly capped at 46% (no immortal tanks!)
+  // Stone Skin reduces incoming damage by 50%!
   let dr = player.stats.damageReduction / 100;
   if (now < player.stoneSkinUntil) {
-    dr += 0.26;
+    dr += 0.5;
   }
-  dr = Math.min(0.46, dr);
+  dr = Math.min(0.65, dr);
 
   // Undergeared boss pressure multiplier
   let underGearMult = 1.0;
@@ -1866,7 +1944,40 @@ function damagePlayer(
     }
   }
 
+  // Fairy Więź Życia: linked Fairy absorbs 30% of ally's incoming hit!
+  for (const fairy of room.players.values()) {
+    if (
+      fairy.alive &&
+      fairy.id !== player.id &&
+      fairy.lifeBondTargetId === player.id &&
+      now < fairy.lifeBondUntil &&
+      dmg > 3
+    ) {
+      const shared = Math.round(dmg * 0.3);
+      dmg -= shared;
+      fairy.hp = Math.max(1, fairy.hp - Math.round(shared * 0.7));
+      break;
+    }
+  }
+
+  // Dwarf Awatar Kamienia: reflects 40% of received damage back to nearby enemies!
+  if (player.stoneAvatarUntil && now < player.stoneAvatarUntil && dmg > 0) {
+    const reflectDmg = Math.max(12, Math.round(dmg * 0.4 + player.stats.def * 0.6));
+    for (const e of room.enemies.values()) {
+      if (!e.alive || e.tier === 'root_trap') continue;
+      if (Math.hypot(e.x - player.x, e.z - player.z) <= 6.5 + e.radius) {
+        damageEnemy(room, player, e, reflectDmg, 'physical', now, false, false);
+      }
+    }
+  }
+
   player.hp = Math.max(0, player.hp - dmg);
+  // Fairy Skrzydła Archanioła: team cannot drop below 1 HP for 4s!
+  if (player.hp <= 0 && player.undyingUntil && now < player.undyingUntil) {
+    player.hp = 1;
+    pushCombatText(room, player.x, 3.0, player.z, '🪽 NIEŚMIERTELNOŚĆ!', 'heal', true, true);
+    return;
+  }
   pushCombatText(
     room,
     player.x,
@@ -1935,9 +2046,22 @@ function damageEnemy(
   }
 
   enemy.aggro = true;
+  attacker.inCombatUntil = Math.max(attacker.inCombatUntil || 0, now + 5000);
+  if (enemy.asleepUntil && now < enemy.asleepUntil) {
+    enemy.asleepUntil = 0; // Wakes up when struck!
+  }
   let dmg = rawDamage;
   if (now < enemy.weakenedUntil) {
     dmg *= 1.12;
+  }
+  if (enemy.armorShredUntil && now < enemy.armorShredUntil) {
+    dmg *= 1.3;
+  }
+  if (enemy.curseVulnUntil && now < enemy.curseVulnUntil) {
+    dmg *= 1.25;
+  }
+  if (attacker.warCryUntil && now < attacker.warCryUntil && damageType === 'physical') {
+    dmg *= 1.22;
   }
 
   // Backstab (+20% W PLECY! + extra with Kosa Cienia!)
@@ -2024,11 +2148,17 @@ function damageEnemy(
 
   const hasCritFury = attacker.activeBoons.includes('crit_fury');
   const stormCrit = now < attacker.stormOverloadUntil ? Math.round(12 * getBoonMult(attacker, 'blyskawica_skill')) : 0;
-  const effCritChance = attacker.stats.critChance + (hasCritFury ? 28 : 0) + stormCrit;
+  const berserkCrit = attacker.berserkerUntil && now < attacker.berserkerUntil ? 35 : 0;
+  const shadowStepGuaranteedCrit = Boolean(attacker.shadowStepCritReady);
+  if (shadowStepGuaranteedCrit) {
+    attacker.shadowStepCritReady = false;
+    attacker.shadowStepUntil = 0;
+  }
+  const effCritChance = attacker.stats.critChance + (hasCritFury ? 28 : 0) + stormCrit + berserkCrit;
   const effCritDmg = attacker.stats.critDamage + (hasCritFury ? 55 : 0) + (combatOpts?.bonusCritDmgPct ?? 0);
   const isCrit =
     enemy.tier !== 'barrel' &&
-    (combatOpts?.forceCrit || (canCrit && Math.random() * 100 < effCritChance));
+    (combatOpts?.forceCrit || shadowStepGuaranteedCrit || (canCrit && Math.random() * 100 < effCritChance));
   if (isCrit) {
     dmg *= effCritDmg / 100;
   }
@@ -4415,14 +4545,54 @@ function tickRoom(room: GameRoom) {
       damagePlayer(room, p, p.poisonDps, 'poison', now, { sourceLabel: 'Trucizna' });
     }
 
+    // Elf Sokoły Wiatru: 2 spirit birds auto-attacking nearby foes every 0.8s!
+    if (p.windFalconsUntil > now && now >= p.windFalconsNextTick) {
+      p.windFalconsNextTick = now + 800;
+      const nearby = Array.from(room.enemies.values())
+        .filter((e) => e.alive && e.tier !== 'root_trap' && Math.hypot(e.x - p.x, e.z - p.z) <= 13.5)
+        .sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z))
+        .slice(0, 2);
+      for (const targetE of nearby) {
+        pushVfx(room, { kind: 'wind_falcons', x: p.x, z: p.z, tx: targetE.x, tz: targetE.z, radius: 1.8, color: '#38bdf8', casterId: p.id });
+        damageEnemy(room, p, targetE, p.windFalconsDmg || (p.stats.ad + p.stats.ap) * 0.45, 'hybrid', now, true, false);
+      }
+    }
+
+    // Fairy Więź Życia: heals linked ally every 1.0s!
+    if (p.lifeBondUntil > now && p.lifeBondTargetId && now >= p.lifeBondNextTick) {
+      p.lifeBondNextTick = now + 1000;
+      const ally = room.players.get(p.lifeBondTargetId);
+      if (ally && ally.alive) {
+        const healAmt = Math.min(ally.maxHp - ally.hp, Math.max(15, Math.round(p.lifeBondHealAmt || p.stats.ap * 0.45)));
+        if (healAmt > 0) {
+          ally.hp += healAmt;
+          p.matchHealingSupport += healAmt;
+          pushCombatText(room, ally.x, 2.7, ally.z, `💞 +${healAmt}`, 'heal', false, false);
+        }
+        pushVfx(room, { kind: 'life_bond', x: p.x, z: p.z, tx: ally.x, tz: ally.z, radius: 1.5, color: '#ec4899', casterId: p.id });
+      }
+    }
+
     if (p.whirlwindUntil > now && now >= p.whirlwindNextTick) {
       p.whirlwindNextTick = now + 260;
-      const rankMult = 1 + (p.skillRanks.active2 - 1) * 0.065;
-      const tickDmg = p.stats.ad * 0.54 * rankMult;
+      const wwNode = p.skillTree?.['woj_wir_ostrzy'];
+      const wwDef = getTreeSkillById('woj_wir_ostrzy');
+      const wwStats = wwDef ? getSkillRankEffectiveStats(wwDef, wwNode?.rank || 1) : { powerMult: 1, effectiveRadius: 4.5 };
+      const wwRadius = wwNode?.chaosModId === 'split_aoe' ? wwStats.effectiveRadius * 1.35 : wwStats.effectiveRadius;
+      const wwStagger = wwNode?.chaosModId === 'stagger_breaker' ? 14 : 7;
+      const tickDmg = p.stats.ad * 0.56 * wwStats.powerMult;
       for (const e of room.enemies.values()) {
         if (!e.alive) continue;
-        if (Math.hypot(e.x - p.x, e.z - p.z) <= 4.5 + e.radius) {
-          damageEnemy(room, p, e, tickDmg, 'physical', now, true, true, undefined, { staggerDmg: 6 });
+        if (Math.hypot(e.x - p.x, e.z - p.z) <= wwRadius + e.radius) {
+          damageEnemy(room, p, e, tickDmg, 'physical', now, true, true, undefined, { staggerDmg: wwStagger });
+          if (wwNode?.chaosModId === 'ignite_burn') {
+            e.burnUntil = now + 4000;
+            e.burnDps = Math.max(e.burnDps || 0, Math.round(tickDmg * 0.35));
+            e.burnOwnerId = p.id;
+          }
+          if (wwNode?.chaosModId === 'spell_vamp') {
+            p.hp = Math.min(p.maxHp, p.hp + Math.round(p.maxHp * 0.015));
+          }
           // Co-op Combo: Warlock Curse + Warrior Whirlwind -> WYBUCH CIENIA!
           if (e.cursedUntil && now < e.cursedUntil) {
             e.cursedUntil = 0;
@@ -4528,6 +4698,26 @@ function tickRoom(room: GameRoom) {
 
   for (const e of room.enemies.values()) {
     if (!e.alive) continue;
+    // Tick Burn (Chaos Ignite / Lava Fissure) & Poison Cloud DoTs on enemies!
+    if (e.burnUntil && now < e.burnUntil && (!e.burnNextTick || now >= e.burnNextTick)) {
+      e.burnNextTick = now + 800;
+      const owner = e.burnOwnerId ? room.players.get(e.burnOwnerId) : alivePlayers[0];
+      if (owner && e.burnDps) {
+        damageEnemy(room, owner, e, e.burnDps, 'magical', now, false, false, { x: e.x, z: e.z });
+      }
+    }
+    if (e.poisonCloudUntil && now < e.poisonCloudUntil && (!e.poisonCloudNextTick || now >= e.poisonCloudNextTick)) {
+      e.poisonCloudNextTick = now + 850;
+      const owner = e.poisonCloudOwnerId ? room.players.get(e.poisonCloudOwnerId) : alivePlayers[0];
+      if (owner && e.poisonCloudDps) {
+        damageEnemy(room, owner, e, e.poisonCloudDps, 'poison', now, false, false, { x: e.x, z: e.z });
+      }
+    }
+    if (!e.alive) continue;
+    // Asleep enemies (Wróżka Motyli Pył) remain dazed until woken or timer expires!
+    if (e.asleepUntil && now < e.asleepUntil && e.tier !== 'boss' && e.tier !== 'miniboss') {
+      continue;
+    }
     // Refill Boss/Mini-Boss Stagger Bar cleanly after 4s stun break ends!
     if (e.maxStagger && e.stagger === 0 && e.staggerBrokenUntil && now >= e.staggerBrokenUntil) {
       e.stagger = e.maxStagger;
@@ -5635,6 +5825,100 @@ function tickRoom(room: GameRoom) {
     room.activeTethers = remainingTethers;
   }
 
+  // Tick Persistent Skill Zones (Fire Wall, Cataclysm Black Hole, Elf Root Trap, Dwarf Protection Totem, Fairy Life Garden!)
+  if (room.activeSkillZones.length > 0) {
+    const keptZones: ActiveSkillZone[] = [];
+    for (const z of room.activeSkillZones) {
+      const owner = room.players.get(z.ownerId);
+      if (z.kind === 'cataclysm') {
+        // Pull nearby enemies toward black hole center every tick!
+        for (const e of room.enemies.values()) {
+          if (!e.alive || e.tier === 'boss' || e.tier === 'bone_wall' || e.tier === 'root_trap') continue;
+          const d = Math.hypot(z.x - e.x, z.z - e.z);
+          if (d <= z.radius + 1.5 && d > 0.6) {
+            const pull = Math.min(d - 0.5, 6.2 * dt);
+            e.x += ((z.x - e.x) / d) * pull;
+            e.z += ((z.z - e.z) / d) * pull;
+          }
+        }
+        if (now >= z.expiresAt && !z.detonated) {
+          z.detonated = true;
+          pushVfx(room, { kind: 'chaos_cataclysm', x: z.x, z: z.z, radius: z.radius, color: '#9333ea', casterId: z.ownerId });
+          if (owner) {
+            const stag = z.chaosModId === 'stagger_breaker' ? 60 : 30;
+            for (const e of room.enemies.values()) {
+              if (!e.alive || e.tier === 'root_trap') continue;
+              if (Math.hypot(e.x - z.x, e.z - z.z) <= z.radius + e.radius) {
+                damageEnemy(room, owner, e, z.power, 'magical', now, true, true, { x: z.x, z: z.z }, { staggerDmg: stag });
+                e.cursedUntil = now + 7000;
+              }
+            }
+          }
+          continue;
+        }
+        keptZones.push(z);
+        continue;
+      }
+
+      if (now >= z.expiresAt) continue;
+
+      if (z.kind === 'fire_wall' && now >= z.nextTickAt) {
+        z.nextTickAt = now + 650;
+        if (owner) {
+          for (const e of room.enemies.values()) {
+            if (!e.alive || e.tier === 'root_trap') continue;
+            if (Math.hypot(e.x - z.x, e.z - z.z) <= z.radius + e.radius) {
+              damageEnemy(room, owner, e, z.power, 'magical', now, true, false, { x: z.x, z: z.z });
+            }
+          }
+        }
+      } else if (z.kind === 'root_trap' && now >= z.nextTickAt) {
+        let triggered = false;
+        if (owner) {
+          for (const e of room.enemies.values()) {
+            if (!e.alive || e.tier === 'root_trap' || e.tier === 'barrel') continue;
+            if (Math.hypot(e.x - z.x, e.z - z.z) <= z.radius + e.radius) {
+              triggered = true;
+              damageEnemy(room, owner, e, z.power, 'hybrid', now, true, false, { x: z.x, z: z.z }, { staggerDmg: 16 });
+              e.slowedUntil = now + 3500;
+              if (e.tier !== 'boss' && e.tier !== 'miniboss') e.stunnedUntil = now + 3000;
+              pushCombatText(room, e.x, 3.0, e.z, '🌿 UNIERUCHOMIONY!', 'hybrid', false, true);
+            }
+          }
+        }
+        if (triggered) {
+          pushVfx(room, { kind: 'root_trap_skill', x: z.x, z: z.z, radius: z.radius, color: '#22c55e', casterId: z.ownerId });
+          continue; // Consumed on trigger!
+        }
+      } else if (z.kind === 'dwarf_totem' && now >= z.nextTickAt) {
+        z.nextTickAt = now + 900;
+        for (const ally of room.players.values()) {
+          if (!ally.alive) continue;
+          if (Math.hypot(ally.x - z.x, ally.z - z.z) <= z.radius) {
+            ally.totemBuffUntil = now + 1500;
+            ally.rootedUntil = 0;
+            ally.slowedUntil = 0;
+          }
+        }
+      } else if (z.kind === 'life_garden' && now >= z.nextTickAt) {
+        z.nextTickAt = now + 1000;
+        for (const ally of room.players.values()) {
+          if (!ally.alive) continue;
+          if (Math.hypot(ally.x - z.x, ally.z - z.z) <= z.radius) {
+            const healAmt = Math.min(ally.maxHp - ally.hp, Math.round(z.power));
+            if (healAmt > 0) {
+              ally.hp += healAmt;
+              if (owner) owner.matchHealingSupport += healAmt;
+              pushCombatText(room, ally.x, 2.7, ally.z, `🌸 +${healAmt}`, 'heal', false, false);
+            }
+          }
+        }
+      }
+      keptZones.push(z);
+    }
+    room.activeSkillZones = keptZones;
+  }
+
   // Check Pact of Chaos 4-min Timer (Klepsydra Zagłady)
   if (!room.pactEnraged && room.pactTimerEndsAt > 0 && now >= room.pactTimerEndsAt) {
     room.pactEnraged = true;
@@ -5709,6 +5993,13 @@ function tickRoom(room: GameRoom) {
       elementalBoons: p.elementalBoons,
       duoBoons: p.duoBoons,
       skillEvolutions: p.skillEvolutions,
+      berserkerUntil: p.berserkerUntil,
+      shadowStepUntil: p.shadowStepUntil,
+      stoneAvatarUntil: p.stoneAvatarUntil,
+      angelWingsUntil: p.angelWingsUntil,
+      burningForgeUntil: p.burningForgeUntil,
+      elementalFuryUntil: p.elementalFuryUntil,
+      inCombatUntil: p.inCombatUntil,
       stats: p.stats,
     })),
     enemies: Array.from(room.enemies.values())
@@ -5850,22 +6141,39 @@ function handleSkillCast(
   const now = Date.now();
   if (now < player.cooldowns[slot]) return;
 
-  const cls = CLASSES[player.classId];
-  const skillDef = cls.actives.find((a) => a.slot === slot);
-  if (!skillDef) return;
+  const slotIndex = slot === 'active1' ? 0 : slot === 'active2' ? 1 : 2;
+  const ensured = ensureSkillTreeForClass(player.classId, player.skillTree, player.equippedSkills);
+  player.skillTree = ensured.skillTree;
+  player.equippedSkills = ensured.equippedSkills;
+
+  const equippedSkillId = player.equippedSkills[slotIndex];
+  const skillDef = getTreeSkillById(equippedSkillId);
+  if (!skillDef || skillDef.classId !== player.classId) return;
+
+  const nodeState = player.skillTree[skillDef.id];
+  const rank = nodeState?.rank || 0;
+  if (rank < 1) {
+    pushCombatText(room, player.x, 2.5, player.z, 'UMIEJĘTNOŚĆ NIEODBLOKOWANA!', 'physical', false, true);
+    return;
+  }
+
   if (player.mana < skillDef.manaCost) {
     pushCombatText(room, player.x, 2.5, player.z, 'BRAK MANY!', 'magical', false, true);
     return;
   }
 
-  const rank = Math.max(1, player.skillRanks[slot] || 1);
-  const rankMult = 1 + (rank - 1) * (skillDef.rankBonusPct / 100);
+  const scaled = getSkillRankEffectiveStats(skillDef, rank);
+  const rankMult = scaled.powerMult;
+  const chaosMod: SkillChaosModId | null = nodeState?.chaosModId ?? null;
+  const aoeRadius = chaosMod === 'split_aoe' ? scaled.effectiveRadius * 1.35 : scaled.effectiveRadius;
+  const durMs = Math.round(scaled.effectiveDuration * 1000);
   const cdr = getEffectivePlayerCdr(room, player);
-  const effectiveCdMs = Math.round(skillDef.cooldown * 1000 * (1 - cdr / 100));
+  const effectiveCdMs = Math.round(scaled.effectiveCooldown * 1000 * (1 - cdr / 100));
 
   player.mana -= skillDef.manaCost;
   player.cooldowns[slot] = now + effectiveCdMs;
-  player.animState = slot === 'active2' && player.classId === 'wojownik' ? 'spin' : 'cast';
+  player.inCombatUntil = Math.max(player.inCombatUntil || 0, now + 5000);
+  player.animState = skillDef.id === 'woj_wir_ostrzy' ? 'spin' : 'cast';
   player.animTime = now;
 
   const dx = aimX - player.x;
@@ -5959,108 +6267,269 @@ function handleSkillCast(
     return { staggerDmg: baseStagger };
   };
 
+  // Universal Chaos Stone Skill Modifier Hook (applied to every enemy hit by a corrupted skill!)
+  let spellVampHealedTotal = 0;
+  const maxSpellVampCap = Math.round(player.maxHp * 0.18);
+  let chaosLightningTriggered = false;
+
+  const hitWithSkill = (
+    e: ServerEnemy,
+    rawDmg: number,
+    dType: DamageType,
+    baseStagger = 10,
+    origin?: { x: number; z: number },
+    extraOpts?: { forceCrit?: boolean; bonusCritDmgPct?: number }
+  ): number => {
+    const effStagger = chaosMod === 'stagger_breaker' ? baseStagger * 2 : baseStagger;
+    const baseOpts = player.classId === 'elf' ? applyElfDwarfComboOpts(e, effStagger) : { staggerDmg: effStagger };
+    const dealt = damageEnemy(room, player, e, rawDmg, dType, now, true, true, origin, {
+      ...baseOpts,
+      ...extraOpts,
+    });
+    if (dealt <= 0) return 0;
+    if (player.classId === 'wojownik') triggerWarlockWarriorCombo(e);
+
+    // 1. Chaos Mod: Podpalenie (4s fire DoT)
+    if (chaosMod === 'ignite_burn') {
+      e.burnUntil = now + 4000;
+      e.burnDps = Math.max(e.burnDps || 0, Math.round(rawDmg * 0.24));
+      e.burnOwnerId = player.id;
+    }
+
+    // 2. Chaos Mod: Wampiryzm Zaklęć (+3% Max HP per hit enemy, capped at 18%)
+    if (chaosMod === 'spell_vamp' && spellVampHealedTotal < maxSpellVampCap) {
+      const vamp = Math.min(player.maxHp - player.hp, maxSpellVampCap - spellVampHealedTotal, Math.round(player.maxHp * 0.03));
+      if (vamp > 0) {
+        player.hp += vamp;
+        spellVampHealedTotal += vamp;
+        pushCombatText(room, player.x, 2.7, player.z, `🩸 +${vamp}`, 'heal', false, false);
+      }
+    }
+
+    // 3. Chaos Mod: Wyładowanie Błyskawic (chain lightning zap to nearby enemies!)
+    if (chaosMod === 'lightning_discharge' && !chaosLightningTriggered) {
+      chaosLightningTriggered = true;
+      const zapDmg = Math.round(rawDmg * 0.45);
+      const targets = Array.from(room.enemies.values())
+        .filter((o) => o.alive && o.id !== e.id && o.tier !== 'root_trap' && Math.hypot(o.x - e.x, o.z - e.z) <= 7.5)
+        .slice(0, 4);
+      for (const t of targets) {
+        pushVfx(room, { kind: 'lightning_chain', x: e.x, z: e.z, tx: t.x, tz: t.z, color: '#38bdf8', casterId: player.id });
+        damageEnemy(room, player, t, zapDmg, 'magical', now, false, false, { x: e.x, z: e.z });
+      }
+    }
+
+    // 4. Chaos Mod: Rozszczepienie bonus echo hit (+28% damage echo on hit!)
+    if (chaosMod === 'split_aoe') {
+      damageEnemy(room, player, e, Math.round(rawDmg * 0.28), dType, now, false, false, origin);
+    }
+
+    return dealt;
+  };
+
+  const hitLineEnemies = (
+    length: number,
+    halfWidth: number,
+    rawDmg: number,
+    dType: DamageType,
+    stagger = 12,
+    onHit?: (e: ServerEnemy, dealt: number) => void
+  ) => {
+    for (const e of room.enemies.values()) {
+      if (!e.alive) continue;
+      const rx = e.x - player.x;
+      const rz = e.z - player.z;
+      const proj = rx * dirX + rz * dirZ;
+      const perp = Math.abs(rx * dirZ - rz * dirX);
+      if (proj >= -0.5 && proj <= length && perp <= halfWidth + e.radius) {
+        const dealt = hitWithSkill(e, rawDmg, dType, stagger);
+        if (dealt > 0 && onHit) onHit(e, dealt);
+      }
+    }
+  };
+
+  const hitCircleEnemies = (
+    cx: number,
+    cz: number,
+    rad: number,
+    rawDmg: number,
+    dType: DamageType,
+    stagger = 14,
+    onHit?: (e: ServerEnemy, dealt: number) => void
+  ) => {
+    checkCrackedWallHit(cx, cz, rad);
+    for (const e of room.enemies.values()) {
+      if (!e.alive) continue;
+      if (Math.hypot(e.x - cx, e.z - cz) <= rad + e.radius) {
+        const dealt = hitWithSkill(e, rawDmg, dType, stagger, { x: cx, z: cz });
+        if (dealt > 0 && onHit) onHit(e, dealt);
+      }
+    }
+  };
+
   switch (skillDef.id) {
-    case 'potezne_ciecie': {
-      const dmg = player.stats.ad * (skillDef.damageScaleAd ?? 1.85) * rankMult;
+    // =========================================================
+    // 1. WOJOWNIK (10 UNIQUE SKILLS)
+    // =========================================================
+    case 'woj_potezne_ciecie': {
+      const dmg = player.stats.ad * (skillDef.damageScaleAd ?? 1.9) * rankMult;
       const cx = player.x + dirX * 2.4;
       const cz = player.z + dirZ * 2.4;
-      pushVfx(room, { kind: 'slash', x: cx, z: cz, tx: aimX, tz: aimZ, radius: skillDef.radius, color: '#dc2626', casterId: player.id });
-      checkCrackedWallHit(cx, cz, skillDef.radius);
-      for (const e of room.enemies.values()) {
-        if (!e.alive) continue;
-        if (Math.hypot(e.x - cx, e.z - cz) <= skillDef.radius + e.radius) {
-          damageEnemy(room, player, e, dmg, 'physical', now, true, true, undefined, { staggerDmg: 18 });
-          triggerWarlockWarriorCombo(e);
-        }
-      }
+      pushVfx(room, { kind: 'slash', x: cx, z: cz, tx: aimX, tz: aimZ, radius: aoeRadius, color: '#f97316', casterId: player.id });
+      hitCircleEnemies(cx, cz, aoeRadius, dmg, 'physical', 18);
       break;
     }
-
-    case 'wir_ostrzy': {
-      player.whirlwindUntil = now + 2100;
-      player.whirlwindNextTick = now;
-      pushVfx(room, { kind: 'whirlwind', x: player.x, z: player.z, radius: skillDef.radius, color: '#d97706', duration: 2100, casterId: player.id });
-      checkCrackedWallHit(player.x, player.z, skillDef.radius);
-      break;
-    }
-
-    case 'szarza_z_ogluszeniem': {
-      const dmg = player.stats.ad * (skillDef.damageScaleAd ?? 1.55) * rankMult;
+    case 'woj_szarza_tytana': {
+      const dmg = player.stats.ad * (skillDef.damageScaleAd ?? 1.65) * rankMult;
       const resolved = moveWithWallSweep(player.x, player.z, targetX, targetZ, 0.9, map.walls, solvedGates, revealedSecrets, map.corridorField);
-      pushVfx(room, { kind: 'charge', x: player.x, z: player.z, tx: resolved.x, tz: resolved.z, radius: skillDef.radius, color: '#d99e26', casterId: player.id });
+      pushVfx(room, { kind: 'charge', x: player.x, z: player.z, tx: resolved.x, tz: resolved.z, radius: aoeRadius, color: '#facc15', casterId: player.id });
       player.x = resolved.x;
       player.z = resolved.z;
-      checkCrackedWallHit(player.x, player.z, skillDef.radius);
-      for (const e of room.enemies.values()) {
-        if (!e.alive) continue;
-        if (Math.hypot(e.x - player.x, e.z - player.z) <= skillDef.radius + e.radius + 0.8) {
-          damageEnemy(room, player, e, dmg, 'physical', now, true, true, undefined, { staggerDmg: 32 });
-          triggerWarlockWarriorCombo(e);
-          if (e.tier !== 'boss' && e.tier !== 'miniboss') {
-            e.stunnedUntil = now + 2000;
-            pushCombatText(room, e.x, 3.0, e.z, 'OGŁUSZONY!', 'physical', false, true);
-          }
+      hitCircleEnemies(player.x, player.z, aoeRadius + 0.8, dmg, 'physical', 32, (e) => {
+        if (e.tier !== 'boss' && e.tier !== 'miniboss') {
+          e.stunnedUntil = now + (durMs || 2000);
+          pushCombatText(room, e.x, 3.0, e.z, 'OGŁUSZONY!', 'physical', false, true);
+        }
+      });
+      break;
+    }
+    case 'woj_wir_ostrzy': {
+      const wwDur = durMs || 3000;
+      player.whirlwindUntil = now + wwDur;
+      player.whirlwindNextTick = now;
+      player.whirlwindSkillId = skillDef.id;
+      pushVfx(room, { kind: 'whirlwind', x: player.x, z: player.z, radius: aoeRadius, color: '#ef4444', duration: wwDur, casterId: player.id });
+      checkCrackedWallHit(player.x, player.z, aoeRadius);
+      break;
+    }
+    case 'woj_fala_wstrzasowa': {
+      const dmg = player.stats.ad * (skillDef.damageScaleAd ?? 2.15) * rankMult;
+      pushVfx(room, { kind: 'shockwave_fire', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: aoeRadius, color: '#ea580c', casterId: player.id });
+      checkCrackedWallHit(targetX, targetZ, aoeRadius);
+      hitLineEnemies(skillDef.range, aoeRadius, dmg, 'physical', 22, (e) => {
+        e.burnUntil = now + 3500;
+        e.burnDps = Math.max(e.burnDps || 0, Math.round(dmg * 0.2));
+        e.burnOwnerId = player.id;
+      });
+      break;
+    }
+    case 'woj_rozprucie_pancerza': {
+      const dmg = player.stats.ad * (skillDef.damageScaleAd ?? 2.05) * rankMult;
+      const cx = player.x + dirX * 2.5;
+      const cz = player.z + dirZ * 2.5;
+      pushVfx(room, { kind: 'armor_shatter', x: cx, z: cz, tx: aimX, tz: aimZ, radius: aoeRadius, color: '#fb923c', casterId: player.id });
+      hitCircleEnemies(cx, cz, aoeRadius, dmg, 'physical', 26, (e) => {
+        e.armorShredUntil = now + (durMs || 6000);
+        pushCombatText(room, e.x, 3.2, e.z, '🛡️ -30% DEF!', 'physical', false, true);
+      });
+      break;
+    }
+    case 'woj_okrzyk_wojenny': {
+      const wDur = durMs || 7000;
+      pushVfx(room, { kind: 'war_cry', x: player.x, z: player.z, radius: aoeRadius, color: '#fbbf24', casterId: player.id });
+      for (const ally of room.players.values()) {
+        if (!ally.alive) continue;
+        if (Math.hypot(ally.x - player.x, ally.z - player.z) <= aoeRadius) {
+          ally.warCryUntil = now + wDur;
+          pushCombatText(room, ally.x, 3.0, ally.z, '📯 +22% AD / +20% ASPD!', 'heal', true, true);
         }
       }
       break;
     }
-
-    case 'kula_cienia': {
-      const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 1.9) * rankMult;
-      pushVfx(room, { kind: 'shadow_orb', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: skillDef.radius, color: '#7e22ce', casterId: player.id });
-      checkCrackedWallHit(targetX, targetZ, skillDef.radius);
-      for (const e of room.enemies.values()) {
-        if (!e.alive) continue;
-        if (Math.hypot(e.x - targetX, e.z - targetZ) <= skillDef.radius + e.radius) {
-          damageEnemy(room, player, e, dmg, 'magical', now, true, true, undefined, { staggerDmg: 10 });
-          e.cursedUntil = now + 6500;
-          e.cursedBy = player.id;
+    case 'woj_krwawa_zniwa': {
+      const dmg = player.stats.ad * (skillDef.damageScaleAd ?? 2.25) * rankMult;
+      const cx = player.x + dirX * 2.6;
+      const cz = player.z + dirZ * 2.6;
+      pushVfx(room, { kind: 'blood_harvest', x: cx, z: cz, tx: aimX, tz: aimZ, radius: aoeRadius, color: '#e11d48', casterId: player.id });
+      let totalDealt = 0;
+      hitCircleEnemies(cx, cz, aoeRadius, dmg, 'physical', 18, (_e, dealt) => {
+        totalDealt += dealt;
+      });
+      if (totalDealt > 0) {
+        const heal = Math.min(player.maxHp - player.hp, Math.round(player.maxHp * 0.28), Math.round(totalDealt * 0.24));
+        if (heal > 0) {
+          player.hp += heal;
+          player.matchHealingSupport += heal;
+          pushCombatText(room, player.x, 2.8, player.z, `🩸 +${heal}`, 'heal', false, false);
         }
       }
       break;
     }
+    case 'woj_skok_mlota': {
+      const dmg = player.stats.ad * (skillDef.damageScaleAd ?? 2.55) * rankMult;
+      const resolved = moveWithWallSweep(player.x, player.z, targetX, targetZ, 0.9, map.walls, solvedGates, revealedSecrets, map.corridorField);
+      player.x = resolved.x;
+      player.z = resolved.z;
+      pushVfx(room, { kind: 'leap_crater', x: player.x, z: player.z, radius: aoeRadius, color: '#f59e0b', casterId: player.id });
+      hitCircleEnemies(player.x, player.z, aoeRadius, dmg, 'physical', 38, (e) => {
+        applyKnockbackWithWallSlam(room, player, e, e.x - player.x, e.z - player.z, 3.6, now);
+        if (e.tier !== 'boss' && e.tier !== 'miniboss') e.stunnedUntil = now + 1800;
+      });
+      break;
+    }
+    case 'woj_bastion_stali': {
+      const bDur = durMs || 2500;
+      player.bastionUntil = now + bDur;
+      player.bastionCounterDmg = player.stats.ad * (skillDef.damageScaleAd ?? 2.35) * rankMult;
+      const sh = applyBoundedShield(player, Math.round(player.maxHp * 0.22 * rankMult), bDur + 2000, now);
+      pushVfx(room, { kind: 'steel_bastion', x: player.x, z: player.z, radius: 3.4, color: '#cbd5e1', casterId: player.id });
+      pushCombatText(room, player.x, 3.0, player.z, `🏰 BASTION STALI (+${sh})`, 'shield', true, true);
+      break;
+    }
+    case 'woj_gniew_berserkera': {
+      const bDur = durMs || 8000;
+      player.berserkerUntil = now + bDur;
+      player.hasteUntil = Math.max(player.hasteUntil, now + bDur);
+      pushVfx(room, { kind: 'berserker_aura', x: player.x, z: player.z, radius: aoeRadius, color: '#dc2626', duration: bDur, casterId: player.id });
+      pushCombatText(room, player.x, 3.4, player.z, '👹 GNIEW BERSERKERA! (+35% KRYT/ASPD)', 'physical', true, true);
+      hitCircleEnemies(player.x, player.z, aoeRadius, player.stats.ad * (skillDef.damageScaleAd ?? 1.6) * rankMult, 'physical', 24);
+      break;
+    }
 
-    case 'deszcz_meteorow': {
+    // =========================================================
+    // 2. CZARNOKSIĘŻNIK (10 UNIQUE SKILLS)
+    // =========================================================
+    case 'czar_kula_cienia': {
+      const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 1.95) * rankMult;
+      pushVfx(room, { kind: 'shadow_orb', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: aoeRadius, color: '#a855f7', casterId: player.id });
+      hitCircleEnemies(targetX, targetZ, aoeRadius, dmg, 'magical', 12, (e) => {
+        e.cursedUntil = now + 6500;
+        e.cursedBy = player.id;
+      });
+      break;
+    }
+    case 'czar_deszcz_meteorow': {
       const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 2.75) * rankMult;
       const impacts = hasEvo(player, 'evo_czar_meteor')
         ? [
-            { x: targetX, z: targetZ, r: skillDef.radius, mult: 1.0 },
-            { x: targetX + 3.2, z: targetZ - 2.4, r: skillDef.radius * 0.72, mult: 0.65 },
-            { x: targetX - 3.0, z: targetZ + 2.6, r: skillDef.radius * 0.72, mult: 0.65 },
+            { x: targetX, z: targetZ, r: aoeRadius, mult: 1.0 },
+            { x: targetX + 3.2, z: targetZ - 2.4, r: aoeRadius * 0.72, mult: 0.65 },
+            { x: targetX - 3.0, z: targetZ + 2.6, r: aoeRadius * 0.72, mult: 0.65 },
           ]
-        : [{ x: targetX, z: targetZ, r: skillDef.radius, mult: 1.0 }];
+        : [{ x: targetX, z: targetZ, r: aoeRadius, mult: 1.0 }];
       for (const imp of impacts) {
-        pushVfx(room, { kind: 'meteor', x: imp.x, z: imp.z, radius: imp.r, color: '#b91c1c', casterId: player.id });
-        checkCrackedWallHit(imp.x, imp.z, imp.r);
-        for (const e of room.enemies.values()) {
-          if (!e.alive) continue;
-          if (Math.hypot(e.x - imp.x, e.z - imp.z) <= imp.r + e.radius) {
-            damageEnemy(room, player, e, dmg * imp.mult, 'magical', now, true, true, undefined, { staggerDmg: 16 });
-            e.cursedUntil = now + 6500;
-            e.cursedBy = player.id;
-          }
-        }
+        pushVfx(room, { kind: 'meteor', x: imp.x, z: imp.z, radius: imp.r, color: '#f43f5e', casterId: player.id });
+        hitCircleEnemies(imp.x, imp.z, imp.r, dmg * imp.mult, 'magical', 18, (e) => {
+          e.cursedUntil = now + 6500;
+          e.cursedBy = player.id;
+        });
       }
       break;
     }
-
-    case 'wyssanie_duszy': {
-      const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 1.65) * rankMult;
+    case 'czar_wyssanie_duszy': {
+      const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 1.85) * rankMult;
       const hasReaper = hasEvo(player, 'evo_czar_reaper');
       if (hasReaper) addFury(player, 25);
-      pushVfx(room, { kind: 'soul_drain', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: skillDef.radius, color: '#9333ea', casterId: player.id });
+      pushVfx(room, { kind: 'soul_drain', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: aoeRadius, color: '#c026d3', casterId: player.id });
       let totalDealt = 0;
-      for (const e of room.enemies.values()) {
-        if (!e.alive) continue;
-        if (Math.hypot(e.x - targetX, e.z - targetZ) <= skillDef.radius + e.radius) {
-          totalDealt += damageEnemy(room, player, e, dmg, 'magical', now, true, true, undefined, { staggerDmg: 10 });
-          e.cursedUntil = now + 6500;
-          e.cursedBy = player.id;
-        }
-      }
+      hitCircleEnemies(targetX, targetZ, aoeRadius, dmg, 'magical', 10, (e, dealt) => {
+        totalDealt += dealt;
+        e.cursedUntil = now + 6500;
+        e.cursedBy = player.id;
+      });
       if (totalDealt > 0) {
-        const maxCapHeal = Math.round(player.maxHp * (hasReaper ? 0.27 : 0.18));
-        const heal = Math.min(player.maxHp - player.hp, maxCapHeal, Math.round(totalDealt * (hasReaper ? 0.24 : 0.16)));
+        const maxCapHeal = Math.round(player.maxHp * (hasReaper ? 0.27 : 0.2));
+        const heal = Math.min(player.maxHp - player.hp, maxCapHeal, Math.round(totalDealt * (hasReaper ? 0.24 : 0.18)));
         if (heal > 0) {
           player.hp += heal;
           player.matchHealingSupport += heal;
@@ -6069,34 +6538,132 @@ function handleSkillCast(
       }
       break;
     }
-
-    case 'magiczna_strzala': {
-      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 0.88) + player.stats.ap * (skillDef.damageScaleAp ?? 0.88)) * rankMult;
-      pushVfx(room, { kind: 'magic_arrow', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: 1.8, color: '#22a355', casterId: player.id });
-      checkCrackedWallHit(targetX, targetZ, 2.0);
-      for (const e of room.enemies.values()) {
-        if (!e.alive) continue;
-        const rx = e.x - player.x;
-        const rz = e.z - player.z;
-        const proj = rx * dirX + rz * dirZ;
-        const perp = Math.abs(rx * dirZ - rz * dirX);
-        if (proj >= 0 && proj <= skillDef.range && perp <= 1.8 + e.radius) {
-          damageEnemy(room, player, e, dmg, 'hybrid', now, true, true, undefined, applyElfDwarfComboOpts(e, 10));
-        }
+    case 'czar_klatwa_oslabienia': {
+      const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 1.45) * rankMult;
+      const cDur = durMs || 8000;
+      pushVfx(room, { kind: 'curse_sigil', x: targetX, z: targetZ, radius: aoeRadius, color: '#9333ea', duration: cDur, casterId: player.id });
+      hitCircleEnemies(targetX, targetZ, aoeRadius, dmg, 'magical', 12, (e) => {
+        e.cursedUntil = now + cDur;
+        e.cursedBy = player.id;
+        e.curseVulnUntil = now + cDur;
+        pushCombatText(room, e.x, 3.2, e.z, '🧿 +25% OBR. (KLĄTWA)', 'magical', false, true);
+      });
+      break;
+    }
+    case 'czar_piekielna_nova': {
+      const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 2.35) * rankMult;
+      pushVfx(room, { kind: 'hellfire_nova', x: player.x, z: player.z, radius: aoeRadius, color: '#ea580c', casterId: player.id });
+      hitCircleEnemies(player.x, player.z, aoeRadius, dmg, 'magical', 20, (e) => {
+        applyKnockbackWithWallSlam(room, player, e, e.x - player.x, e.z - player.z, 4.0, now);
+        e.burnUntil = now + 3500;
+        e.burnDps = Math.max(e.burnDps || 0, Math.round(dmg * 0.2));
+        e.burnOwnerId = player.id;
+      });
+      break;
+    }
+    case 'czar_lancuch_blyskawic': {
+      const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 2.05) * rankMult;
+      const maxJumps = Math.min(6, 4 + Math.floor(rank / 4) + (chaosMod === 'split_aoe' ? 2 : 0));
+      const candidates = Array.from(room.enemies.values())
+        .filter((e) => e.alive && e.tier !== 'root_trap' && Math.hypot(e.x - targetX, e.z - targetZ) <= aoeRadius + 3)
+        .sort((a, b) => Math.hypot(a.x - targetX, a.z - targetZ) - Math.hypot(b.x - targetX, b.z - targetZ))
+        .slice(0, maxJumps);
+      let prevX = player.x;
+      let prevZ = player.z;
+      if (candidates.length === 0) {
+        pushVfx(room, { kind: 'void_lightning', x: player.x, z: player.z, tx: targetX, tz: targetZ, color: '#38bdf8', casterId: player.id });
+      }
+      for (const targetE of candidates) {
+        pushVfx(room, { kind: 'void_lightning', x: prevX, z: prevZ, tx: targetE.x, tz: targetE.z, color: '#38bdf8', casterId: player.id });
+        hitWithSkill(targetE, dmg, 'magical', 12);
+        prevX = targetE.x;
+        prevZ = targetE.z;
       }
       break;
     }
+    case 'czar_sciana_ognia': {
+      const fDur = durMs || 5000;
+      const tickDmg = player.stats.ap * (skillDef.damageScaleAp ?? 2.6) * 0.24 * rankMult;
+      pushVfx(room, { kind: 'fire_wall', x: targetX, z: targetZ, tx: targetX - dirZ * 3.5, tz: targetZ + dirX * 3.5, radius: aoeRadius, color: '#f97316', duration: fDur, casterId: player.id });
+      room.activeSkillZones.push({
+        id: nextId('zone'),
+        kind: 'fire_wall',
+        ownerId: player.id,
+        x: targetX,
+        z: targetZ,
+        radius: aoeRadius,
+        power: tickDmg,
+        expiresAt: now + fDur,
+        nextTickAt: now,
+        chaosModId: chaosMod,
+      });
+      break;
+    }
+    case 'czar_mroczny_portal': {
+      const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 1.9) * rankMult;
+      const resolved = moveWithWallSweep(player.x, player.z, targetX, targetZ, 0.9, map.walls, solvedGates, revealedSecrets, map.corridorField);
+      pushVfx(room, { kind: 'dark_portal', x: player.x, z: player.z, tx: resolved.x, tz: resolved.z, radius: aoeRadius, color: '#6366f1', casterId: player.id });
+      player.x = resolved.x;
+      player.z = resolved.z;
+      player.invulnUntil = Math.max(player.invulnUntil, now + 360);
+      hitCircleEnemies(player.x, player.z, aoeRadius, dmg, 'magical', 16);
+      break;
+    }
+    case 'czar_roj_upiorow': {
+      const totalProj = chaosMod === 'split_aoe' ? 7 : 5;
+      const perProjDmg = player.stats.ap * (skillDef.damageScaleAp ?? 2.55) * 0.34 * rankMult;
+      const targets = Array.from(room.enemies.values())
+        .filter((e) => e.alive && e.tier !== 'root_trap' && Math.hypot(e.x - player.x, e.z - player.z) <= skillDef.range)
+        .sort((a, b) => Math.hypot(a.x - targetX, a.z - targetZ) - Math.hypot(b.x - targetX, b.z - targetZ));
+      for (let i = 0; i < totalProj; i++) {
+        const tgt = targets.length > 0 ? targets[i % targets.length] : null;
+        const tx = tgt ? tgt.x : targetX + (Math.random() - 0.5) * 4;
+        const tz = tgt ? tgt.z : targetZ + (Math.random() - 0.5) * 4;
+        pushVfx(room, { kind: 'wraith_swarm', x: player.x, z: player.z, tx, tz, color: '#a78bfa', casterId: player.id });
+        if (tgt) hitWithSkill(tgt, perProjDmg, 'magical', 6);
+      }
+      break;
+    }
+    case 'czar_kataklizm_chaosu': {
+      const cDur = durMs || 2000;
+      const detDmg = player.stats.ap * (skillDef.damageScaleAp ?? 3.85) * rankMult;
+      pushVfx(room, { kind: 'chaos_cataclysm', x: targetX, z: targetZ, radius: aoeRadius, color: '#7c3aed', duration: cDur, casterId: player.id });
+      pushCombatText(room, targetX, 3.8, targetZ, '🕳️ KATAKLIZM CHAOSU!', 'magical', true, true);
+      room.activeSkillZones.push({
+        id: nextId('zone'),
+        kind: 'cataclysm',
+        ownerId: player.id,
+        x: targetX,
+        z: targetZ,
+        radius: aoeRadius,
+        power: detDmg,
+        expiresAt: now + cDur,
+        nextTickAt: now,
+        chaosModId: chaosMod,
+      });
+      break;
+    }
 
-    case 'odskok_z_salwa': {
-      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 0.95) + player.stats.ap * (skillDef.damageScaleAp ?? 0.95)) * rankMult;
-      pushVfx(room, { kind: 'volley_backflip', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: skillDef.radius, color: '#0e87a1', casterId: player.id });
+    // =========================================================
+    // 3. ELF (10 UNIQUE SKILLS)
+    // =========================================================
+    case 'elf_magiczna_strzala': {
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 0.92) + player.stats.ap * (skillDef.damageScaleAp ?? 0.92)) * rankMult;
+      pushVfx(room, { kind: 'magic_arrow', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: aoeRadius, color: '#34d399', casterId: player.id });
+      checkCrackedWallHit(targetX, targetZ, 2.2);
+      hitLineEnemies(skillDef.range, aoeRadius, dmg, 'hybrid', 12);
+      break;
+    }
+    case 'elf_odskok_z_salwa': {
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 0.98) + player.stats.ap * (skillDef.damageScaleAp ?? 0.98)) * rankMult;
+      pushVfx(room, { kind: 'volley_backflip', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: aoeRadius, color: '#06b6d4', casterId: player.id });
       for (const e of room.enemies.values()) {
         if (!e.alive) continue;
         const rx = e.x - player.x;
         const rz = e.z - player.z;
         const d = Math.hypot(rx, rz);
-        if (d <= skillDef.range && (rx * dirX + rz * dirZ) / Math.max(0.01, d) > 0.55) {
-          damageEnemy(room, player, e, dmg, 'hybrid', now, true, true, undefined, applyElfDwarfComboOpts(e, 10));
+        if (d <= skillDef.range && (rx * dirX + rz * dirZ) / Math.max(0.01, d) > 0.5) {
+          hitWithSkill(e, dmg, 'hybrid', 10);
         }
       }
       const backX = player.x - dirX * 5.2;
@@ -6104,113 +6671,260 @@ function handleSkillCast(
       const resolved = moveWithWallSweep(player.x, player.z, backX, backZ, 0.9, map.walls, solvedGates, revealedSecrets, map.corridorField);
       player.x = resolved.x;
       player.z = resolved.z;
-      player.invulnUntil = now + 320;
+      player.invulnUntil = Math.max(player.invulnUntil, now + 340);
       break;
     }
-
-    case 'ostrze_wiatru': {
+    case 'elf_ostrze_wiatru': {
       const hasHur = hasEvo(player, 'evo_elf_wind');
-      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.05) + player.stats.ap * (skillDef.damageScaleAp ?? 1.05)) * rankMult * (hasHur ? 1.35 : 1.0);
-      player.hasteUntil = now + 3000;
-      pushVfx(room, { kind: 'wind_blade', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: skillDef.radius, color: '#22a8b8', casterId: player.id });
-      checkCrackedWallHit(targetX, targetZ, skillDef.radius);
-      for (const e of room.enemies.values()) {
-        if (!e.alive) continue;
-        const rx = e.x - player.x;
-        const rz = e.z - player.z;
-        const proj = rx * dirX + rz * dirZ;
-        const perp = Math.abs(rx * dirZ - rz * dirX);
-        if (proj >= 0 && proj <= skillDef.range && perp <= 3.0 + e.radius) {
-          damageEnemy(room, player, e, dmg, 'hybrid', now, true, true, undefined, applyElfDwarfComboOpts(e, 12));
-          applyKnockbackWithWallSlam(room, player, e, dirX, dirZ, hasHur ? 5.2 : 3.2, now);
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.08) + player.stats.ap * (skillDef.damageScaleAp ?? 1.08)) * rankMult * (hasHur ? 1.35 : 1.0);
+      player.hasteUntil = Math.max(player.hasteUntil, now + (durMs || 3000));
+      pushVfx(room, { kind: 'wind_blade', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: aoeRadius, color: '#22d3ee', casterId: player.id });
+      checkCrackedWallHit(targetX, targetZ, aoeRadius);
+      hitLineEnemies(skillDef.range, aoeRadius * 0.85, dmg, 'hybrid', 14, (e) => {
+        applyKnockbackWithWallSlam(room, player, e, dirX, dirZ, hasHur ? 5.2 : 3.2, now);
+      });
+      break;
+    }
+    case 'elf_deszcz_strzal': {
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.15) + player.stats.ap * (skillDef.damageScaleAp ?? 1.15)) * rankMult;
+      pushVfx(room, { kind: 'arrow_rain', x: targetX, z: targetZ, radius: aoeRadius, color: '#10b981', duration: 1400, casterId: player.id });
+      hitCircleEnemies(targetX, targetZ, aoeRadius, dmg, 'hybrid', 14, (e) => {
+        e.slowedUntil = now + (durMs || 3500);
+      });
+      break;
+    }
+    case 'elf_zatruta_strzala': {
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.1) + player.stats.ap * (skillDef.damageScaleAp ?? 1.25)) * rankMult;
+      const pDur = durMs || 5000;
+      pushVfx(room, { kind: 'poison_cloud', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: aoeRadius, color: '#84cc16', duration: pDur, casterId: player.id });
+      hitCircleEnemies(targetX, targetZ, aoeRadius, dmg * 0.55, 'poison', 10, (e) => {
+        e.poisonCloudUntil = now + pDur;
+        e.poisonCloudDps = Math.max(e.poisonCloudDps || 0, Math.round(dmg * 0.25));
+        e.poisonCloudOwnerId = player.id;
+      });
+      break;
+    }
+    case 'elf_krok_cienia': {
+      const sDur = durMs || 2500;
+      player.shadowStepUntil = now + sDur;
+      player.shadowStepCritReady = true;
+      player.hasteUntil = Math.max(player.hasteUntil, now + sDur);
+      player.invulnUntil = Math.max(player.invulnUntil, now + 650);
+      pushVfx(room, { kind: 'shadow_step', x: player.x, z: player.z, radius: 3.0, color: '#6366f1', casterId: player.id });
+      pushCombatText(room, player.x, 3.0, player.z, '👤 KROK CIENIA (100% KRYT!)', 'hybrid', true, true);
+      break;
+    }
+    case 'elf_pulapka_korzeni': {
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 0.85) + player.stats.ap * (skillDef.damageScaleAp ?? 1.15)) * rankMult;
+      pushVfx(room, { kind: 'root_trap_skill', x: targetX, z: targetZ, radius: aoeRadius, color: '#16a34a', duration: 9000, casterId: player.id });
+      room.activeSkillZones.push({
+        id: nextId('zone'),
+        kind: 'root_trap',
+        ownerId: player.id,
+        x: targetX,
+        z: targetZ,
+        radius: aoeRadius,
+        power: dmg,
+        expiresAt: now + 10000,
+        nextTickAt: now,
+        chaosModId: chaosMod,
+      });
+      break;
+    }
+    case 'elf_taniec_ostrzy': {
+      const perSlashDmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.25) + player.stats.ap * (skillDef.damageScaleAp ?? 1.15)) * 0.45 * rankMult;
+      const targets = Array.from(room.enemies.values())
+        .filter((e) => e.alive && e.tier !== 'root_trap' && Math.hypot(e.x - player.x, e.z - player.z) <= aoeRadius + 2)
+        .sort((a, b) => Math.hypot(a.x - targetX, a.z - targetZ) - Math.hypot(b.x - targetX, b.z - targetZ));
+      const slashes = chaosMod === 'split_aoe' ? 6 : 4;
+      let cx = player.x;
+      let cz = player.z;
+      for (let i = 0; i < slashes; i++) {
+        const tgt = targets.length > 0 ? targets[i % targets.length] : null;
+        const tx = tgt ? tgt.x : targetX;
+        const tz = tgt ? tgt.z : targetZ;
+        pushVfx(room, { kind: 'blade_dance', x: cx, z: cz, tx, tz, radius: 2.5, color: '#10b981', casterId: player.id });
+        if (tgt) {
+          hitWithSkill(tgt, perSlashDmg, 'hybrid', 8);
+          cx = tgt.x;
+          cz = tgt.z;
         }
       }
       break;
     }
+    case 'elf_sokoly_wiatru': {
+      const fDur = durMs || 8000;
+      player.windFalconsUntil = now + fDur;
+      player.windFalconsNextTick = now;
+      player.windFalconsDmg = (player.stats.ad * (skillDef.damageScaleAd ?? 0.95) + player.stats.ap * (skillDef.damageScaleAp ?? 1.15)) * 0.42 * rankMult;
+      pushVfx(room, { kind: 'wind_falcons', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: 4.0, color: '#38bdf8', casterId: player.id });
+      pushCombatText(room, player.x, 3.1, player.z, '🦅 SOKOŁY WIATRU PRZYZWANE!', 'hybrid', true, true);
+      break;
+    }
+    case 'elf_furia_zywiolow': {
+      const fDur = durMs || 7000;
+      player.elementalFuryUntil = now + fDur;
+      player.hasteUntil = Math.max(player.hasteUntil, now + fDur);
+      pushVfx(room, { kind: 'elemental_fury', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: aoeRadius, color: '#06b6d4', duration: fDur, casterId: player.id });
+      pushCombatText(room, player.x, 3.4, player.z, '🌈 FURIA ŻYWIOŁÓW! (OGIEŃ+LÓD+BŁYSK)', 'hybrid', true, true);
+      break;
+    }
 
-    case 'uderzenie_mlotem': {
+    // =========================================================
+    // 4. KRASNOLUD (10 UNIQUE SKILLS)
+    // =========================================================
+    case 'kras_uderzenie_mlotem': {
       const hasSeismic = hasEvo(player, 'evo_kras_seismic');
-      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.35) + player.stats.def * (skillDef.damageScaleDef ?? 0.85)) * rankMult * (hasSeismic ? 1.25 : 1.0);
-      pushVfx(room, { kind: 'hammer_slam', x: player.x, z: player.z, radius: skillDef.radius * (hasSeismic ? 1.2 : 1.0), color: '#b45309', casterId: player.id });
-      checkCrackedWallHit(player.x, player.z, skillDef.radius);
-      for (const e of room.enemies.values()) {
-        if (!e.alive) continue;
-        if (Math.hypot(e.x - player.x, e.z - player.z) <= skillDef.radius * (hasSeismic ? 1.2 : 1.0) + e.radius) {
-          damageEnemy(room, player, e, dmg, 'physical', now, true, true, undefined, { staggerDmg: hasSeismic ? 46 : 34 });
-          applyKnockbackWithWallSlam(room, player, e, e.x - player.x, e.z - player.z, hasSeismic ? 5.6 : 3.6, now);
-          e.tauntedBy = player.id;
-          e.tauntedUntil = now + 5200;
-          pushCombatText(room, e.x, 3.2, e.z, 'PROWOKACJA!', 'physical', false, true);
-        }
-      }
+      const effRad = aoeRadius * (hasSeismic ? 1.2 : 1.0);
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.4) + player.stats.def * (skillDef.damageScaleDef ?? 0.9)) * rankMult * (hasSeismic ? 1.25 : 1.0);
+      pushVfx(room, { kind: 'hammer_slam', x: player.x, z: player.z, radius: effRad, color: '#f59e0b', casterId: player.id });
+      hitCircleEnemies(player.x, player.z, effRad, dmg, 'physical', hasSeismic ? 46 : 36, (e) => {
+        applyKnockbackWithWallSlam(room, player, e, e.x - player.x, e.z - player.z, hasSeismic ? 5.6 : 3.6, now);
+        e.tauntedBy = player.id;
+        e.tauntedUntil = now + 5200;
+        pushCombatText(room, e.x, 3.2, e.z, 'PROWOKACJA!', 'physical', false, true);
+      });
       break;
     }
-
-    case 'kamienna_skora': {
+    case 'kras_kamienna_skora': {
       const hasColossus = hasEvo(player, 'evo_kras_colossus');
-      player.stoneSkinUntil = now + 4500;
-      const rawShield = (player.stats.def * 1.2 + player.maxHp * 0.14) * rankMult * (hasColossus ? 1.3 : 1.0);
-      const applied = applyBoundedShield(player, rawShield, 5500, now);
+      const sDur = durMs || 5000;
+      player.stoneSkinUntil = now + sDur;
+      const rawShield = (player.stats.def * 1.35 + player.maxHp * 0.16) * rankMult * (hasColossus ? 1.3 : 1.0);
+      const applied = applyBoundedShield(player, rawShield, sDur + 1000, now);
       player.matchHealingSupport += applied;
-      pushVfx(room, { kind: 'stone_skin', x: player.x, z: player.z, radius: 2.8, color: '#78716c', casterId: player.id });
-      pushCombatText(room, player.x, 2.8, player.z, `KAMIENNA SKÓRA +${applied}`, 'shield', false, true);
+      pushVfx(room, { kind: 'stone_skin', x: player.x, z: player.z, radius: 3.2, color: '#78716c', casterId: player.id });
+      pushCombatText(room, player.x, 2.8, player.z, `🪨 KAMIENNA SKÓRA (-50% DMG, +${applied})`, 'shield', true, true);
       if (hasColossus) {
-        const waveDmg = player.stats.def * 1.8;
-        for (const e of room.enemies.values()) {
-          if (!e.alive) continue;
-          if (Math.hypot(e.x - player.x, e.z - player.z) <= 5.5 + e.radius) {
-            damageEnemy(room, player, e, waveDmg, 'physical', now, false, false);
-            applyKnockbackWithWallSlam(room, player, e, e.x - player.x, e.z - player.z, 3.2, now);
-          }
-        }
+        hitCircleEnemies(player.x, player.z, 5.5, player.stats.def * 1.8, 'physical', 14);
       }
       break;
     }
-
-    case 'trzesienie_ziemi': {
+    case 'kras_trzesienie_ziemi': {
       const hasTectonic = hasEvo(player, 'evo_kras_quake');
-      const effRad = skillDef.radius * (hasTectonic ? 1.35 : 1.0);
-      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.55) + player.stats.def * (skillDef.damageScaleDef ?? 1.05)) * rankMult;
-      pushVfx(room, { kind: 'earthquake', x: player.x, z: player.z, radius: effRad, color: '#9a3412', casterId: player.id });
-      checkCrackedWallHit(player.x, player.z, effRad);
-      for (const e of room.enemies.values()) {
-        if (!e.alive) continue;
-        if (Math.hypot(e.x - player.x, e.z - player.z) <= effRad + e.radius) {
-          damageEnemy(room, player, e, dmg, 'physical', now, true, true, undefined, { staggerDmg: hasTectonic ? 68 : 42 });
-          applyKnockbackWithWallSlam(room, player, e, e.x - player.x, e.z - player.z, 3.5, now);
-          e.slowedUntil = now + 3800;
-          if (e.tier !== 'boss' && e.tier !== 'miniboss' && (e.eliteArmor || 0) <= 0) e.stunnedUntil = now + 1500;
+      const effRad = aoeRadius * (hasTectonic ? 1.35 : 1.0);
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.55) + player.stats.def * (skillDef.damageScaleDef ?? 1.1)) * rankMult;
+      pushVfx(room, { kind: 'earthquake', x: player.x, z: player.z, radius: effRad, color: '#b45309', casterId: player.id });
+      hitCircleEnemies(player.x, player.z, effRad, dmg, 'physical', hasTectonic ? 68 : 44, (e) => {
+        applyKnockbackWithWallSlam(room, player, e, e.x - player.x, e.z - player.z, 3.5, now);
+        e.slowedUntil = now + 3800;
+        if (e.tier !== 'boss' && e.tier !== 'miniboss' && (e.eliteArmor || 0) <= 0) e.stunnedUntil = now + (durMs || 2000);
+      });
+      break;
+    }
+    case 'kras_rzut_toporem': {
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.75) + player.stats.def * (skillDef.damageScaleDef ?? 0.65)) * 0.62 * rankMult;
+      pushVfx(room, { kind: 'runic_axe', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: aoeRadius, color: '#fbbf24', casterId: player.id });
+      checkCrackedWallHit(targetX, targetZ, aoeRadius);
+      // Outbound + Return boomerang double strike!
+      hitLineEnemies(skillDef.range, aoeRadius, dmg, 'physical', 16);
+      hitLineEnemies(skillDef.range, aoeRadius, dmg, 'physical', 16);
+      break;
+    }
+    case 'kras_fala_lawy': {
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.65) + player.stats.def * (skillDef.damageScaleDef ?? 0.95)) * rankMult;
+      pushVfx(room, { kind: 'lava_fissure', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: aoeRadius, color: '#dc2626', casterId: player.id });
+      checkCrackedWallHit(targetX, targetZ, aoeRadius);
+      hitLineEnemies(skillDef.range, aoeRadius, dmg, 'physical', 20, (e) => {
+        e.burnUntil = now + (durMs || 4000);
+        e.burnDps = Math.max(e.burnDps || 0, Math.round(dmg * 0.25));
+        e.burnOwnerId = player.id;
+      });
+      break;
+    }
+    case 'kras_totem_ochronny': {
+      const tDur = durMs || 8000;
+      pushVfx(room, { kind: 'dwarf_totem', x: targetX, z: targetZ, radius: aoeRadius, color: '#a8a29e', duration: tDur, casterId: player.id });
+      pushCombatText(room, targetX, 3.2, targetZ, '🗿 TOTEM OCHRONNY (+35% DEF!)', 'shield', true, true);
+      room.activeSkillZones.push({
+        id: nextId('zone'),
+        kind: 'dwarf_totem',
+        ownerId: player.id,
+        x: targetX,
+        z: targetZ,
+        radius: aoeRadius,
+        power: player.stats.def,
+        expiresAt: now + tDur,
+        nextTickAt: now,
+        chaosModId: chaosMod,
+      });
+      break;
+    }
+    case 'kras_przyciagniecie_lancuchem': {
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.25) + player.stats.def * (skillDef.damageScaleDef ?? 0.9)) * rankMult;
+      pushVfx(room, { kind: 'chain_pull', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: aoeRadius, color: '#fb923c', casterId: player.id });
+      hitCircleEnemies(targetX, targetZ, aoeRadius, dmg, 'physical', 24, (e) => {
+        e.tauntedBy = player.id;
+        e.tauntedUntil = now + 5000;
+        if (e.tier !== 'boss' && e.tier !== 'bone_wall') {
+          const pullX = player.x + dirX * 2.2;
+          const pullZ = player.z + dirZ * 2.2;
+          const res = resolveWallCollisions(pullX, pullZ, e.radius, map.walls, solvedGates, revealedSecrets, map.corridorField);
+          e.x = res.x;
+          e.z = res.z;
+          pushCombatText(room, e.x, 3.0, e.z, '⛓️ PRZYCIĄGNIĘTY!', 'physical', false, true);
         }
-      }
+      });
+      break;
+    }
+    case 'kras_taran_tarcza': {
+      const dmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.35) + player.stats.def * (skillDef.damageScaleDef ?? 1.1)) * rankMult;
+      const resolved = moveWithWallSweep(player.x, player.z, targetX, targetZ, 0.9, map.walls, solvedGates, revealedSecrets, map.corridorField);
+      pushVfx(room, { kind: 'shield_charge', x: player.x, z: player.z, tx: resolved.x, tz: resolved.z, radius: aoeRadius, color: '#d97706', casterId: player.id });
+      player.x = resolved.x;
+      player.z = resolved.z;
+      hitCircleEnemies(player.x, player.z, aoeRadius + 1.0, dmg, 'physical', 34, (e) => {
+        applyKnockbackWithWallSlam(room, player, e, dirX, dirZ, 4.8, now);
+        e.tauntedBy = player.id;
+        e.tauntedUntil = now + 5000;
+        if (e.tier !== 'boss' && e.tier !== 'miniboss') e.stunnedUntil = now + (durMs || 2200);
+      });
+      break;
+    }
+    case 'kras_plonaca_kuznia': {
+      const fDur = durMs || 8000;
+      player.burningForgeUntil = now + fDur;
+      player.burningForgeDmg = (player.stats.ad * (skillDef.damageScaleAd ?? 1.45) + player.stats.def * (skillDef.damageScaleDef ?? 0.85)) * 0.55 * rankMult;
+      pushVfx(room, { kind: 'burning_forge', x: player.x, z: player.z, radius: aoeRadius, color: '#ea580c', duration: fDur, casterId: player.id });
+      pushCombatText(room, player.x, 3.1, player.z, '🔥 PŁONĄCA KUŹNIA (WYBUCHY AOE!)', 'physical', true, true);
+      break;
+    }
+    case 'kras_awatar_kamienia': {
+      const aDur = durMs || 8000;
+      player.stoneAvatarUntil = now + aDur;
+      player.stoneSkinUntil = Math.max(player.stoneSkinUntil, now + aDur);
+      player.rootedUntil = 0;
+      player.slowedUntil = 0;
+      const sh = applyBoundedShield(player, Math.round((player.stats.def * 1.8 + player.maxHp * 0.28) * rankMult), aDur, now);
+      pushVfx(room, { kind: 'stone_avatar', x: player.x, z: player.z, radius: aoeRadius, color: '#b45309', duration: aDur, casterId: player.id });
+      pushCombatText(room, player.x, 3.6, player.z, `⛰️ AWATAR KAMIENIA! (+30% SKALA • ODBICIE 40% • +${sh})`, 'shield', true, true);
+      hitCircleEnemies(player.x, player.z, aoeRadius, (player.stats.ad + player.stats.def) * 1.5 * rankMult, 'physical', 42);
       break;
     }
 
-    case 'swietlisty_pocisk': {
-      const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 1.45) * rankMult;
-      pushVfx(room, { kind: 'radiant_bolt', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: skillDef.radius, color: '#d9a826', casterId: player.id });
-      checkCrackedWallHit(targetX, targetZ, skillDef.radius);
-      for (const e of room.enemies.values()) {
-        if (!e.alive) continue;
-        if (Math.hypot(e.x - targetX, e.z - targetZ) <= skillDef.radius + e.radius) {
-          damageEnemy(room, player, e, dmg, 'magical', now, true, true, undefined, { staggerDmg: 8 });
-          e.weakenedUntil = now + 5000;
-          pushCombatText(room, e.x, 3.1, e.z, 'OSŁABIONY!', 'magical', false, true);
-        }
-      }
+    // =========================================================
+    // 5. WRÓŻKA (10 UNIQUE SKILLS)
+    // =========================================================
+    case 'wroz_swietlisty_pocisk': {
+      const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 1.55) * rankMult;
+      pushVfx(room, { kind: 'radiant_bolt', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: aoeRadius, color: '#facc15', casterId: player.id });
+      hitCircleEnemies(targetX, targetZ, aoeRadius, dmg, 'magical', 10, (e) => {
+        e.weakenedUntil = now + (durMs || 5000);
+        pushCombatText(room, e.x, 3.1, e.z, 'OSŁABIONY!', 'magical', false, true);
+      });
       break;
     }
-
-    case 'fala_uzdrowienia': {
-      const rawHeal = Math.round((player.stats.ap * 1.45 + 32 + player.level * 5) * rankMult * player.stats.healPower);
-      pushVfx(room, { kind: 'heal_wave', x: player.x, z: player.z, radius: skillDef.radius, color: '#22a355', casterId: player.id });
+    case 'wroz_fala_uzdrowienia': {
+      const rawHeal = Math.round((player.stats.ap * 1.5 + 34 + player.level * 5) * rankMult * player.stats.healPower);
+      pushVfx(room, { kind: 'heal_wave', x: player.x, z: player.z, radius: aoeRadius, color: '#22c55e', casterId: player.id });
       for (const ally of room.players.values()) {
-        if (Math.hypot(ally.x - player.x, ally.z - player.z) > skillDef.radius) continue;
-        const cappedHeal = Math.min(rawHeal, Math.round(ally.maxHp * 0.34));
+        if (Math.hypot(ally.x - player.x, ally.z - player.z) > aoeRadius) continue;
+        const cappedHeal = Math.min(rawHeal, Math.round(ally.maxHp * 0.36));
         if (!ally.alive) {
           ally.alive = true;
           ally.downedUntil = 0;
           ally.reviveProgress = 0;
-          ally.hp = Math.min(ally.maxHp, Math.max(cappedHeal, Math.round(ally.maxHp * 0.4)));
+          ally.hp = Math.min(ally.maxHp, Math.max(cappedHeal, Math.round(ally.maxHp * 0.42)));
           ally.animState = 'idle';
           player.matchRevives++;
           player.matchHealingSupport += ally.hp + 500;
@@ -6225,19 +6939,132 @@ function handleSkillCast(
       }
       break;
     }
-
-    case 'bariera_swiatla': {
+    case 'wroz_bariera_swiatla': {
+      const bDur = durMs || 6500;
       const rawShield = (player.stats.ap * 1.65 + 42 + player.level * 6) * rankMult * player.stats.shieldPower;
-      pushVfx(room, { kind: 'light_barrier', x: player.x, z: player.z, radius: skillDef.radius, color: '#38bdf8', casterId: player.id });
+      pushVfx(room, { kind: 'light_barrier', x: player.x, z: player.z, radius: aoeRadius, color: '#38bdf8', casterId: player.id });
       for (const ally of room.players.values()) {
         if (!ally.alive) continue;
-        if (Math.hypot(ally.x - player.x, ally.z - player.z) <= skillDef.radius) {
-          const applied = applyBoundedShield(ally, rawShield, 6500, now);
-          ally.lightBarrierUntil = now + 6500; // Co-op Synergy: +15% Attack Speed while shielded!
+        if (Math.hypot(ally.x - player.x, ally.z - player.z) <= aoeRadius) {
+          const applied = applyBoundedShield(ally, rawShield, bDur, now);
+          ally.lightBarrierUntil = now + bDur;
           ally.rootedUntil = 0;
           player.matchHealingSupport += applied;
           pushCombatText(room, ally.x, 2.8, ally.z, `TARCZA +${applied}`, 'shield', false, true, '+15% ASPD!');
         }
+      }
+      break;
+    }
+    case 'wroz_ogrod_zycia': {
+      const gDur = durMs || 6000;
+      const healPerSec = (player.stats.ap * 0.55 + 22 + player.level * 2.5) * rankMult * player.stats.healPower;
+      pushVfx(room, { kind: 'life_garden', x: targetX, z: targetZ, radius: aoeRadius, color: '#4ade80', duration: gDur, casterId: player.id });
+      room.activeSkillZones.push({
+        id: nextId('zone'),
+        kind: 'life_garden',
+        ownerId: player.id,
+        x: targetX,
+        z: targetZ,
+        radius: aoeRadius,
+        power: healPerSec,
+        expiresAt: now + gDur,
+        nextTickAt: now,
+        chaosModId: chaosMod,
+      });
+      break;
+    }
+    case 'wroz_promien_slonca': {
+      const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 2.25) * rankMult;
+      const healAmt = Math.round((player.stats.ap * 1.05 + 28) * rankMult * player.stats.healPower);
+      pushVfx(room, { kind: 'solar_beam', x: player.x, z: player.z, tx: targetX, tz: targetZ, radius: aoeRadius, color: '#fde047', casterId: player.id });
+      hitLineEnemies(skillDef.range, aoeRadius, dmg, 'magical', 16);
+      for (const ally of room.players.values()) {
+        if (!ally.alive) continue;
+        const rx = ally.x - player.x;
+        const rz = ally.z - player.z;
+        const proj = rx * dirX + rz * dirZ;
+        const perp = Math.abs(rx * dirZ - rz * dirX);
+        if (proj >= -1 && proj <= skillDef.range && perp <= aoeRadius + 1.5) {
+          const actual = Math.min(ally.maxHp - ally.hp, healAmt);
+          ally.hp = Math.min(ally.maxHp, ally.hp + healAmt);
+          player.matchHealingSupport += Math.max(10, actual);
+          pushCombatText(room, ally.x, 2.7, ally.z, `☀️ +${healAmt}`, 'heal', false, false);
+        }
+      }
+      break;
+    }
+    case 'wroz_oczyszczenie': {
+      const pDur = durMs || 4000;
+      pushVfx(room, { kind: 'purify_wave', x: player.x, z: player.z, radius: aoeRadius, color: '#7dd3fc', casterId: player.id });
+      for (const ally of room.players.values()) {
+        if (!ally.alive) continue;
+        if (Math.hypot(ally.x - player.x, ally.z - player.z) <= aoeRadius) {
+          ally.poisonUntil = 0;
+          ally.slowedUntil = 0;
+          ally.rootedUntil = 0;
+          ally.hasteUntil = Math.max(ally.hasteUntil, now + pDur);
+          pushCombatText(room, ally.x, 3.0, ally.z, '✨ OCZYSZCZENIE + PRZYSPIESZENIE!', 'shield', true, true);
+        }
+      }
+      break;
+    }
+    case 'wroz_motyli_pyl': {
+      const sDur = durMs || 4000;
+      const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 1.2) * rankMult;
+      pushVfx(room, { kind: 'butterfly_dust', x: targetX, z: targetZ, radius: aoeRadius, color: '#f472b6', duration: sDur, casterId: player.id });
+      hitCircleEnemies(targetX, targetZ, aoeRadius, dmg, 'magical', 14, (e) => {
+        if (e.tier !== 'boss' && e.tier !== 'miniboss') {
+          e.asleepUntil = now + sDur;
+          pushCombatText(room, e.x, 3.2, e.z, '🦋 UŚPIONY (4s)!', 'magical', false, true);
+        } else {
+          e.slowedUntil = now + sDur;
+        }
+      });
+      break;
+    }
+    case 'wroz_wiez_zycia': {
+      const lDur = durMs || 8000;
+      const allies = Array.from(room.players.values())
+        .filter((a) => a.alive && a.id !== player.id && Math.hypot(a.x - player.x, a.z - player.z) <= aoeRadius)
+        .sort((a, b) => a.hp / Math.max(1, a.maxHp) - b.hp / Math.max(1, b.maxHp));
+      const chosen = allies[0] || player;
+      player.lifeBondTargetId = chosen.id;
+      player.lifeBondUntil = now + lDur;
+      player.lifeBondNextTick = now;
+      player.lifeBondHealAmt = (player.stats.ap * 0.55 + 24) * rankMult * player.stats.healPower;
+      pushVfx(room, { kind: 'life_bond', x: player.x, z: player.z, tx: chosen.x, tz: chosen.z, radius: 2.0, color: '#ec4899', casterId: player.id });
+      pushCombatText(room, chosen.x, 3.1, chosen.z, '💞 WIĘŹ ŻYCIA!', 'heal', true, true);
+      break;
+    }
+    case 'wroz_gniew_cierni': {
+      const dmg = player.stats.ap * (skillDef.damageScaleAp ?? 2.15) * rankMult;
+      pushVfx(room, { kind: 'thorn_wrath', x: targetX, z: targetZ, radius: aoeRadius, color: '#10b981', casterId: player.id });
+      hitCircleEnemies(targetX, targetZ, aoeRadius, dmg, 'magical', 18, (e) => {
+        e.slowedUntil = now + (durMs || 4000);
+      });
+      break;
+    }
+    case 'wroz_skrzydla_archaniola': {
+      const aDur = durMs || 4000;
+      player.angelWingsUntil = now + aDur;
+      pushVfx(room, { kind: 'angel_wings', x: player.x, z: player.z, radius: aoeRadius, color: '#fbbf24', duration: aDur, casterId: player.id });
+      pushCombatText(room, player.x, 3.8, player.z, '🪽 SKRZYDŁA ARCHANIOŁA! (4s NIEŚMIERTELNOŚĆ!)', 'heal', true, true);
+      for (const ally of room.players.values()) {
+        if (Math.hypot(ally.x - player.x, ally.z - player.z) > aoeRadius) continue;
+        if (!ally.alive) {
+          ally.alive = true;
+          ally.downedUntil = 0;
+          ally.reviveProgress = 0;
+          ally.hp = Math.round(ally.maxHp * 0.65);
+          ally.animState = 'idle';
+          player.matchRevives++;
+          player.matchHealingSupport += ally.hp + 600;
+          pushCombatText(room, ally.x, 3.2, ally.z, '🪽 ARCHANIOŁ WSKRZESIŁ!', 'heal', true, true);
+          io.to(player.socketId).emit('player:revive_credit', { allyName: ally.name });
+        } else {
+          ally.hp = Math.min(ally.maxHp, ally.hp + Math.round(ally.maxHp * 0.35));
+        }
+        ally.undyingUntil = now + aDur;
       }
       break;
     }
@@ -6273,11 +7100,13 @@ function handleBasicAttack(room: GameRoom, player: ServerPlayer, aimX: number, a
   const frenzyAspd = room.mutatorId === 'blood_frenzy' ? 1.28 : 1.0;
   const comboAspd = 1 + Math.min(0.4, room.comboCount * 0.02);
   const stormAspd = now < player.stormOverloadUntil ? 1 + 0.14 * getBoonMult(player, 'blyskawica_skill') : 1.0;
-  // Co-op Synergy: Fairy Light Barrier grants +15% Attack Speed to every shielded ally!
+  // Co-op Synergy: Fairy Light Barrier (+15% ASPD) + Warrior Berserker (+35%) & War Cry (+20%)!
   const fairyBarrierAspd =
     player.lightBarrierUntil && now < player.lightBarrierUntil && player.shield > 0 ? 1.15 : 1.0;
+  const berserkAspd = player.berserkerUntil && now < player.berserkerUntil ? 1.35 : 1.0;
+  const warCryAspd = player.warCryUntil && now < player.warCryUntil ? 1.2 : 1.0;
 
-  // 3-Hit Hades Basic Combo Step (1 -> 2 -> 3 Finisher within 1.45s!)
+  // 3-Hit Basic Combo Step (1 -> 2 -> 3 Finisher within 1.45s!)
   const nextStep = now <= player.comboStepExpiresAt ? (player.comboStep % 3) + 1 : 1;
   player.comboStep = nextStep;
   player.comboStepExpiresAt = now + 1450;
@@ -6290,7 +7119,7 @@ function handleBasicAttack(room: GameRoom, player: ServerPlayer, aimX: number, a
   const stepCdFactor = nextStep === 2 ? 0.88 : isFinisher ? 1.12 : 1.0;
   const cdMs = Math.round(
     (cls.baseAttackCooldown * 1000 * stepCdFactor) /
-      Math.max(0.5, player.stats.attackSpeed * frenzyAspd * comboAspd * fairyBarrierAspd * stormAspd)
+      Math.max(0.5, player.stats.attackSpeed * frenzyAspd * comboAspd * fairyBarrierAspd * stormAspd * berserkAspd * warCryAspd)
   );
   player.cooldowns.basic = now + cdMs;
   player.animState = 'attack';
@@ -6416,6 +7245,20 @@ function handleBasicAttack(room: GameRoom, player: ServerPlayer, aimX: number, a
         });
         if (dealt > 0) {
           triggerLightningChain(e, dealt);
+          // Dwarf Płonąca Kuźnia: every melee blow triggers fiery AOE blast!
+          if (player.burningForgeUntil && now < player.burningForgeUntil) {
+            const fDmg = Math.max(18, Math.round(player.burningForgeDmg || dmg * 0.55));
+            pushVfx(room, { kind: 'burning_forge', x: e.x, z: e.z, radius: 4.0, color: '#f97316', casterId: player.id });
+            for (const other of room.enemies.values()) {
+              if (!other.alive || other.tier === 'root_trap') continue;
+              if (Math.hypot(other.x - e.x, other.z - e.z) <= 4.0 + other.radius) {
+                damageEnemy(room, player, other, fDmg, 'magical', now, false, false, { x: e.x, z: e.z });
+                other.burnUntil = now + 3200;
+                other.burnDps = Math.max(other.burnDps || 0, Math.round(fDmg * 0.3));
+                other.burnOwnerId = player.id;
+              }
+            }
+          }
           if (isFinisher || isDashStrike) {
             const kbForce = isFinisher ? (hasEvo(player, 'evo_woj_titan') ? 4.8 : 3.2) : 2.2;
             applyKnockbackWithWallSlam(room, player, e, dirX, dirZ, kbForce, now);
@@ -6458,6 +7301,24 @@ function handleBasicAttack(room: GameRoom, player: ServerPlayer, aimX: number, a
       });
       if (dealt > 0) {
         triggerLightningChain(hitEnemy, dealt);
+        // Elf Furia Żywiołów Ultimate (7s): every attack fires simultaneous Fire, Frost & Lightning arrows!
+        if (player.elementalFuryUntil && now < player.elementalFuryUntil) {
+          const triDmg = Math.round(dmg * 0.62);
+          pushVfx(room, { kind: 'elemental_fury', x: player.x, z: player.z, tx: hitEnemy.x, tz: hitEnemy.z, radius: 4.2, color: '#38bdf8', casterId: player.id });
+          // Fire burn
+          hitEnemy.burnUntil = now + 4000;
+          hitEnemy.burnDps = Math.max(hitEnemy.burnDps || 0, Math.round(triDmg * 0.4));
+          hitEnemy.burnOwnerId = player.id;
+          // Frost slow
+          hitEnemy.slowedUntil = now + 3500;
+          // Lightning splash to nearby enemies
+          for (const other of room.enemies.values()) {
+            if (!other.alive || other.tier === 'root_trap') continue;
+            if (Math.hypot(other.x - hitEnemy.x, other.z - hitEnemy.z) <= 4.8 + other.radius) {
+              damageEnemy(room, player, other, triDmg, 'hybrid', now, true, false, { x: hitEnemy.x, z: hitEnemy.z });
+            }
+          }
+        }
         if (isFinisher) {
           applyKnockbackWithWallSlam(room, player, hitEnemy, dirX, dirZ, 2.8, now);
         }
@@ -6495,15 +7356,20 @@ io.on('connection', (socket: Socket) => {
     classId: ClassId;
     level: number;
     skillRanks: SkillRanks;
+    skillTree?: Record<string, SkillTreeNodeProgress>;
+    equippedSkills?: [string, string, string];
     stats: ComputedStats;
     equippedTitle?: string | null;
     equippedAura?: string | null;
     equippedTrail?: string | null;
-  }): ServerPlayer => ({
+  }): ServerPlayer => {
+    const cid: ClassId = payload.classId || 'wojownik';
+    const ensured = ensureSkillTreeForClass(cid, payload.skillTree, payload.equippedSkills);
+    return {
     id: socket.id,
     socketId: socket.id,
     name: (payload.name || 'Bohater').slice(0, 20),
-    classId: payload.classId || 'wojownik',
+    classId: cid,
     level: Math.max(1, Math.min(60, payload.level || 1)),
     x: -44,
     z: -44,
@@ -6543,6 +7409,28 @@ io.on('connection', (socket: Socket) => {
     rawStats: { ...payload.stats },
     ready: true,
     skillRanks: payload.skillRanks,
+    skillTree: ensured.skillTree,
+    equippedSkills: ensured.equippedSkills,
+    berserkerUntil: 0,
+    bastionUntil: 0,
+    bastionCounterDmg: 0,
+    warCryUntil: 0,
+    shadowStepUntil: 0,
+    shadowStepCritReady: false,
+    windFalconsUntil: 0,
+    windFalconsNextTick: 0,
+    windFalconsDmg: 0,
+    elementalFuryUntil: 0,
+    burningForgeUntil: 0,
+    burningForgeDmg: 0,
+    stoneAvatarUntil: 0,
+    angelWingsUntil: 0,
+    undyingUntil: 0,
+    lifeBondUntil: 0,
+    lifeBondNextTick: 0,
+    lifeBondHealAmt: 0,
+    totemBuffUntil: 0,
+    inCombatUntil: 0,
     cooldowns: { basic: 0, active1: 0, active2: 0, active3: 0, dash: 0 },
     whirlwindUntil: 0,
     whirlwindNextTick: 0,
@@ -6575,7 +7463,8 @@ io.on('connection', (socket: Socket) => {
     duoBoons: [],
     skillEvolutions: [],
     charonPurchasedIds: [],
-  });
+    };
+  };
 
   socket.on('rift:get_leaderboard', (ack) => {
     if (typeof ack === 'function') ack(riftLeaderboard);
@@ -6630,6 +7519,7 @@ io.on('connection', (socket: Socket) => {
       pactEnraged: false,
       eliteVaultBonus: false,
       activeTethers: [],
+      activeSkillZones: [],
       merchant: null,
       branchPortals: [],
       trades: new Map(),
@@ -6699,6 +7589,15 @@ io.on('connection', (socket: Socket) => {
     if (payload.equippedAura !== undefined) p.equippedAura = payload.equippedAura;
     if (payload.equippedTrail !== undefined) p.equippedTrail = payload.equippedTrail;
     if (payload.skillRanks) p.skillRanks = payload.skillRanks;
+    if (payload.skillTree || payload.equippedSkills) {
+      const ensured = ensureSkillTreeForClass(
+        p.classId,
+        payload.skillTree || p.skillTree,
+        payload.equippedSkills || p.equippedSkills
+      );
+      p.skillTree = ensured.skillTree;
+      p.equippedSkills = ensured.equippedSkills;
+    }
     if (payload.stats) {
       const hpRatio = p.maxHp > 0 ? p.hp / p.maxHp : 1;
       p.rawStats = { ...payload.stats };
