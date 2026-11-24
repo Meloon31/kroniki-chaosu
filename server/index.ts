@@ -893,6 +893,37 @@ function saveGuildsToDisk() {
 
 loadGuildsFromDisk();
 
+function normalizeGuildCode(raw: string): string {
+  const alnum = String(raw || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  if (!alnum) return '';
+  if (alnum.length === 6 && alnum.startsWith('G')) {
+    return `G-${alnum.slice(1)}`;
+  }
+  if (alnum.length === 5) {
+    return `G-${alnum}`;
+  }
+  return String(raw || '').trim().toUpperCase().replace(/\s+/g, '-');
+}
+
+function findGuildByCodeInput(rawInput: string): GuildState | null {
+  const norm = normalizeGuildCode(rawInput);
+  if (!norm) return null;
+  const directId = guildCodeToId.get(norm);
+  if (directId && guilds.has(directId)) return guilds.get(directId)!;
+  const stripped = norm.replace(/[^A-Z0-9]/g, '');
+  for (const g of guilds.values()) {
+    const gNorm = normalizeGuildCode(g.code);
+    if (gNorm === norm || gNorm.replace(/[^A-Z0-9]/g, '') === stripped) {
+      guildCodeToId.set(gNorm, g.id);
+      return g;
+    }
+  }
+  return null;
+}
+
 function generateGuildCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   for (let tries = 0; tries < 25; tries++) {
@@ -8707,17 +8738,49 @@ io.on('connection', (socket: Socket) => {
   socket.on(
     'guild:create',
     (
-      payload: { name: string; tag: string; emblem?: string; color?: string },
+      payload: {
+        name: string;
+        tag: string;
+        emblem?: string;
+        color?: string;
+        playerUid?: string;
+        playerName?: string;
+        classId?: ClassId;
+        level?: number;
+      },
       ack?: (res: { ok: boolean; guild?: GuildState; error?: string }) => void
     ) => {
-      const uid = socketToPlayerUid.get(socket.id);
+      let uid = socketToPlayerUid.get(socket.id);
+      if (!uid && payload?.playerUid) {
+        uid = String(payload.playerUid).trim().slice(0, 48);
+        if (uid) {
+          socketToPlayerUid.set(socket.id, uid);
+          let set = playerUidToSockets.get(uid);
+          if (!set) {
+            set = new Set();
+            playerUidToSockets.set(uid, set);
+          }
+          set.add(socket.id);
+          if (!playerMetaByUid.has(uid)) {
+            playerMetaByUid.set(uid, {
+              name: String(payload.playerName || 'Bohater').slice(0, 20),
+              classId: payload.classId || 'wojownik',
+              level: Math.max(1, Math.min(60, Number(payload.level) || 1)),
+            });
+          }
+        }
+      }
       if (!uid) {
         ack?.({ ok: false, error: 'Brak identyfikacji gracza — spróbuj ponownie za sekundę.' });
         return;
       }
-      if (playerUidToGuildId.has(uid)) {
+      const existingGid = playerUidToGuildId.get(uid);
+      const existingGuild = existingGid ? guilds.get(existingGid) : null;
+      if (existingGuild && existingGuild.members.some((m) => m.playerUid === uid)) {
         ack?.({ ok: false, error: 'Już należysz do Gildii! Najpierw opuść obecną.' });
         return;
+      } else if (existingGid) {
+        playerUidToGuildId.delete(uid);
       }
       const name = String(payload?.name || '').trim().slice(0, 24);
       const tag = String(payload?.tag || '')
@@ -8771,30 +8834,72 @@ io.on('connection', (socket: Socket) => {
   socket.on(
     'guild:join_code',
     (
-      payload: { code: string },
+      payload: {
+        code: string;
+        playerUid?: string;
+        playerName?: string;
+        classId?: ClassId;
+        level?: number;
+      },
       ack?: (res: { ok: boolean; guild?: GuildState; error?: string }) => void
     ) => {
-      const uid = socketToPlayerUid.get(socket.id);
+      let uid = socketToPlayerUid.get(socket.id);
+      if (!uid && payload?.playerUid) {
+        uid = String(payload.playerUid).trim().slice(0, 48);
+        if (uid) {
+          socketToPlayerUid.set(socket.id, uid);
+          let set = playerUidToSockets.get(uid);
+          if (!set) {
+            set = new Set();
+            playerUidToSockets.set(uid, set);
+          }
+          set.add(socket.id);
+          if (!playerMetaByUid.has(uid)) {
+            playerMetaByUid.set(uid, {
+              name: String(payload.playerName || 'Bohater').slice(0, 20),
+              classId: payload.classId || 'wojownik',
+              level: Math.max(1, Math.min(60, Number(payload.level) || 1)),
+            });
+          }
+        }
+      }
       if (!uid) {
-        ack?.({ ok: false, error: 'Brak identyfikacji gracza.' });
+        ack?.({ ok: false, error: 'Brak identyfikacji gracza — odśwież stronę i spróbuj ponownie.' });
         return;
       }
-      if (playerUidToGuildId.has(uid)) {
+      const existingGid = playerUidToGuildId.get(uid);
+      const existingGuild = existingGid ? guilds.get(existingGid) : null;
+      if (existingGuild && existingGuild.members.some((m) => m.playerUid === uid)) {
         ack?.({ ok: false, error: 'Już należysz do Gildii! Najpierw opuść obecną.' });
         return;
+      } else if (existingGid) {
+        playerUidToGuildId.delete(uid);
       }
-      const cleanCode = String(payload?.code || '').trim().toUpperCase();
-      const gid = guildCodeToId.get(cleanCode);
-      const guild = gid ? guilds.get(gid) : null;
+
+      const guild = findGuildByCodeInput(payload?.code || '');
       if (!guild) {
-        ack?.({ ok: false, error: 'Nie znaleziono Gildii o podanym kodzie zaproszenia!' });
+        ack?.({
+          ok: false,
+          error:
+            'Nie znaleziono Gildii o podanym kodzie! Upewnij się, że gracie na tym samym serwerze i że znajomy odświeżył grę po ostatniej aktualizacji.',
+        });
+        return;
+      }
+      if (guild.members.some((m) => m.playerUid === uid)) {
+        playerUidToGuildId.set(uid, guild.id);
+        broadcastGuildState(guild);
+        ack?.({ ok: true, guild });
         return;
       }
       if (guild.members.length >= 20) {
         ack?.({ ok: false, error: 'Ta Gildia osiągnęła limit 20 członków!' });
         return;
       }
-      const meta = playerMetaByUid.get(uid) || { name: 'Bohater', classId: 'wojownik' as ClassId, level: 1 };
+      const meta = playerMetaByUid.get(uid) || {
+        name: String(payload?.playerName || 'Bohater').slice(0, 20),
+        classId: payload?.classId || ('wojownik' as ClassId),
+        level: Math.max(1, Math.min(60, Number(payload?.level) || 1)),
+      };
       guild.members.push({
         playerUid: uid,
         name: meta.name,

@@ -1386,9 +1386,23 @@ export function App() {
         resolve({ ok: false, error: 'Brak połączenia z serwerem.' });
         return;
       }
-      sock.emit('guild:create', { name, tag, emblem, color }, (res: { ok: boolean; error?: string }) => {
-        resolve(res || { ok: false, error: 'Błąd tworzenia Gildii.' });
-      });
+      const p = profileRef.current;
+      sock.emit(
+        'guild:create',
+        {
+          name,
+          tag,
+          emblem,
+          color,
+          playerUid: p.playerUid,
+          playerName: p.name,
+          classId: p.classId,
+          level: p.level,
+        },
+        (res: { ok: boolean; error?: string }) => {
+          resolve(res || { ok: false, error: 'Błąd tworzenia Gildii.' });
+        }
+      );
     });
 
   const handleJoinGuildByCode = (code: string): Promise<{ ok: boolean; error?: string }> =>
@@ -1398,9 +1412,20 @@ export function App() {
         resolve({ ok: false, error: 'Brak połączenia z serwerem.' });
         return;
       }
-      sock.emit('guild:join_code', { code }, (res: { ok: boolean; error?: string }) => {
-        resolve(res || { ok: false, error: 'Nie znaleziono Gildii.' });
-      });
+      const p = profileRef.current;
+      sock.emit(
+        'guild:join_code',
+        {
+          code,
+          playerUid: p.playerUid,
+          playerName: p.name,
+          classId: p.classId,
+          level: p.level,
+        },
+        (res: { ok: boolean; error?: string }) => {
+          resolve(res || { ok: false, error: 'Nie znaleziono Gildii.' });
+        }
+      );
     });
 
   const handleInviteRoomMember = (targetSocketId: string): Promise<{ ok: boolean; error?: string }> =>

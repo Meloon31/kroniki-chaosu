@@ -283,15 +283,20 @@ export const GuildModal: React.FC<GuildModalProps> = ({
                   🔑 DOŁĄCZ KODEM ZAPROSZENIA
                 </div>
                 <div style={{ fontSize: 12, color: '#cbd5e1', marginBottom: 8 }}>
-                  Wpisz kod Gildii od znajomego (np. <strong>G-7K2M9</strong>) lub poproś go o zaproszenie w pokoju Co-op!
+                  Wpisz kod Gildii od znajomego (np. <strong>G-7K2M9</strong> lub samo <strong>7K2M9</strong>) albo poproś go o zaproszenie w pokoju Co-op!
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <input
                     type="text"
                     value={codeDraft}
-                    maxLength={10}
+                    maxLength={12}
                     onChange={(e) => setCodeDraft(e.target.value.toUpperCase())}
-                    placeholder="G-XXXXX"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && connected && codeDraft.trim().length >= 4) {
+                        handleJoin();
+                      }
+                    }}
+                    placeholder="G-XXXXX lub XXXXX"
                     style={{
                       flex: 1,
                       padding: '9px 12px',
